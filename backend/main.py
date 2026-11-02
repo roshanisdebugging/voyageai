@@ -168,13 +168,22 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
-from rate_limiter import RateLimiter
+from rate_limiter import NetworkRateLimiter, UserRateLimiter, RateLimiter
 
-# Application-Layer Rate Limiters
-ai_limiter = RateLimiter(requests=5, window_seconds=60, key_prefix="rl:trip_gen")
-places_limiter = RateLimiter(requests=60, window_seconds=60, key_prefix="rl:places_search")
+# Production Rate Limiters: Network (Auth/Public) & User (Heavy Compute/Paid/Session)
+auth_login_limiter = NetworkRateLimiter(requests=5, window_seconds=60, key_prefix="rl:auth:login")
+auth_register_limiter = NetworkRateLimiter(requests=5, window_seconds=60, key_prefix="rl:auth:register")
+
+ai_trip_limiter = UserRateLimiter(requests=10, window_seconds=60, key_prefix="rl:ai:trip")
+ai_chat_limiter = UserRateLimiter(requests=20, window_seconds=60, key_prefix="rl:ai:chat")
+tts_limiter = UserRateLimiter(requests=15, window_seconds=60, key_prefix="rl:ai:tts")
+
+places_limiter = UserRateLimiter(requests=60, window_seconds=60, key_prefix="rl:places", allow_guest=True)
 osm_limiter = places_limiter
-general_limiter = RateLimiter(requests=100, window_seconds=60, key_prefix="rl:general")
+general_limiter = UserRateLimiter(requests=120, window_seconds=60, key_prefix="rl:general", allow_guest=True)
+
+# Backward-compatibility alias
+ai_limiter = ai_trip_limiter
 
 COOKIE_NAME = "voyageai_session"
 GUEST_COOKIE_NAME = "guest_session_id"
@@ -368,9 +377,12 @@ def get_current_user(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ) -> AuthUser:
+    if hasattr(request.state, "user") and request.state.user:
+        return request.state.user
     token = extract_token(request, authorization)
     try:
         auth_user, _, _ = auth.get_session_user(db, token)
+        request.state.user = auth_user
         return auth_user
     except Exception as err:
         log_event(f"❌ Session user lookup failed: {str(err)}")
@@ -529,7 +541,7 @@ class RefinementExecutionRequest(BaseModel):
 def root():
     return {"app": "VoyageAI OS PostgreSQL API", "status": "online"}
 
-@app.post("/api/auth/register", dependencies=[Depends(general_limiter)])
+@app.post("/api/auth/register", dependencies=[Depends(auth_register_limiter)])
 def register(req: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     log_frontend_payload(
         endpoint="POST /api/auth/register",
@@ -571,7 +583,7 @@ def register(req: RegisterRequest, request: Request, response: Response, db: Ses
         log_event(f"❌ Registration Execution Error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/api/auth/login", dependencies=[Depends(general_limiter)])
+@app.post("/api/auth/login", dependencies=[Depends(auth_login_limiter)])
 def login(req: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     log_frontend_payload(
         endpoint="POST /api/auth/login",
@@ -2014,21 +2026,21 @@ def search_user_location(query: str = ""):
 
 # ── PLACES & GEOCODING ENDPOINTS ──
 
-@app.get("/api/location/reverse")
+@app.get("/api/location/reverse", dependencies=[Depends(places_limiter)])
 async def location_reverse(lat: float, lng: float):
     """Reverse geocode coordinates using Google Geocoding proxy with Redis caching."""
     from services.google_maps_service import reverse_geocode
     return await reverse_geocode(lat, lng)
 
-@app.get("/api/places/autocomplete")
+@app.get("/api/places/autocomplete", dependencies=[Depends(places_limiter)])
 async def places_autocomplete(q: str = "", lat: Optional[float] = None, lng: Optional[float] = None):
     """Google Places Autocomplete proxy with Redis caching."""
-    if not q or len(q.strip()) < 2:
+    if not q or len(query_clean := q.strip()) < 2:
         return []
     from services.google_maps_service import autocomplete_places
     return await autocomplete_places(q, lat, lng)
 
-@app.get("/api/places/details")
+@app.get("/api/places/details", dependencies=[Depends(places_limiter)])
 async def places_details(place_id: str):
     """Google Places Details proxy with Redis caching."""
     from services.google_maps_service import get_place_details
@@ -2108,7 +2120,7 @@ class TTSRequest(BaseModel):
     speaker: Optional[str] = "meera"
     poi_id: Optional[str] = None
 
-@app.post("/api/tts/synthesize")
+@app.post("/api/tts/synthesize", dependencies=[Depends(tts_limiter)])
 async def tts_synthesize(req: TTSRequest):
     try:
         from tts_service import synthesize_speech_sarvam
@@ -2139,7 +2151,7 @@ class SpeakRequest(BaseModel):
     category: Optional[str] = "attraction"
     address: Optional[str] = None
 
-@app.post("/api/tts/speak")
+@app.post("/api/tts/speak", dependencies=[Depends(tts_limiter)])
 def text_to_speech_endpoint(req: SpeakRequest):
     try:
         from tts_service import synthesize_speech_sarvam
@@ -2734,7 +2746,7 @@ class SwapRecommendationRequest(BaseModel):
     category: Optional[str] = "Sights"
     day_number: Optional[int] = 1
 
-@app.post("/api/trips/itinerary/swap-options")
+@app.post("/api/trips/itinerary/swap-options", dependencies=[Depends(ai_trip_limiter)])
 def get_swap_options(req: SwapRecommendationRequest):
     api_key = os.getenv("GEMINI_API_KEY")
     dest_clean = (req.destination or "Jaipur").strip().title()
@@ -2832,7 +2844,7 @@ class ExecuteSwapRequest(BaseModel):
     old_activity_id: str
     new_activity: dict
 
-@app.post("/api/trips/itinerary/swap-execute")
+@app.post("/api/trips/itinerary/swap-execute", dependencies=[Depends(ai_trip_limiter)])
 def execute_swap(
     req: ExecuteSwapRequest,
     current_user: AuthUser = Depends(get_current_user),
@@ -2976,8 +2988,8 @@ class TourGuideChatRequest(BaseModel):
     longitude: Optional[float] = None
     recent_history: Optional[List[HistoryItem]] = []
 
-@app.post("/api/tour-guide/chat")
-@app.post("/api/chat")
+@app.post("/api/tour-guide/chat", dependencies=[Depends(ai_chat_limiter)])
+@app.post("/api/chat", dependencies=[Depends(ai_chat_limiter)])
 def chat_with_concierge(
     payload: TourGuideChatRequest,
     current_user: AuthUser = Depends(get_current_user),
@@ -2999,8 +3011,8 @@ def chat_with_concierge(
         db=db
     )
 
-@app.get("/api/tour-guide/history")
-@app.get("/api/chat/history")
+@app.get("/api/tour-guide/history", dependencies=[Depends(general_limiter)])
+@app.get("/api/chat/history", dependencies=[Depends(general_limiter)])
 def get_tour_guide_history(
     trip_id: Optional[str] = None,
     limit: int = 100,
@@ -4291,9 +4303,9 @@ def process_activity_swap_mutation(
         }
     }
 
-@app.post("/api/ai/concierge/apply-swap")
-@app.post("/api/ai/concierge/swap")
-@app.post("/api/trips/itinerary/swap")
+@app.post("/api/ai/concierge/apply-swap", dependencies=[Depends(ai_trip_limiter)])
+@app.post("/api/ai/concierge/swap", dependencies=[Depends(ai_trip_limiter)])
+@app.post("/api/trips/itinerary/swap", dependencies=[Depends(ai_trip_limiter)])
 def apply_concierge_swap_endpoint(
     req: UniversalSwapRequest,
     current_user: AuthUser = Depends(get_user_or_guest),
