@@ -386,6 +386,14 @@ def revoke_session(db: Session, token: str):
         session_record.revoked_at = get_current_iso_time()
         db.commit()
 
+    # Invalidate cached session mapping in Redis
+    try:
+        from redis_client import redis_conn
+        if redis_conn:
+            redis_conn.delete(f"session_cache:{token}")
+    except Exception:
+        pass
+
 def logout_user(db: Session, token: str):
     revoke_session(db, token)
 

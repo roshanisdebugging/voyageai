@@ -168,7 +168,13 @@ async def global_exception_handler(request: Request, exc: Exception):
         }
     )
 
-from rate_limiter import NetworkRateLimiter, UserRateLimiter, RateLimiter
+from rate_limiter import (
+    NetworkRateLimiter,
+    UserRateLimiter,
+    RateLimiter,
+    cache_user_session,
+    invalidate_cached_session
+)
 
 # Production Rate Limiters: Network (Auth/Public) & User (Heavy Compute/Paid/Session)
 auth_login_limiter = NetworkRateLimiter(requests=5, window_seconds=60, key_prefix="rl:auth:login")
@@ -542,7 +548,7 @@ def root():
     return {"app": "VoyageAI OS PostgreSQL API", "status": "online"}
 
 @app.post("/api/auth/register", dependencies=[Depends(auth_register_limiter)])
-def register(req: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+async def register(req: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     log_frontend_payload(
         endpoint="POST /api/auth/register",
         payload={"email": req.email, "name": req.name},
@@ -565,6 +571,7 @@ def register(req: RegisterRequest, request: Request, response: Response, db: Ses
     try:
         token, auth_user, user_profile, user_prefs = auth.register_user(db, req)
         set_session_cookie(response, token, request)
+        await cache_user_session(token, auth_user.id)
         return {
             "status": "success",
             "message": "User registered successfully",
@@ -584,7 +591,7 @@ def register(req: RegisterRequest, request: Request, response: Response, db: Ses
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/auth/login", dependencies=[Depends(auth_login_limiter)])
-def login(req: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     log_frontend_payload(
         endpoint="POST /api/auth/login",
         payload=req,
@@ -596,6 +603,7 @@ def login(req: LoginRequest, request: Request, response: Response, db: Session =
     try:
         token, auth_user, user_profile, user_prefs = auth.authenticate_or_create_user(db, req)
         set_session_cookie(response, token, request)
+        await cache_user_session(token, auth_user.id)
         return {
             "token": token,
             "authUser": auth_user,
@@ -637,7 +645,7 @@ def get_auth_me(
     }
 
 @app.post("/api/auth/logout")
-def logout(
+async def logout(
     request: Request,
     response: Response,
     authorization: Optional[str] = Header(None),
@@ -647,6 +655,7 @@ def logout(
         token = extract_token_optional(request, authorization)
         if token:
             auth.revoke_session(db, token)
+            await invalidate_cached_session(token)
     except Exception:
         pass
 

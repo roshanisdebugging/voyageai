@@ -110,11 +110,47 @@ async def test_user_limiter_auth_enforcement():
     await redis_client.delete(test_key)
     print("✅ TEST 3 PASSED: UserRateLimiter enforces strict 401 authentication and user keys.")
 
+async def test_session_cache_and_invalidation():
+    print("\n--- TEST 4: Async Redis Session Cache & Invalidation ---")
+    from rate_limiter import cache_user_session, invalidate_cached_session
+    
+    test_token = "voyage_tok_unittest_abc123"
+    test_user_id = "usr_cached_456"
+    
+    # 1. Pre-warm session cache in Redis
+    await cache_user_session(test_token, test_user_id, ttl=300)
+    cached_val = await redis_client.get(f"session_cache:{test_token}")
+    assert cached_val == test_user_id, f"Expected {test_user_id}, got {cached_val}"
+    print(f"Pre-warmed session cache: session_cache:{test_token} -> {cached_val}")
+    
+    # 2. Test UserRateLimiter._resolve_user_id sub-millisecond cache hit
+    limiter = UserRateLimiter(requests=10, window_seconds=60, key_prefix="test:rl:cache")
+    mock_req = MagicMock(spec=Request)
+    mock_req.state = MagicMock()
+    mock_req.state.user = None
+    mock_req.cookies = {"voyageai_session": test_token}
+    mock_req.headers = {}
+    mock_req.query_params = {}
+    
+    resolved_id = await limiter._resolve_user_id(mock_req)
+    assert resolved_id == test_user_id, f"Expected resolved ID {test_user_id}, got {resolved_id}"
+    assert getattr(mock_req.state, "user", None) is not None
+    assert mock_req.state.user.get("id") == test_user_id
+    print(f"UserRateLimiter successfully resolved user from Redis cache without DB query: {resolved_id}")
+    
+    # 3. Test Invalidation on Logout / Revocation
+    await invalidate_cached_session(test_token)
+    after_del = await redis_client.get(f"session_cache:{test_token}")
+    assert after_del is None, f"Expected None after invalidation, got {after_del}"
+    print(f"Session cache invalidated successfully: session_cache:{test_token} is None.")
+    print("✅ TEST 4 PASSED: Redis cache-aside session resolution and invalidation working perfectly.")
+
 async def main():
     try:
         await test_ipv6_normalization()
         await test_no_double_counting_and_lockout()
         await test_user_limiter_auth_enforcement()
+        await test_session_cache_and_invalidation()
         print("\n=======================================================")
         print("🎉 ALL PRODUCTION RATE LIMITER TESTS PASSED SUCCESSFULLY!")
         print("=======================================================\n")
@@ -123,3 +159,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

@@ -151,12 +151,33 @@ class NetworkRateLimiter:
 
 
 # ----------------------------------------------------------------------------
-# 2. UserRateLimiter: Authenticated User Rate Limiter
+# 2. UserRateLimiter: Authenticated User Rate Limiter with Redis Session Cache
 # ----------------------------------------------------------------------------
+SESSION_CACHE_TTL = int(os.getenv("SESSION_CACHE_TTL", "3600"))
+
+async def cache_user_session(token: str, user_id: str, ttl: int = SESSION_CACHE_TTL) -> None:
+    """Pre-warm or update user session cache in Redis."""
+    if not token or not user_id:
+        return
+    try:
+        await redis_client.set(f"session_cache:{token}", str(user_id), ex=ttl)
+    except Exception as e:
+        logger.warning(f"[SESSION CACHE WARN] Failed to pre-warm session cache: {e}")
+
+async def invalidate_cached_session(token: str) -> None:
+    """Invalidate user session cache in Redis upon logout or session revocation."""
+    if not token:
+        return
+    try:
+        await redis_client.delete(f"session_cache:{token}")
+    except Exception as e:
+        logger.warning(f"[SESSION CACHE WARN] Failed to invalidate session cache: {e}")
+
 class UserRateLimiter:
     """
     Authenticated user rate limiter for heavy compute and paid external APIs.
-    - Resolves user from request.state.user (or decodes session token).
+    - Resolves user from request.state.user, or async Redis session cache, or database.
+    - Eliminates synchronous SessionLocal() DB bottleneck via cache-aside.
     - If unauthenticated, raises HTTPException(401, detail="Authentication required").
     - Constructs key: {key_prefix}:{user.id}.
     - Immune to IP rotation, VPNs, or IPv6 pool hopping.
@@ -168,15 +189,15 @@ class UserRateLimiter:
         self.allow_guest = allow_guest
 
     async def __call__(self, request: Request) -> bool:
-        user_id = self._resolve_user_id(request)
+        user_id = await self._resolve_user_id(request)
         if not user_id:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         redis_key = f"{self.key_prefix}:{user_id}"
         return await check_sliding_window_rate_limit(redis_key, self.requests, self.window_seconds)
 
-    def _resolve_user_id(self, request: Request) -> Optional[str]:
-        # 1. Check if user was already resolved and attached to request.state
+    async def _resolve_user_id(self, request: Request) -> Optional[str]:
+        # Step 1: Check if user was already resolved and attached to request.state
         user = getattr(request.state, "user", None)
         if user is not None:
             status = getattr(user, "status", None) or (user.get("status") if isinstance(user, dict) else None)
@@ -184,7 +205,7 @@ class UserRateLimiter:
             if uid and (status != "GUEST" or self.allow_guest):
                 return str(uid)
 
-        # 2. Extract session token from cookie, Authorization, or X-Auth-Token
+        # Extract session token from cookie, Authorization, or X-Auth-Token
         token = request.cookies.get("voyageai_session")
         if not token:
             auth_hdr = request.headers.get("authorization") or request.headers.get("x-auth-token")
@@ -199,17 +220,37 @@ class UserRateLimiter:
             token = request.query_params.get("token") or request.query_params.get("session_token")
 
         if token:
+            # Step 2: Check Redis Session Cache (Cache Hit: sub-millisecond return)
+            session_cache_key = f"session_cache:{token}"
+            try:
+                cached_uid = await redis_client.get(session_cache_key)
+                if cached_uid:
+                    # Attach minimal user representation to avoid re-resolving in downstream dependencies
+                    request.state.user = {"id": str(cached_uid), "status": "ACTIVE"}
+                    return str(cached_uid)
+            except Exception as cache_read_err:
+                logger.warning(f"[SESSION CACHE WARN] Redis read failed for {session_cache_key} ({cache_read_err}), falling back to DB.")
+
+            # Step 3: Cache Miss -> Fallback to Database once, then populate cache
             try:
                 from database import SessionLocal
                 import auth
                 with SessionLocal() as db:
                     auth_user, _, _ = auth.get_session_user(db, token)
                     request.state.user = auth_user
-                    return str(auth_user.id)
+                    user_id_str = str(auth_user.id)
+
+                    # Populate cache in Redis with TTL matching session lifetime
+                    try:
+                        await redis_client.set(session_cache_key, user_id_str, ex=SESSION_CACHE_TTL)
+                    except Exception as cache_write_err:
+                        logger.warning(f"[SESSION CACHE WARN] Redis write failed for {session_cache_key} ({cache_write_err}).")
+
+                    return user_id_str
             except Exception:
                 pass
 
-        # 3. If guest sessions are explicitly permitted, extract guest_session_id
+        # Step 4: If guest sessions are explicitly permitted, extract guest_session_id
         if self.allow_guest:
             guest_id = request.cookies.get("guest_session_id") or request.headers.get("x-guest-id") or (
                 request.query_params.get("guest_id") if hasattr(request, "query_params") else None
