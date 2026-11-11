@@ -175,7 +175,10 @@ class WebSocketClient {
       clearTimeout(pending.timer);
       this.pendingRequests.delete(reqId);
 
-      const isError = frame.status === 'error' || frame.status === 400 || frame.status === 500 || Boolean(frame.error);
+      const isError =
+        frame.status === 'error' ||
+        (typeof frame.status === 'number' && frame.status >= 400) ||
+        Boolean(frame.error);
       if (isError) {
         pending.reject(new Error(frame.error || 'WebSocket request failed'));
       } else {

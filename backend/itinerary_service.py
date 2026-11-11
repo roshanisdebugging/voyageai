@@ -190,12 +190,13 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
     """
     Background worker function for asynchronous itinerary generation.
     Enforces strict integrity validation and deterministic date calculations.
+    Returns the final itinerary status ("READY" or "FAILED"), or None if the trip doesn't exist.
     """
     db: Session = db_session_factory()
     try:
         trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
         if not trip:
-            return
+            return None
 
         now = datetime.utcnow().isoformat() + "Z"
         ai_input = {
@@ -268,8 +269,10 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
                 print(f"[TRIP CREATION FAILED] Integrity check failed: {validation_msg}", flush=True)
                 raise ValueError(f"AI_GENERATION_ERROR: {validation_msg}")
 
-            # Store clean baseline template in Redis with 7-Day TTL
-            set_cached_itinerary(cache_key, parsed_schema.model_dump())
+            # Store clean baseline template in Redis with 7-Day TTL.
+            # Mock output is never cached, or it would be served as real later.
+            if current_provider != "mock":
+                set_cached_itinerary(cache_key, parsed_schema.model_dump())
 
         # Copy-on-Write: Clone this baseline plan into PostgreSQL under the user's trip_id
 
@@ -337,54 +340,7 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
         trip.updated_at = now
         db.commit()
         print(f"[TRIP CREATION SUCCESS] Trip '{trip.title}' ready with {len(parsed_schema.days)} Days and {total_activities} Activities!\n", flush=True)
-
-        try:
-            from main import log_pipeline_5_steps
-            user_sends = {
-                "destination": trip.destination,
-                "startDate": trip.start_date,
-                "endDate": trip.end_date,
-                "travelersCount": len(trip.travelers),
-                "tripStyle": (trip.preferences_snapshot or {}).get("travelStyles", []),
-                "budgetLevel": (trip.budget or {}).get("level", "MODERATE")
-            }
-            backend_received = {
-                "tripId": trip.id,
-                "userId": trip.user_id,
-                "destinationName": trip.destination.get("name") if isinstance(trip.destination, dict) else "Destination",
-                "calculatedTotalDays": trip.total_days,
-                "startDate": trip.start_date,
-                "endDate": trip.end_date,
-                "travelersCount": len(trip.travelers)
-            }
-            given_to_ai = {
-                "input_data": ai_input,
-                "prompt": prompt
-            }
-            ai_returned = parsed_schema.model_dump()
-            send_to_frontend = {
-                "id": trip.id,
-                "title": trip.title,
-                "status": trip.status,
-                "itineraryStatus": "READY",
-                "destination": trip.destination,
-                "startDate": trip.start_date,
-                "endDate": trip.end_date,
-                "totalDays": trip.total_days,
-                "daysCount": len(parsed_schema.days),
-                "activitiesCount": total_activities,
-                "days": [d.model_dump() for d in parsed_schema.days]
-            }
-            log_pipeline_5_steps(
-                flow_name="Trip Creation & AI Itinerary Generation",
-                user_sends=user_sends,
-                backend_received=backend_received,
-                given_to_ai=given_to_ai,
-                ai_returned=ai_returned,
-                send_to_frontend=send_to_frontend
-            )
-        except Exception as log_err:
-            print(f"[PIPELINE LOG WARN] Failed to print pipeline log: {log_err}", flush=True)
+        return "READY"
 
     except Exception as e:
         db.rollback()
@@ -398,11 +354,17 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
                 db.commit()
         except Exception:
             pass
+        return "FAILED"
     finally:
         db.close()
 
 def optimize_day_flow_service(db: Session, trip_id: str, day_id: str, goal: str = "MINIMIZE_TRAVEL_TIME") -> Dict[str, Any]:
-    day = db.query(ItineraryDayModel).filter(ItineraryDayModel.id == day_id).first()
+    day = (
+        db.query(ItineraryDayModel)
+        .join(ItineraryModel, ItineraryModel.id == ItineraryDayModel.itinerary_id)
+        .filter(ItineraryDayModel.id == day_id, ItineraryModel.trip_id == trip_id)
+        .first()
+    )
     if not day:
         raise ValueError("Target itinerary day not found")
 
@@ -427,7 +389,10 @@ def optimize_day_flow_service(db: Session, trip_id: str, day_id: str, goal: str 
     optimized_list = ai_provider_service.generate_day_optimization(day_info, act_dicts, goal)
 
     for item in optimized_list:
-        act_rec = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == item["id"]).first()
+        # The AI returns activity IDs; only accept ones from this day.
+        act_rec = db.query(ItineraryActivityModel).filter(
+            ItineraryActivityModel.id == item.get("id"), ItineraryActivityModel.day_id == day_id
+        ).first()
         if act_rec:
             if item.get("timeSlot"):
                 act_rec.time_slot = item["timeSlot"]
@@ -530,10 +495,21 @@ def execute_refinement_actions_service(db: Session, trip_id: str, actions: List[
     if not trip:
         raise ValueError("Trip not found")
 
+    trip_activity_ids = {
+        row[0]
+        for row in db.query(ItineraryActivityModel.id)
+        .join(ItineraryDayModel, ItineraryDayModel.id == ItineraryActivityModel.day_id)
+        .join(ItineraryModel, ItineraryModel.id == ItineraryDayModel.itinerary_id)
+        .filter(ItineraryModel.trip_id == trip.id)
+        .all()
+    }
+
     executed_count = 0
     for act in actions:
         act_type = act.get("type") or act.get("action")
         activity_id = act.get("activityId")
+        if activity_id not in trip_activity_ids:
+            continue
 
         if act_type == "REPLACE_ACTIVITY" and activity_id:
             rep = act.get("replacement") or {}

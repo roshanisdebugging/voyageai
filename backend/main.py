@@ -1,4 +1,3 @@
-from fastapi import requests
 from fastapi import FastAPI, HTTPException, Header, Depends, Response, Request, BackgroundTasks, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import HTMLResponse
 from fastapi.encoders import jsonable_encoder
@@ -6,7 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional, List, Dict, Any, Union
 from sqlalchemy.orm import Session
 import json
+import os
 import uuid
+import requests
 from datetime import datetime, timezone
 
 from database import get_db, SessionLocal, engine, Base, get_db_context, get_db_pool_status
@@ -17,6 +18,15 @@ from models_package import TripStayModel, TripTransportModel, TripExpenseModel
 from media_service import media_service
 from places import search_places, search_nearby_restaurants, validate_destination_payload
 import auth
+from trip_lifecycle import create_trip_for_user, serialize_trip, TripValidationError
+from ownership import (
+    trip_id_candidates,
+    find_owned_trip,
+    require_owned_trip,
+    latest_owned_trip,
+    find_owned_activity,
+    require_owned_activity,
+)
 
 from pydantic import BaseModel
 from task_queue import enqueue_itinerary_generation
@@ -32,7 +42,6 @@ import asyncio
 from starlette.concurrency import run_in_threadpool
 from contextlib import asynccontextmanager
 from events_listener import start_redis_events_listener
-from websocket_manager import ws_manager
 import models_db
 import models_trip
 import models_itinerary
@@ -49,14 +58,21 @@ except Exception as e:
 
 
 
+def _trip_owner_id(trip_id: str) -> Optional[str]:
+    with SessionLocal() as db:
+        trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
+        return trip.user_id if trip else None
+
+
 async def broadcast_trip_update_to_clients(trip_id: str, payload: dict):
-    """Dispatches the Redis Pub/Sub message to local WebSockets."""
-    await ws_manager.broadcast_to_local_subscribers(trip_id, payload)
+    """Called for each Redis Pub/Sub trip event. Only the trip owner's sockets are notified."""
     try:
-        if 'connection_registry' in globals():
-            await connection_registry.broadcast_push("ITINERARY_READY", payload)
+        owner_id = await run_in_threadpool(_trip_owner_id, trip_id)
+        if not owner_id:
+            return
+        await connection_registry.push_to_user(owner_id, payload.get("type", "ITINERARY_READY"), payload)
     except Exception as e:
-        print(f"[WS BROADCAST ERROR] Failed to push WebSocket update: {e}")
+        print(f"[WS BROADCAST ERROR] Failed to push trip update: {e}", flush=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -86,58 +102,38 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="VoyageAI Auth, Preferences & Trip API", version="1.0.0", lifespan=lifespan)
 
-@app.websocket("/ws/trips/{trip_id}")
-async def websocket_trip_endpoint(websocket: WebSocket, trip_id: str):
-    """Distributed WebSocket endpoint for trip-specific real-time updates."""
-    await ws_manager.connect(trip_id, websocket)
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        ws_manager.disconnect(trip_id, websocket)
+# CORS: only these sites may call the API with the user's login cookie.
+# Add more with the comma-separated ALLOWED_ORIGINS env var.
+_DEFAULT_ALLOWED_ORIGINS = [
+    "https://tour-guide-v1.netlify.app",
+    "http://localhost",
+    "http://localhost:80",
+    "http://127.0.0.1",
+    "http://127.0.0.1:80",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5248",
+    "http://127.0.0.1:5248",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+ALLOWED_ORIGINS = list(dict.fromkeys(
+    _DEFAULT_ALLOWED_ORIGINS
+    + [o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+))
 
-# Enable CORS for Netlify, ngrok, localhost, and all production origins
+
+def is_allowed_origin(origin: Optional[str]) -> bool:
+    return bool(origin) and origin.rstrip("/") in ALLOWED_ORIGINS
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://1ba2-2401-4900-8f65-ac03-5052-abe4-b35-4d92.ngrok-free.app",
-        "https://f36e-2401-4900-8f65-ac03-fd43-939f-cf8b-ff75.ngrok-free.app",
-        "https://de23-2401-4900-8f65-29a5-15e0-b6ee-9747-80c5.ngrok-free.app",
-        "https://5cf2-2401-4900-8f64-358c-2843-25c-eb6e-6225.ngrok-free.app",
-        "https://754e-2401-4900-8f64-358c-cdc7-21e3-d903-8910.ngrok-free.app",
-        "https://tour-guide-v1.netlify.app",
-        "https://98e8-2401-4900-8f64-f3ac-f84f-b19f-1d6f-a085.ngrok-free.app",
-        "https://8d4e-2401-4900-8f66-66c7-f943-ebbd-5fdc-c302.ngrok-free.app",
-        "https://9f8b-2401-4900-8f64-3c24-c018-4e44-5211-fbf9.ngrok-free.app",
-        "https://a076-2401-4900-8f64-f3ac-15d7-ae54-cd55-7d08.ngrok-free.app",
-        "https://f6d4-2401-4900-8f64-f3ac-c7-79fc-1b00-dd14.ngrok-free.app",
-        "http://localhost",
-        "http://127.0.0.1",
-        "http://localhost:80",
-        "http://127.0.0.1:80",
-        "http://localhost:5248",
-        "http://127.0.0.1:5248",
-        "http://localhost:5247",
-        "http://127.0.0.1:5247",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
-    allow_origin_regex=r".*",
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
-
-@app.middleware("http")
-async def add_ngrok_skip_header(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["ngrok-skip-browser-warning"] = "true"
-    return response
-
-import os
 
 SERVER_PORT = os.environ.get("PORT")
 
@@ -155,34 +151,38 @@ from fastapi.responses import JSONResponse
 async def global_exception_handler(request: Request, exc: Exception):
     import traceback
     traceback.print_exc()
-    origin = request.headers.get("origin") or "http://localhost:5173"
+    # Errors skip the CORS middleware, so add its headers here for allowed sites only.
+    # The exception text stays in the server log and is not sent to the client.
+    headers = {}
+    origin = request.headers.get("origin")
+    if is_allowed_origin(origin):
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Vary"] = "Origin"
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error occurred", "error": str(exc)},
-        headers={
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-            "ngrok-skip-browser-warning": "true"
-        }
+        content={"detail": "Internal server error occurred"},
+        headers=headers,
     )
 
 from rate_limiter import (
     NetworkRateLimiter,
     UserRateLimiter,
-    RateLimiter,
     cache_user_session,
-    invalidate_cached_session
+    invalidate_cached_session,
+    check_ws_rate_limit,
+    client_ip_from,
+    normalize_ip,
 )
 
 # Production Rate Limiters: Network (Auth/Public) & User (Heavy Compute/Paid/Session)
-auth_login_limiter = NetworkRateLimiter(requests=5, window_seconds=60, key_prefix="rl:auth:login")
-auth_register_limiter = NetworkRateLimiter(requests=5, window_seconds=60, key_prefix="rl:auth:register")
+# Login and paid AI limiters fail closed: if Redis is down they reject instead of letting everything through.
+auth_login_limiter = NetworkRateLimiter(requests=5, window_seconds=60, key_prefix="rl:auth:login", fail_closed=True)
+auth_register_limiter = NetworkRateLimiter(requests=5, window_seconds=60, key_prefix="rl:auth:register", fail_closed=True)
 
-ai_trip_limiter = UserRateLimiter(requests=10, window_seconds=60, key_prefix="rl:ai:trip")
-ai_chat_limiter = UserRateLimiter(requests=20, window_seconds=60, key_prefix="rl:ai:chat")
-tts_limiter = UserRateLimiter(requests=15, window_seconds=60, key_prefix="rl:ai:tts")
+ai_trip_limiter = UserRateLimiter(requests=10, window_seconds=60, key_prefix="rl:ai:trip", fail_closed=True)
+ai_chat_limiter = UserRateLimiter(requests=20, window_seconds=60, key_prefix="rl:ai:chat", fail_closed=True)
+tts_limiter = UserRateLimiter(requests=15, window_seconds=60, key_prefix="rl:ai:tts", fail_closed=True)
 
 places_limiter = UserRateLimiter(requests=60, window_seconds=60, key_prefix="rl:places", allow_guest=True)
 osm_limiter = places_limiter
@@ -195,15 +195,16 @@ COOKIE_NAME = "voyageai_session"
 GUEST_COOKIE_NAME = "guest_session_id"
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
 
+def cookie_flags(request: Optional[Request]) -> tuple:
+    """(secure, samesite) for auth cookies: Secure + SameSite=None over HTTPS, Lax over plain HTTP."""
+    if request is None:
+        return True, "none"
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").startswith("https")
+    return (True, "none") if is_https else (False, "lax")
+
+
 def set_session_cookie(response: Response, token: str, request: Optional[Request] = None):
-    is_secure = True
-    if request:
-        proto = request.headers.get("x-forwarded-proto", "")
-        scheme = request.url.scheme
-        host = request.headers.get("host", "")
-        if scheme == "http" and "localhost" in host and not proto.startswith("https") and "ngrok" not in host:
-            is_secure = False
-    samesite = "none" if is_secure else "lax"
+    is_secure, samesite = cookie_flags(request)
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
@@ -216,14 +217,7 @@ def set_session_cookie(response: Response, token: str, request: Optional[Request
     )
 
 def delete_session_cookie(response: Response, request: Optional[Request] = None):
-    is_secure = True
-    if request:
-        proto = request.headers.get("x-forwarded-proto", "")
-        scheme = request.url.scheme
-        host = request.headers.get("host", "")
-        if scheme == "http" and "localhost" in host and not proto.startswith("https") and "ngrok" not in host:
-            is_secure = False
-    samesite = "none" if is_secure else "lax"
+    is_secure, samesite = cookie_flags(request)
     response.delete_cookie(
         key=COOKIE_NAME,
         path="/",
@@ -338,9 +332,6 @@ def extract_token_optional(request: Request, authorization: Optional[str] = Head
                 token = auth_hdr[7:].strip()
             else:
                 token = auth_hdr
-    # 3. Query params fallback
-    if not token and hasattr(request, "query_params"):
-        token = request.query_params.get("token") or request.query_params.get("session_token")
     return token
 
 def extract_token(request: Request, authorization: Optional[str] = Header(None)) -> str:
@@ -383,8 +374,9 @@ def get_current_user(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ) -> AuthUser:
-    if hasattr(request.state, "user") and request.state.user:
-        return request.state.user
+    cached_user = getattr(request.state, "user", None)
+    if isinstance(cached_user, AuthUser):
+        return cached_user
     token = extract_token(request, authorization)
     try:
         auth_user, _, _ = auth.get_session_user(db, token)
@@ -427,17 +419,9 @@ def get_current_user_or_guest(
 
     guest_id = request.cookies.get(GUEST_COOKIE_NAME)
     if not guest_id or not str(guest_id).startswith("guest_"):
-        guest_id = request.headers.get("x-guest-id") or request.query_params.get("guest_id")
-    if not guest_id or not str(guest_id).startswith("guest_"):
         guest_id = f"guest_{uuid.uuid4().hex[:10]}"
 
-    is_secure = True
-    proto = request.headers.get("x-forwarded-proto", "")
-    scheme = request.url.scheme
-    host = request.headers.get("host", "")
-    if scheme == "http" and "localhost" in host and not proto.startswith("https") and "ngrok" not in host:
-        is_secure = False
-    samesite = "none" if is_secure else "lax"
+    is_secure, samesite = cookie_flags(request)
 
     try:
         response.set_cookie(
@@ -488,60 +472,9 @@ def get_current_user_optional(
     return auth_user, user_profile, user_prefs
 
 def verify_trip_ownership(trip_id: str, user_id: str, db: Session) -> TripModel:
-    clean_id = (trip_id or "").strip()
-    candidates = [clean_id, f"trip_{clean_id}", clean_id.replace("trip_", "")]
-    trip = db.query(TripModel).filter(TripModel.id.in_(candidates), TripModel.user_id == user_id).first()
-    if not trip:
-        # Fallback check across all trips (for demo/guest mode)
-        trip = db.query(TripModel).filter(TripModel.id.in_(candidates)).first()
-    if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found or unauthorized access")
-    return trip
+    return require_owned_trip(db, trip_id, user_id)
 
 
-
-class ConciergeMessageItem(BaseModel):
-    class Config:
-        extra = "ignore"
-    role: Optional[str] = "user"
-    text: Optional[str] = ""
-
-class ConciergeRequest(BaseModel):
-    class Config:
-        extra = "allow"
-        populate_by_name = True
-    message: str
-    intent: Optional[str] = "CHAT"
-    tripId: Optional[str] = None
-    itineraryId: Optional[str] = None
-    dayId: Optional[str] = None
-    activityId: Optional[str] = None
-    messages: Optional[List[Any]] = None
-    tripContext: Optional[Dict[str, Any]] = None
-    trip_context: Optional[Dict[str, Any]] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-
-class ActivityReplacementPayload(BaseModel):
-    name: str
-    description: Optional[str] = None
-    timeSlot: Optional[str] = None
-    locationName: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
-    estimatedCost: Optional[int] = 0
-    activityType: Optional[str] = "SIGHTSEEING"
-
-class ActivitySwapRequest(BaseModel):
-    itineraryId: Optional[str] = None
-    dayId: Optional[str] = None
-    replacement: ActivityReplacementPayload
-
-class OptimizeDayRequest(BaseModel):
-    goal: Optional[str] = "MINIMIZE_TRAVEL_TIME"
-
-class RefinementExecutionRequest(BaseModel):
-    actions: List[dict]
 
 @app.get("/")
 def root():
@@ -569,7 +502,7 @@ async def register(req: RegisterRequest, request: Request, response: Response, d
         raise HTTPException(status_code=400, detail="An account with this email already exists.")
 
     try:
-        token, auth_user, user_profile, user_prefs = auth.register_user(db, req)
+        token, auth_user, user_profile, user_prefs = await run_in_threadpool(auth.register_user, db, req)
         set_session_cookie(response, token, request)
         await cache_user_session(token, auth_user.id)
         return {
@@ -601,7 +534,7 @@ async def login(req: LoginRequest, request: Request, response: Response, db: Ses
         }
     )
     try:
-        token, auth_user, user_profile, user_prefs = auth.authenticate_or_create_user(db, req)
+        token, auth_user, user_profile, user_prefs = await run_in_threadpool(auth.authenticate_user, db, req)
         set_session_cookie(response, token, request)
         await cache_user_session(token, auth_user.id)
         return {
@@ -654,7 +587,7 @@ async def logout(
     try:
         token = extract_token_optional(request, authorization)
         if token:
-            auth.revoke_session(db, token)
+            await run_in_threadpool(auth.revoke_session, db, token)
             await invalidate_cached_session(token)
     except Exception:
         pass
@@ -859,32 +792,28 @@ async def websocket_location_endpoint(
     import math
     from datetime import datetime, timezone
 
-    db = SessionLocal()
-    user_id = "guest"
-    try:
-        if token:
-            user_tuple = auth.get_session_user(db, token)
-            if user_tuple:
-                user_id = user_tuple[0].id
-    except Exception:
-        pass
-    finally:
-        db.close()
-
-    # Validate trip ownership if trip_id is provided
-    if trip_id and user_id != "guest":
+    user_id = f"guest_{uuid.uuid4().hex[:10]}"
+    is_authenticated = False
+    if token:
         db = SessionLocal()
         try:
-            trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
-            if trip and trip.user_id != user_id:
-                log_event(f"⚠️ [WS LOCATION REJECTED] User {user_id} unauthorized for trip {trip_id}")
-                await websocket.accept()
-                await websocket.close(code=4003)
-                return
-        except Exception:
-            pass
+            session = await run_in_threadpool(resolve_ws_session, db, token)
+            if session:
+                user_id = session[0].id
+                is_authenticated = True
+            # Only the trip owner may join a trip's live-location room.
+            if trip_id:
+                owned = is_authenticated and await run_in_threadpool(find_owned_trip, db, trip_id, user_id)
+                if not owned:
+                    await websocket.accept()
+                    await websocket.close(code=4003)
+                    return
         finally:
             db.close()
+    elif trip_id:
+        await websocket.accept()
+        await websocket.close(code=4003)
+        return
 
     await location_manager.connect(websocket, user_id, trip_id)
     log_event(f"🔌 [WS LOCATION CONNECTED] User: {user_id} | Trip: {trip_id or 'Global'}")
@@ -897,7 +826,7 @@ async def websocket_location_endpoint(
             acc = data.get("accuracy") if data.get("accuracy") is not None else data.get("accuracy_meters")
             source = data.get("source", "gps")
             address_name = data.get("address_name") or "Live Position"
-            req_trip_id = data.get("trip_id") if data.get("trip_id") is not None else trip_id
+            req_trip_id = trip_id  # only the room joined (and ownership-checked) at connect time
 
             if lat is not None and lng is not None:
                 uid_key = user_id
@@ -960,120 +889,140 @@ async def websocket_location_endpoint(
     except Exception as e:
         location_manager.disconnect(websocket, user_id, trip_id)
         log_event(f"⚠️ [WS LOCATION ERROR] User: {user_id} | Error: {e}")
+    finally:
+        if not is_authenticated:
+            _user_location_history.pop(user_id, None)
 
 # ── UNIFIED WEBSOCKET ACTION DISPATCHER ──
 
-async def process_ws_action(reqname: str, data: dict, db: Session, websocket: WebSocket) -> Any:
+# WebSocket actions anyone may call without logging in.
+WS_PUBLIC_ACTIONS = {
+    "auth:login", "auth:session", "auth:logout",
+    "location:update", "location:latest", "location:search",
+    "places:search", "places:nearby",
+    "tour_guide:get_nearby", "tour_guide:visit",
+}
+
+# Actions on one trip. The trip is checked against the logged-in user before the action runs.
+WS_TRIP_ACTIONS = {
+    "trips:delete", "trips:get_itinerary",
+    "trips:get_stays", "trips:add_stay",
+    "trips:get_transports", "trips:add_transport",
+    "trips:get_expenses", "trips:add_expense",
+    "trips:weather_replan", "trips:optimize_day", "trips:optimize_budget",
+    "trips:refine", "trips:regenerate_itinerary", "trips:swap_activity",
+}
+
+# (bucket, requests per minute) per action. Anything not listed uses "general".
+WS_RATE_LIMITS = {
+    "auth:login": ("login", 5),
+    "tour_guide:chat": ("chat", 20),
+    "concierge:chat": ("chat", 20),
+    "ai:concierge": ("chat", 20),
+    "tts:synthesize": ("tts", 15),
+    "trips:create": ("ai_trip", 10),
+    "trips:regenerate_itinerary": ("ai_trip", 10),
+    "trips:refine": ("ai_trip", 10),
+    "trips:optimize_day": ("ai_trip", 10),
+    "trips:optimize_budget": ("ai_trip", 10),
+    "trips:weather_replan": ("ai_trip", 10),
+}
+WS_GENERAL_LIMIT = ("general", 120)
+
+
+def resolve_ws_session(db: Session, token: Optional[str]):
+    """Returns (AuthUser, UserProfile, UserPreferences) for a valid token, else None."""
+    if not token:
+        return None
+    try:
+        return auth.get_session_user(db, token)
+    except Exception:
+        return None
+
+
+async def process_ws_action(
+    reqname: str,
+    data: dict,
+    db: Session,
+    websocket: WebSocket,
+    session=None,
+    guest_key: str = "guest",
+) -> Any:
     from datetime import datetime, timezone
+
+    user = session[0] if session else None
+
+    if reqname not in WS_PUBLIC_ACTIONS and not user:
+        raise PermissionError("Authentication required. Please log in.")
+
+    if reqname in WS_TRIP_ACTIONS:
+        trip = find_owned_trip(db, data.get("trip_id") or data.get("tripId"), user.id)
+        if not trip:
+            raise LookupError("Trip not found")
+        data = {**data, "trip_id": trip.id, "tripId": trip.id}
 
     # 1. Auth Actions
     if reqname == "auth:login":
         req = LoginRequest(**data)
-        token, auth_user, user_profile, user_prefs = auth.authenticate_or_create_user(db, req)
+        token, auth_user, user_profile, user_prefs = auth.authenticate_user(db, req)
+        await cache_user_session(token, auth_user.id)
         return {
+            "token": token,
             "authUser": auth_user,
             "userProfile": user_profile,
             "userPreferences": user_prefs
         }
 
     elif reqname == "auth:session":
-        token = extract_ws_token(websocket, data)
-        if not token or str(token).startswith("token_mock"):
-            return {
-                "authUser": None,
-                "userProfile": None,
-                "userPreferences": None
-            }
-        try:
-            user_tuple = auth.get_session_user(db, token)
-            auth_user, user_profile, user_prefs = user_tuple
-            return {
-                "authUser": auth_user,
-                "userProfile": user_profile,
-                "userPreferences": user_prefs
-            }
-        except Exception:
-            return {
-                "authUser": None,
-                "userProfile": None,
-                "userPreferences": None
-            }
+        if not session:
+            return {"authUser": None, "userProfile": None, "userPreferences": None}
+        auth_user, user_profile, user_prefs = session
+        return {
+            "authUser": auth_user,
+            "userProfile": user_profile,
+            "userPreferences": user_prefs
+        }
 
     elif reqname == "auth:logout":
         token = extract_ws_token(websocket, data)
-        if token and not str(token).startswith("token_mock"):
+        if token:
             auth.logout_user(db, token)
+            await invalidate_cached_session(token)
         return {"message": "Logged out successfully"}
 
     elif reqname == "auth:onboarding":
-        token = extract_ws_token(websocket, data)
-        user_tuple = None
-        if token:
-            try:
-                user_tuple = auth.get_session_user(db, token)
-            except Exception:
-                pass
-        if not user_tuple:
-            clean_req = LoginRequest(provider="GUEST", email="guest@example.com")
-            _, auth_user, user_profile, user_prefs = auth.authenticate_or_create_user(db, clean_req)
-        else:
-            auth_user = user_tuple[0]
-
         onb_req = OnboardingRequest(**data)
-        profile, prefs = auth.update_user_onboarding(db, auth_user.id, onb_req)
+        profile, prefs = auth.update_user_onboarding(db, user.id, onb_req)
         return {
-            "authUser": auth_user,
+            "authUser": user,
             "userProfile": profile,
             "userPreferences": prefs
         }
 
-
     # 2. Location & Places Actions
     elif reqname == "location:update":
-        lat = data.get("latitude")
-        lng = data.get("longitude")
-        acc = data.get("accuracy_meters") or data.get("accuracy")
-        source = data.get("source", "gps")
-        address_name = data.get("address_name") or "Live Position"
-        token = extract_ws_token(websocket, data)
-        
-        user_id = "guest"
-        if token:
-            try:
-                u_tuple = auth.get_session_user(db, token)
-                if u_tuple:
-                    user_id = u_tuple[0].id
-            except Exception:
-                pass
-
+        location_key = user.id if user else guest_key
         entry = {
-            "latitude": lat,
-            "longitude": lng,
-            "accuracy_meters": acc,
-            "address_name": address_name,
-            "source": source,
+            "latitude": data.get("latitude"),
+            "longitude": data.get("longitude"),
+            "accuracy_meters": data.get("accuracy_meters") or data.get("accuracy"),
+            "address_name": data.get("address_name") or "Live Position",
+            "source": data.get("source", "gps"),
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
-        if user_id not in _user_location_history:
-            _user_location_history[user_id] = []
-        _user_location_history[user_id].append(entry)
+        history = _user_location_history.setdefault(location_key, [])
+        history.append(entry)
+        del history[:-100]
         return {"status": "success", "location": entry}
 
     elif reqname == "location:latest":
-        token = extract_ws_token(websocket, data)
-        user_id = "guest"
-        if token:
-            try:
-                u_tuple = auth.get_session_user(db, token)
-                if u_tuple:
-                    user_id = u_tuple[0].id
-            except Exception:
-                pass
-        history = _user_location_history.get(user_id, [])
+        history = _user_location_history.get(user.id if user else guest_key, [])
         return {"status": "success", "location": history[-1] if history else None}
 
-    elif reqname in ["location:search", "places:search"]:
+    elif reqname in ("location:search", "places:search"):
         q = data.get("query") or data.get("q") or ""
+        if not q.strip():
+            return []
         return await run_in_threadpool(search_places, q)
 
     elif reqname == "places:nearby":
@@ -1095,38 +1044,23 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
         lng = float(raw_lng)
         radius = min(int(data.get("radius") or data.get("radius_m") or 5000), 5000)
 
-        token = extract_ws_token(websocket, data)
-        user_id = "guest"
         user_prefs = None
-        if token:
-            try:
-                u_tuple = auth.get_session_user(db, token)
-                if u_tuple:
-                    user_id = u_tuple[0].id
-                    if u_tuple[2]:
-                        user_prefs = {
-                            "activityInterests": u_tuple[2].activity_interests or [],
-                            "travelStyles": u_tuple[2].travel_styles or [],
-                        }
-            except Exception:
-                pass
+        if session and session[2]:
+            user_prefs = {
+                "activityInterests": session[2].activityInterests or [],
+                "travelStyles": session[2].travelStyles or [],
+            }
 
-        raw_places = await run_in_threadpool(
-            search_nearby_pois, 
-            lat, 
-            lng, 
-            radius_m=radius, 
-            category="all"
-        )
+        raw_places = await run_in_threadpool(search_nearby_pois, lat, lng, radius_m=radius, category="all")
         ranked = rank_places(raw_places, user_prefs, limit=10)
 
-        session = get_or_create_session(user_id)
-        session["nearby_places"] = ranked
-        session["last_nearby_lat"] = lat
-        session["last_nearby_lng"] = lng
-        session["last_nearby_refresh"] = __import__("time").time()
+        guide_session = get_or_create_session(user.id if user else guest_key)
+        guide_session["nearby_places"] = ranked
+        guide_session["last_nearby_lat"] = lat
+        guide_session["last_nearby_lng"] = lng
+        guide_session["last_nearby_refresh"] = __import__("time").time()
 
-        alert_place = check_proactive_alert(session, lat, lng, ranked)
+        alert_place = check_proactive_alert(guide_session, lat, lng, ranked)
 
         return {
             "places": ranked,
@@ -1139,18 +1073,6 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
 
     elif reqname in ("tour_guide:chat", "ai:concierge", "concierge:chat"):
         from tour_guide_service import process_concierge_message
-        token = extract_ws_token(websocket, data)
-        user_id = None
-        if token:
-            try:
-                u_tuple = auth.get_session_user(db, token)
-                if u_tuple and u_tuple[0]:
-                    user_id = u_tuple[0].id
-            except Exception:
-                pass
-
-        if not user_id:
-            return {"error": "Authentication required. Please log in.", "code": 401}
 
         target_mode = data.get("mode") or "local"
         target_trip_id = data.get("trip_id") or data.get("tripId")
@@ -1159,23 +1081,19 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
         lat = data.get("latitude") or data.get("lat")
         lng = data.get("longitude") or data.get("lng")
 
-        if (not dest_name) and (target_trip_id or target_mode == "trip"):
-            try:
-                trip_model = None
-                if target_trip_id:
-                    trip_model = db.query(TripModel).filter(TripModel.id == target_trip_id).first()
-                else:
-                    trip_model = db.query(TripModel).filter(TripModel.user_id == user_id).order_by(TripModel.created_at.desc()).first()
-
-                if trip_model:
-                    target_trip_id = trip_model.id
-                    dest_name = getattr(trip_model, 'destination', None) or trip_model.title
-            except Exception as e:
-                print(f"[WS TOUR GUIDE WARN] Trip lookup error: {e}", flush=True)
+        if target_trip_id or target_mode == "trip":
+            trip_model = (
+                find_owned_trip(db, target_trip_id, user.id) if target_trip_id
+                else latest_owned_trip(db, user.id)
+            )
+            target_trip_id = trip_model.id if trip_model else None
+            if trip_model and not dest_name:
+                dest = trip_model.destination
+                dest_name = (dest.get("name") if isinstance(dest, dict) else None) or trip_model.title
 
         res = await run_in_threadpool(
             process_concierge_message,
-            user_id=user_id,
+            user_id=user.id,
             message=user_msg,
             mode=target_mode,
             trip_id=target_trip_id,
@@ -1197,254 +1115,55 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
 
     elif reqname == "tour_guide:visit":
         from tour_guide_service import get_or_create_session
-        token = extract_ws_token(websocket, data)
-        user_id = "guest"
-        if token:
-            try:
-                u_tuple = auth.get_session_user(db, token)
-                if u_tuple:
-                    user_id = u_tuple[0].id
-            except Exception:
-                pass
-
         place_id = data.get("place_id")
-        session = get_or_create_session(user_id)
-        session["current_place_id"] = place_id
-
-        return {
-            "status": "success",
-            "current_place_id": place_id
-        }
+        guide_session = get_or_create_session(user.id if user else guest_key)
+        guide_session["current_place_id"] = place_id
+        return {"status": "success", "current_place_id": place_id}
 
     elif reqname == "tts:synthesize":
         from tts_service import synthesize_speech_sarvam
-        text = data.get("text", "")
+        text = (data.get("text") or "")[:2000]
         lang = data.get("target_language_code", "hi-IN")
         speaker = data.get("speaker", "meera")
-        poi_id = data.get("poi_id")
         audio_b64 = await run_in_threadpool(
             synthesize_speech_sarvam,
             text=text,
             target_language_code=lang,
             speaker=speaker,
-            poi_id=poi_id
+            poi_id=data.get("poi_id")
         )
-        return {
-            "audio_base64": audio_b64,
-            "speaker": speaker,
-            "language": lang
-        }
+        return {"audio_base64": audio_b64, "speaker": speaker, "language": lang}
 
     # 4. Trip Domain Actions
     elif reqname == "trips:list":
-        token = extract_ws_token(websocket, data)
-        user_tuple = None
-        if token:
-            try:
-                user_tuple = auth.get_session_user(db, token)
-            except Exception:
-                pass
-        if not user_tuple:
-            return []
-        auth_user = user_tuple[0]
-        db_trips = db.query(TripModel).filter(TripModel.user_id == auth_user.id).all()
-        return [
-            {
-                "id": t.id,
-                "userId": t.user_id,
-                "title": t.title,
-                "status": t.status,
-                "itineraryStatus": t.itinerary_status,
-                "startDate": t.start_date,
-                "endDate": t.end_date,
-                "totalDays": t.total_days,
-                "destination": t.destination,
-                "coverMedia": t.cover_media,
-                "travelers": t.travelers,
-                "preferencesSnapshot": t.preferences_snapshot,
-                "budget": t.budget,
-                "progress": t.progress,
-                "createdAt": t.created_at,
-                "updatedAt": t.updated_at
-            }
-            for t in db_trips
-        ]
+        db_trips = db.query(TripModel).filter(TripModel.user_id == user.id).all()
+        return [serialize_trip(t) for t in db_trips]
 
     elif reqname == "trips:create":
-        import threading
-        token = extract_ws_token(websocket, data)
-        user_tuple = None
-        if token:
-            try:
-                user_tuple = auth.get_session_user(db, token)
-            except Exception:
-                pass
-        if not user_tuple:
-            clean_req = LoginRequest(provider="GUEST", email="guest@example.com")
-            t_new, auth_user, profile, prefs = auth.authenticate_or_create_user(db, clean_req)
-            user_tuple = (auth_user, profile, prefs)
-
-        auth_user, user_profile, user_prefs = user_tuple
-        trip_data = data
-        client_req_id = trip_data.get("clientRequestId")
-        
-        if client_req_id:
-            existing_trip = db.query(TripModel).filter(
-                TripModel.user_id == auth_user.id,
-                TripModel.client_request_id == client_req_id
-            ).first()
-            if existing_trip:
-                return {
-                    "id": existing_trip.id,
-                    "userId": existing_trip.user_id,
-                    "title": existing_trip.title,
-                    "status": existing_trip.status,
-                    "itineraryStatus": existing_trip.itinerary_status,
-                    "startDate": existing_trip.start_date,
-                    "endDate": existing_trip.end_date,
-                    "totalDays": existing_trip.total_days,
-                    "destination": existing_trip.destination,
-                    "coverMedia": existing_trip.cover_media,
-                    "travelers": existing_trip.travelers,
-                    "preferencesSnapshot": existing_trip.preferences_snapshot,
-                    "budget": existing_trip.budget,
-                    "progress": existing_trip.progress,
-                    "createdAt": existing_trip.created_at,
-                    "updatedAt": existing_trip.updated_at
-                }
-
-        destination = trip_data.get("destination") or {}
-        if isinstance(destination, str):
-            destination = {"name": destination, "country": "India"}
-        
-        dest_name = destination.get("name") if isinstance(destination, dict) else "Destination"
-
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        start_date_str = trip_data.get("startDate") or today_str
-        end_date_str = trip_data.get("endDate") or start_date_str
-        if start_date_str < today_str:
-            raise ValueError("Trip start date cannot be in the past.")
-        if end_date_str < start_date_str:
-            raise ValueError("Trip end date cannot be earlier than start date.")
-
-        try:
-            d1 = datetime.strptime(start_date_str, "%Y-%m-%d")
-            d2 = datetime.strptime(end_date_str, "%Y-%m-%d")
-            total_days = max(1, (d2 - d1).days + 1)
-        except Exception:
-            total_days = 4
-
-        print(f"\n==================================================", flush=True)
-        print(f"🚀 [TRIP CREATION STARTED] Destination: '{dest_name}' ({total_days} Days) | User: {auth_user.email}", flush=True)
-
-        cover_media = media_service.resolve_cover_media(destination)
-
-        pref_snapshot = {
-            "snapshotVersion": 1,
-            "travelStyles": user_prefs.travelStyles,
-            "transportPreferences": user_prefs.transportPreferences,
-            "dietaryPreferences": user_prefs.dietaryPreferences,
-            "foodInterests": user_prefs.foodInterests,
-            "activityInterests": user_prefs.activityInterests,
-            "budgetLevel": user_prefs.budgetLevel
-        }
-
-        travelers_count = trip_data.get("travelersCount", 2)
-        travelers_list = []
-        for idx in range(travelers_count):
-            travelers_list.append({
-                "id": f"tr_{idx + 1}",
-                "name": user_profile.firstName if idx == 0 else f"Companion {idx + 1}",
-                "type": "ADULT",
-                "avatarUrl": user_profile.avatarUrl if idx == 0 else None
-            })
-
-        budget_obj = {
-            "level": trip_data.get("budgetLevel", user_prefs.budgetLevel or "MODERATE"),
-            "targetAmount": 30000,
-            "currency": "INR"
-        }
-
-        now = datetime.utcnow().isoformat() + "Z"
-        trip_id = f"trip_{uuid.uuid4().hex[:12]}"
-
-        new_trip = TripModel(
-            id=trip_id,
-            user_id=auth_user.id,
-            client_request_id=client_req_id,
-            title=f"{dest_name} Tour Package",
-            status="PLANNING",
-            itinerary_status="GENERATING",
-            start_date=start_date_str,
-            end_date=end_date_str,
-            total_days=total_days,
-            destination_json=json.dumps(destination),
-            cover_media_json=json.dumps(cover_media),
-            travelers_json=json.dumps(travelers_list),
-            preferences_snapshot_json=json.dumps(pref_snapshot),
-            budget_json=json.dumps(budget_obj),
-            progress_json=json.dumps({"totalDays": total_days, "currentDay": 1, "completedActivitiesCount": 0, "totalActivitiesCount": total_days * 2}),
-            created_at=now,
-            updated_at=now
-        )
-        db.add(new_trip)
-        db.commit()
-        print(f"💾 [TRIP CREATION] Trip saved to PostgreSQL (ID: {trip_id}, Title: '{new_trip.title}')", flush=True)
-
-        enqueue_itinerary_generation(trip_id)
-
-        return {
-            "id": new_trip.id,
-            "userId": new_trip.user_id,
-            "title": new_trip.title,
-            "status": new_trip.status,
-            "itineraryStatus": new_trip.itinerary_status,
-            "startDate": new_trip.start_date,
-            "endDate": new_trip.end_date,
-            "totalDays": new_trip.total_days,
-            "destination": new_trip.destination,
-            "coverMedia": new_trip.cover_media,
-            "travelers": new_trip.travelers,
-            "preferencesSnapshot": new_trip.preferences_snapshot,
-            "budget": new_trip.budget,
-            "progress": new_trip.progress,
-            "createdAt": new_trip.created_at,
-            "updatedAt": new_trip.updated_at
-        }
+        auth_user, user_profile, user_prefs = session
+        return create_trip_for_user(db, auth_user, user_profile, user_prefs, data)
 
     elif reqname == "trips:delete":
-        token = extract_ws_token(websocket, data)
-        user_tuple = None
-        if token:
-            try:
-                user_tuple = auth.get_session_user(db, token)
-            except Exception:
-                pass
-        if user_tuple:
-            auth_user = user_tuple[0]
-            trip_id = data.get("trip_id") or data.get("tripId")
-            if trip_id:
-                itineraries = db.query(ItineraryModel).filter(ItineraryModel.trip_id == trip_id).all()
-                for itin in itineraries:
-                    days = db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).all()
-                    for day in days:
-                        db.query(ItineraryActivityModel).filter(ItineraryActivityModel.day_id == day.id).delete()
-                    db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).delete()
-                db.query(ItineraryModel).filter(ItineraryModel.trip_id == trip_id).delete()
-                db.query(TripStayModel).filter(TripStayModel.trip_id == trip_id).delete()
-                db.query(TripTransportModel).filter(TripTransportModel.trip_id == trip_id).delete()
-                db.query(TripExpenseModel).filter(TripExpenseModel.trip_id == trip_id).delete()
-                db.query(TripModel).filter(TripModel.id == trip_id, TripModel.user_id == auth_user.id).delete()
-                db.commit()
-                log_event(f"🗑️ Deleted trip {trip_id} from PostgreSQL via WebSocket")
+        trip_id = data["trip_id"]
+        itineraries = db.query(ItineraryModel).filter(ItineraryModel.trip_id == trip_id).all()
+        for itin in itineraries:
+            days = db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).all()
+            for day in days:
+                db.query(ItineraryActivityModel).filter(ItineraryActivityModel.day_id == day.id).delete()
+            db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).delete()
+        db.query(ItineraryModel).filter(ItineraryModel.trip_id == trip_id).delete()
+        db.query(TripStayModel).filter(TripStayModel.trip_id == trip_id).delete()
+        db.query(TripTransportModel).filter(TripTransportModel.trip_id == trip_id).delete()
+        db.query(TripExpenseModel).filter(TripExpenseModel.trip_id == trip_id).delete()
+        db.query(TripModel).filter(TripModel.id == trip_id, TripModel.user_id == user.id).delete()
+        db.commit()
+        log_event(f"Deleted trip {trip_id} via WebSocket")
         return {"status": "success", "message": "Trip deleted successfully"}
 
     elif reqname == "trips:get_itinerary":
         trip_id = (data.get("trip_id") or "").strip()
         candidates = [trip_id, f"trip_{trip_id}", trip_id.replace("trip_", "")]
         itinerary = db.query(ItineraryModel).filter(ItineraryModel.trip_id.in_(candidates)).first()
-        if not itinerary:
-            itinerary = db.query(ItineraryModel).order_by(ItineraryModel.id.desc()).first()
         if not itinerary:
             return None
         days = db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itinerary.id).order_by(ItineraryDayModel.day_number).all()
@@ -1677,166 +1396,6 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
             "date": expense.created_at
         }
 
-    # 5. AI Concierge
-    elif reqname == "ai:concierge":
-        from ai_provider import ai_provider_service
-        concierge_req = ConciergeRequest(**data)
-
-        # Build context if tripId is present
-        trip_context = getattr(concierge_req, "tripContext", None) or getattr(concierge_req, "trip_context", None) or {}
-        itinerary_summary = []
-        if concierge_req.tripId:
-            trip = db.query(TripModel).filter(TripModel.id == concierge_req.tripId).first()
-            if trip:
-                destination_info = trip.destination if isinstance(trip.destination, dict) else {"name": str(trip.destination or "India")}
-                if not trip_context:
-                    trip_context = {
-                        "destination": destination_info,
-                        "totalDays": trip.total_days,
-                        "budgetLevel": (trip.budget or {}).get("level", "MODERATE") if isinstance(trip.budget, dict) else "MODERATE",
-                        "startDate": trip.start_date,
-                        "endDate": trip.end_date
-                    }
-
-                itin = db.query(ItineraryModel).filter(ItineraryModel.trip_id == trip.id).first()
-                if itin:
-                    days = db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).all()
-                    for d in days:
-                        acts = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.day_id == d.id).all()
-                        itinerary_summary.append({
-                            "dayNumber": d.day_number,
-                            "date": d.date,
-                            "activities": [
-                                {
-                                    "id": a.id,
-                                    "timeSlot": a.time_slot,
-                                    "title": a.title,
-                                    "estimatedCostInr": a.estimated_cost_inr,
-                                    "locationName": a.location_name
-                                } for a in acts
-                            ]
-                        })
-
-        # Add physical user location POI context if latitude and longitude are supplied
-        lat = concierge_req.latitude if concierge_req.latitude is not None else (data.get("latitude") or data.get("lat"))
-        lng = concierge_req.longitude if concierge_req.longitude is not None else (data.get("longitude") or data.get("lng"))
-        if lat is not None and lng is not None:
-            try:
-                from tour_guide_service import search_nearby_pois
-                nearby = await run_in_threadpool(search_nearby_pois, float(lat), float(lng), 5000)
-                if nearby:
-                    trip_context["nearbyPlaces"] = [
-                        f"{p['name']} ({p['category']}, {p['distanceMeters']}m away)"
-                        for p in nearby[:8]
-                    ]
-                    trip_context["userLocation"] = {"latitude": float(lat), "longitude": float(lng)}
-            except Exception:
-                pass
-
-        is_swap_intent = concierge_req.intent == "SWAP_ACTIVITY" or "Recommend alternatives for activity:" in concierge_req.message or "swap" in concierge_req.message.lower()
-
-        if is_swap_intent:
-            activity = None
-            if concierge_req.activityId:
-                activity = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == concierge_req.activityId).first()
-
-            if activity:
-                day = db.query(ItineraryDayModel).filter(ItineraryDayModel.id == activity.day_id).first()
-                current_activity_dict = {
-                    "id": activity.id,
-                    "title": activity.title,
-                    "description": activity.description,
-                    "timeSlot": activity.time_slot,
-                    "locationName": activity.location_name,
-                    "latitude": activity.latitude,
-                    "longitude": activity.longitude,
-                    "estimatedCostInr": activity.estimated_cost_inr,
-                    "date": day.date if day else "2026-10-15"
-                }
-            else:
-                act_name = "Selected Activity"
-                if "activity:" in concierge_req.message:
-                    act_name = concierge_req.message.split("activity:")[-1].strip()
-                elif "for " in concierge_req.message:
-                    act_name = concierge_req.message.split("for ")[-1].strip()
-
-                dest_obj = trip_context.get("destination") if isinstance(trip_context.get("destination"), dict) else {}
-                dest_name = dest_obj.get("name") or "Trip Destination"
-                dest_lat = dest_obj.get("latitude")
-                dest_lng = dest_obj.get("longitude")
-
-                current_activity_dict = {
-                    "id": concierge_req.activityId or "act_temp",
-                    "title": act_name,
-                    "description": f"Alternative options for {act_name}",
-                    "timeSlot": "10:00 AM",
-                    "locationName": dest_name,
-                    "latitude": dest_lat,
-                    "longitude": dest_lng,
-                    "estimatedCostInr": 500,
-                    "date": "2026-10-15"
-                }
-
-            recommendations = ai_provider_service.generate_swap_recommendations(current_activity_dict, trip_context)
-            return {
-                "type": "activity_swap_recommendations",
-                "tripId": concierge_req.tripId,
-                "itineraryId": concierge_req.itineraryId,
-                "dayId": concierge_req.dayId,
-                "activityId": concierge_req.activityId or current_activity_dict["id"],
-                "currentActivity": current_activity_dict,
-                "recommendations": recommendations
-            }
-
-        elif concierge_req.intent == "REFINE_ITINERARY":
-            actions = ai_provider_service.generate_refinement_actions(concierge_req.message, {"context": trip_context, "days": itinerary_summary})
-            return {
-                "type": "refinement_actions",
-                "tripId": concierge_req.tripId,
-                "actions": actions
-            }
-
-        # Default to GENERAL_CHAT / CHAT
-        messages_list = []
-        if concierge_req.messages:
-            for m in concierge_req.messages:
-                messages_list.append({"role": m.role if hasattr(m, 'role') else m.get('role', 'user'), "text": m.text if hasattr(m, 'text') else m.get('text', '')})
-        else:
-            messages_list = [{"role": "user", "text": concierge_req.message}]
-
-        chat_res = ai_provider_service.generate_chat_response(
-            messages=messages_list,
-            trip_context=trip_context
-        )
-        if isinstance(chat_res, dict):
-            raw_reply = chat_res.get("reply") or chat_res.get("text") or "How can I help with your journey?"
-            if isinstance(raw_reply, dict):
-                reply_str = raw_reply.get("reply") or raw_reply.get("text") or str(raw_reply)
-            elif isinstance(raw_reply, str) and raw_reply.strip().startswith("{") and raw_reply.strip().endswith("}"):
-                try:
-                    parsed_sub = json.loads(raw_reply.strip())
-                    if isinstance(parsed_sub, dict) and "reply" in parsed_sub:
-                        reply_str = parsed_sub["reply"]
-                    else:
-                        reply_str = raw_reply
-                except Exception:
-                    reply_str = raw_reply
-            else:
-                reply_str = str(raw_reply)
-            action_type = chat_res.get("actionType")
-            action_payload = chat_res.get("actionPayload")
-        else:
-            reply_str = str(chat_res)
-            action_type = None
-            action_payload = None
-
-        return {
-            "type": "chat_response",
-            "reply": reply_str,
-            "actionType": action_type,
-            "actionPayload": action_payload
-        }
-
     elif reqname == "trips:weather_replan":
         trip_id = data.get("trip_id") or data.get("tripId")
         if not trip_id:
@@ -1868,7 +1427,7 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
         trip_id = data.get("trip_id") or data.get("tripId")
         if not trip_id:
             raise ValueError("trip_id is required for regenerate_itinerary")
-        trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
+        trip = db.query(TripModel).filter(TripModel.id == trip_id, TripModel.user_id == user.id).first()
         if trip:
             trip.itinerary_status = "GENERATING"
             db.commit()
@@ -1881,8 +1440,11 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
         replacement = data.get("replacement") or {}
         if not activity_id:
             raise ValueError("activity_id is required for swap_activity")
-        act = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).first()
-        if act and replacement:
+        owned = find_owned_activity(db, activity_id, user.id)
+        if not owned or owned[1].id != data["trip_id"]:
+            raise LookupError("Activity not found")
+        act = owned[0]
+        if replacement:
             act.title = replacement.get("name") or replacement.get("title") or act.title
             act.description = replacement.get("description", act.description)
             act.location_name = replacement.get("locationName", act.location_name)
@@ -1895,95 +1457,125 @@ async def process_ws_action(reqname: str, data: dict, db: Session, websocket: We
             db.commit()
         return {"status": "SUCCESS", "activityId": activity_id}
 
-    elif reqname in ("places:search", "location:search"):
-        query = data.get("query", "").strip()
-        if not query:
-            return []
-        return search_places(query)
-
     else:
         raise ValueError(f"Unknown WebSocket request action: [{reqname}]")
 
 class ConnectionRegistry:
+    """Open /ws/app sockets, and which logged-in user (if any) each one belongs to."""
+
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
+        self.connection_users: Dict[str, str] = {}
 
     async def connect(self, connection_id: str, websocket: WebSocket):
         await websocket.accept()
         self.active_connections[connection_id] = websocket
 
-    def disconnect(self, connection_id: str):
-        if connection_id in self.active_connections:
-            del self.active_connections[connection_id]
+    def set_user(self, connection_id: str, user_id: Optional[str]):
+        if user_id:
+            self.connection_users[connection_id] = user_id
+        else:
+            self.connection_users.pop(connection_id, None)
 
-    async def broadcast_push(self, action: str, data: dict):
-        frame_v4 = {
-            "id": None,
-            "action": action,
-            "data": data
-        }
-        to_remove = []
-        for cid, ws in list(self.active_connections.items()):
+    def disconnect(self, connection_id: str):
+        self.active_connections.pop(connection_id, None)
+        self.connection_users.pop(connection_id, None)
+
+    async def push_to_user(self, user_id: str, action: str, data: dict):
+        """Sends a server event only to the sockets of one user."""
+        frame = {"id": None, "action": action, "data": data}
+        targets = [cid for cid, uid in self.connection_users.items() if uid == user_id]
+        for cid in targets:
+            ws = self.active_connections.get(cid)
+            if not ws:
+                continue
             try:
-                await ws.send_json(frame_v4)
+                await ws.send_json(frame)
             except Exception:
-                to_remove.append(cid)
-        for cid in to_remove:
-            self.disconnect(cid)
+                self.disconnect(cid)
 
 connection_registry = ConnectionRegistry()
+
+
+def _ws_error_status(err: Exception) -> int:
+    if isinstance(err, HTTPException):
+        return err.status_code
+    if isinstance(err, PermissionError):
+        return 401
+    if isinstance(err, LookupError):
+        return 404
+    return 400
+
+
+def _ws_error_message(err: Exception) -> str:
+    if isinstance(err, HTTPException):
+        return str(err.detail)
+    if isinstance(err, (PermissionError, LookupError, ValueError)):
+        return str(err)
+    return "Request failed"
+
 
 @app.websocket("/ws")
 @app.websocket("/ws/app")
 @app.websocket("/ws/tour-app")
 async def websocket_tour_app_endpoint(websocket: WebSocket):
     """
-    Central WebSocket endpoint for entire VoyageAI application.
-    Supports both Pure WebSocket Envelope RPC Schema ({ id, action, payload })
-    and Legacy Schema ({ type, reqname, data, requestId })
+    Central WebSocket endpoint for the app.
+    Frames: { id, action, payload } (or legacy { requestId, reqname, data }).
+    Every frame carries its own login token; the user is checked per frame.
     """
     conn_id = f"conn_{uuid.uuid4().hex[:10]}"
+    guest_key = f"guest_{conn_id}"
+    client_ip = normalize_ip(client_ip_from(websocket.headers, websocket.client.host if websocket.client else None))
     await connection_registry.connect(conn_id, websocket)
-    log_event(f"🔌 [WS CONNECTED] Client established persistent connection (ID: {conn_id})")
 
     try:
         while True:
             frame = await websocket.receive_json()
-            
-            # Support both { id, action, payload } and { requestId, reqname, data }
+
             req_id = frame.get("id") or frame.get("requestId")
             action = frame.get("action") or frame.get("reqname")
             payload = frame.get("payload") if "payload" in frame else (frame.get("data") or {})
-
             if not action:
                 continue
+            if not isinstance(payload, dict):
+                payload = {}
 
-            # Thread-safe DB session per action handler execution
             db = SessionLocal()
             try:
-                result = await process_ws_action(action, payload, db, websocket)
-                
-                # Dual response compatibility frame
+                token = extract_ws_token(websocket, payload)
+                session = await run_in_threadpool(resolve_ws_session, db, token)
+                user_id = session[0].id if session else None
+                connection_registry.set_user(conn_id, user_id)
+
+                bucket, limit = WS_RATE_LIMITS.get(action, WS_GENERAL_LIMIT)
+                # Login is limited per network so it can't be used to guess passwords.
+                subject = client_ip if bucket == "login" or not user_id else user_id
+                await check_ws_rate_limit(bucket, subject, limit)
+
+                result = await process_ws_action(action, payload, db, websocket, session=session, guest_key=guest_key)
                 response_frame = {
                     "id": req_id,
                     "action": f"{action}:reply",
                     "status": 200,
                     "data": jsonable_encoder(result),
                     "error": None,
-                    # Legacy compatibility fields
                     "type": "response",
                     "reqname": f"{action}:response",
                     "requestId": req_id
                 }
             except Exception as err:
-                log_event(f"❌ [WS ACTION ERROR] {action}: {str(err)}")
+                status_code = _ws_error_status(err)
+                if status_code >= 500 or status_code == 400 and not isinstance(err, (ValueError, HTTPException)):
+                    import traceback
+                    traceback.print_exc()
+                log_event(f"[WS ACTION ERROR] {action}: {err}")
                 response_frame = {
                     "id": req_id,
                     "action": f"{action}:reply",
-                    "status": 400,
+                    "status": status_code,
                     "data": None,
-                    "error": str(err),
-                    # Legacy compatibility fields
+                    "error": _ws_error_message(err),
                     "type": "response",
                     "reqname": f"{action}:response",
                     "requestId": req_id
@@ -1994,11 +1586,12 @@ async def websocket_tour_app_endpoint(websocket: WebSocket):
             await websocket.send_json(response_frame)
 
     except WebSocketDisconnect:
-        connection_registry.disconnect(conn_id)
-        log_event(f"🔌 [WS DISCONNECTED] Client connection closed (ID: {conn_id})")
+        pass
     except Exception as e:
+        log_event(f"[WS ERROR] {e}")
+    finally:
         connection_registry.disconnect(conn_id)
-        log_event(f"⚠️ [WS ERROR] {e}")
+        _user_location_history.pop(guest_key, None)
 
 @app.get("/api/admin/pool-status")
 def get_pool_status():
@@ -2549,9 +2142,6 @@ def add_to_itinerary(
             TripModel.id.in_(candidates),
             TripModel.user_id == current_user.id
         ).first()
-        if not target_trip:
-            # Fallback without user restriction if trip exists
-            target_trip = db.query(TripModel).filter(TripModel.id.in_(candidates)).first()
 
     if not target_trip:
         target_trip = db.query(TripModel).filter(
@@ -2709,7 +2299,7 @@ def get_trip_itinerary(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     from redis_client import redis_conn
     grouped_days = {}
     
@@ -3038,162 +2628,19 @@ def get_tour_guide_history(
 @app.post("/api/trips", status_code=status.HTTP_201_CREATED, dependencies=[Depends(ai_limiter)])
 def create_trip(
     trip_data: dict,
-    current_user: AuthUser = Depends(get_current_user),
+    request: Request,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    from models_db import UserProfileModel, UserPreferencesModel
-    user_profile_db = db.query(UserProfileModel).filter(UserProfileModel.user_id == current_user.id).first()
-    user_prefs_db = db.query(UserPreferencesModel).filter(UserPreferencesModel.user_id == current_user.id).first()
-    user_profile = auth.to_pydantic_user_profile(user_profile_db) if user_profile_db else None
-    user_prefs = auth.to_pydantic_user_prefs(user_prefs_db) if user_prefs_db else UserPreferences(userId=current_user.id)
-
-    destination = trip_data.get("destination") or {}
-    dest_name = destination.get("name") if isinstance(destination, dict) else "Destination"
-
-    # Log incoming payload from frontend for developer visibility
-    log_frontend_payload(
-        endpoint="POST /api/trips (Create Trip Wizard)",
-        payload=trip_data,
-        user_email=current_user.email,
-        usage_summary={
-            "destination": f"Destination details ('{dest_name}'). Used for POI search, maps, and AI prompt context.",
-            "startDate / endDate": f"Dates ('{trip_data.get('startDate')}' to '{trip_data.get('endDate')}'). Used for computing total days and daily schedule.",
-            "travelersCount": f"Travelers ({trip_data.get('travelersCount', 2)}). Used for expense estimations.",
-            "tripStyle": f"Travel styles ({trip_data.get('tripStyle') or user_prefs.travelStyles}). Passed to AI prompt for activity recommendations.",
-            "budgetLevel / customBudgetAmount": f"Budget setting ({trip_data.get('budgetLevel', 'MODERATE')}). Used to constrain activity and accommodation cost estimates.",
-            "clientRequestId": f"Idempotency token ({trip_data.get('clientRequestId')}). Prevents duplicate trip creation."
-        }
-    )
-    
-    # 1. Idempotency Guard Check
-    client_req_id = trip_data.get("clientRequestId")
-    if client_req_id:
-        existing_trip = db.query(TripModel).filter(
-            TripModel.user_id == current_user.id,
-            TripModel.client_request_id == client_req_id
-        ).first()
-        if existing_trip:
-            return {
-                "id": existing_trip.id,
-                "userId": existing_trip.user_id,
-                "title": existing_trip.title,
-                "status": existing_trip.status,
-                "itineraryStatus": existing_trip.itinerary_status,
-                "startDate": existing_trip.start_date,
-                "endDate": existing_trip.end_date,
-                "totalDays": existing_trip.total_days,
-                "destination": existing_trip.destination,
-                "coverMedia": existing_trip.cover_media,
-                "travelers": existing_trip.travelers,
-                "preferencesSnapshot": existing_trip.preferences_snapshot,
-                "budget": existing_trip.budget,
-                "progress": existing_trip.progress,
-                "createdAt": existing_trip.created_at,
-                "updatedAt": existing_trip.updated_at
-            }
-
-    # 2. Validate Destination Payload
-    is_valid, err_msg = validate_destination_payload(destination)
-    if not is_valid:
-        raise HTTPException(status_code=400, detail=f"Invalid trip destination payload: {err_msg}")
-
-    # 3. Calculate Days Duration
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    start_date_str = trip_data.get("startDate") or today_str
-    end_date_str = trip_data.get("endDate") or start_date_str
-    if start_date_str < today_str:
-        raise HTTPException(status_code=400, detail="Trip start date cannot be in the past.")
-    if end_date_str < start_date_str:
-        raise HTTPException(status_code=400, detail="Trip end date cannot be earlier than start date.")
-
+    token = extract_token(request, authorization)
     try:
-        d1 = datetime.strptime(start_date_str, "%Y-%m-%d")
-        d2 = datetime.strptime(end_date_str, "%Y-%m-%d")
-        total_days = max(1, (d2 - d1).days + 1)
+        auth_user, user_profile, user_prefs = auth.get_session_user(db, token)
     except Exception:
-        total_days = 4
-
-    print(f"\n==================================================", flush=True)
-    print(f"[TRIP CREATION STARTED] Destination: '{dest_name}' ({total_days} Days) | User: {current_user.email}", flush=True)
-
-    # 4. Resolve Cover Media
-    cover_media = media_service.resolve_cover_media(destination)
-
-    # 5. Snapshot Preferences
-    pref_snapshot = {
-        "snapshotVersion": 1,
-        "travelStyles": user_prefs.travelStyles,
-        "transportPreferences": user_prefs.transportPreferences,
-        "dietaryPreferences": user_prefs.dietaryPreferences,
-        "foodInterests": user_prefs.foodInterests,
-        "activityInterests": user_prefs.activityInterests,
-        "budgetLevel": user_prefs.budgetLevel
-    }
-
-    # 6. Construct Travelers Array
-    travelers_count = trip_data.get("travelersCount", 2)
-    travelers_list = []
-    for idx in range(travelers_count):
-        travelers_list.append({
-            "id": f"tr_{idx + 1}",
-            "name": (user_profile.firstName if user_profile else "Me") if idx == 0 else f"Companion {idx + 1}",
-            "type": "ADULT",
-            "avatarUrl": user_profile.avatarUrl if (user_profile and idx == 0) else None
-        })
-
-    budget_obj = {
-        "level": trip_data.get("budgetLevel", user_prefs.budgetLevel or "MODERATE"),
-        "targetAmount": 30000,
-        "currency": "INR"
-    }
-
-    now = datetime.utcnow().isoformat() + "Z"
-    trip_id = f"trip_{uuid.uuid4().hex[:12]}"
-
-    new_trip = TripModel(
-        id=trip_id,
-        user_id=current_user.id,
-        client_request_id=client_req_id,
-        title=f"{dest_name} Tour Package",
-        status="PLANNING",
-        itinerary_status="GENERATING",
-        start_date=start_date_str,
-        end_date=end_date_str,
-        total_days=total_days,
-        destination_json=json.dumps(destination),
-        cover_media_json=json.dumps(cover_media),
-        travelers_json=json.dumps(travelers_list),
-        preferences_snapshot_json=json.dumps(pref_snapshot),
-        budget_json=json.dumps(budget_obj),
-        progress_json=json.dumps({"totalDays": total_days, "currentDay": 1, "completedActivitiesCount": 0, "totalActivitiesCount": total_days * 2}),
-        created_at=now,
-        updated_at=now
-    )
-    db.add(new_trip)
-    db.commit()
-    print(f"[TRIP CREATION] Trip saved to PostgreSQL (ID: {trip_id}, Title: '{new_trip.title}')", flush=True)
-
-    # 7. Enqueue AI Itinerary Generation task in Redis Queue
-    enqueue_itinerary_generation(trip_id)
-
-    return {
-        "id": new_trip.id,
-        "userId": new_trip.user_id,
-        "title": new_trip.title,
-        "status": new_trip.status,
-        "itineraryStatus": new_trip.itinerary_status,
-        "startDate": new_trip.start_date,
-        "endDate": new_trip.end_date,
-        "totalDays": new_trip.total_days,
-        "destination": new_trip.destination,
-        "coverMedia": new_trip.cover_media,
-        "travelers": new_trip.travelers,
-        "preferencesSnapshot": new_trip.preferences_snapshot,
-        "budget": new_trip.budget,
-        "progress": new_trip.progress,
-        "createdAt": new_trip.created_at,
-        "updatedAt": new_trip.updated_at
-    }
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    try:
+        return create_trip_for_user(db, auth_user, user_profile, user_prefs, trip_data)
+    except TripValidationError as err:
+        raise HTTPException(status_code=400, detail=str(err))
 
 class TripUpdateSchema(BaseModel):
     status: Optional[str] = None
@@ -3218,12 +2665,10 @@ class TripUpdateSchema(BaseModel):
 def update_trip_endpoint(
     trip_id: str,
     payload: TripUpdateSchema,
-    current_user: AuthUser = Depends(get_user_or_guest),
+    current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
-    if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+    trip = require_owned_trip(db, trip_id, current_user.id)
 
     if payload.status:
         trip.status = payload.status.upper()
@@ -3262,14 +2707,10 @@ def update_trip_endpoint(
 @app.get("/api/trips/{trip_id}", dependencies=[Depends(general_limiter)])
 def get_trip_by_id(
     trip_id: str,
-    current_user: AuthUser = Depends(get_user_or_guest),
+    current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    clean_id = (trip_id or "").strip()
-    candidates = [clean_id, f"trip_{clean_id}", clean_id.replace("trip_", "")]
-    trip = db.query(TripModel).filter(TripModel.id.in_(candidates)).first()
-    if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+    trip = require_owned_trip(db, trip_id, current_user.id)
 
 
     # Aggregate linked resources
@@ -3756,10 +3197,11 @@ def export_trip_itinerary_endpoint(
     trip_id: str,
     request: Request,
     format: str = Query("json", pattern="^(json|html|pdf|print|html_print)$"),
-    current_user: AuthUser = Depends(get_user_or_guest),
+    current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    export_data = build_trip_export_payload(trip_id=trip_id, db=db)
+    trip = require_owned_trip(db, trip_id, current_user.id)
+    export_data = build_trip_export_payload(trip_id=trip.id, db=db)
     path = request.url.path.lower()
 
     is_html_or_pdf = (
@@ -3892,7 +3334,7 @@ def regenerate_itinerary(
 
 @app.delete("/api/trips/{trip_id}", dependencies=[Depends(general_limiter)])
 def delete_trip(trip_id: str, current_user: AuthUser = Depends(get_current_user), db: Session = Depends(get_db)):
-    verify_trip_ownership(trip_id, current_user.id, db)
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     itineraries = db.query(ItineraryModel).filter(ItineraryModel.trip_id == trip_id).all()
     for itin in itineraries:
         days = db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).all()
@@ -3908,16 +3350,7 @@ def delete_trip(trip_id: str, current_user: AuthUser = Depends(get_current_user)
     log_event(f"🗑️ Deleted trip {trip_id} from PostgreSQL")
     return {"message": "Trip deleted successfully"}
 
-# ── HELPER FOR TRIP OWNERSHIP ──
-def verify_trip_ownership(trip_id: str, user_id: str, db: Session) -> TripModel:
-    clean_id = (trip_id or "").strip()
-    candidates = [clean_id, f"trip_{clean_id}", clean_id.replace("trip_", "")]
-    trip = db.query(TripModel).filter(TripModel.id.in_(candidates), TripModel.user_id == user_id).first()
-    if not trip:
-        trip = db.query(TripModel).filter(TripModel.id.in_(candidates)).first()
-    if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found or unauthorized access")
-    return trip
+
 
 
 # ── AI CONCIERGE & ACTIVITY SWAP MUTATION SCHEMAS & ENDPOINTS ──
@@ -4029,7 +3462,7 @@ def ai_concierge(
     itinerary_summary = []
     trip = None
     if effective_trip_id:
-        trip = db.query(TripModel).filter(TripModel.id == effective_trip_id).first()
+        trip = find_owned_trip(db, effective_trip_id, current_user.id)
         if trip:
             destination_info = trip.destination if isinstance(trip.destination, dict) else {"name": str(trip.destination or "India")}
             if not trip_context:
@@ -4154,6 +3587,16 @@ def ai_concierge(
             messages_list.append({"role": str(r), "text": str(t)})
     else:
         messages_list = [{"role": "user", "text": req.message}]
+    # Free-form chat goes through the same cost guard as the tour guide chat.
+    from cost_guard import evaluate_cost_guards
+    should_call_llm, _gate, deflection = evaluate_cost_guards(req.message)
+    if not should_call_llm:
+        return {
+            "type": "chat_response",
+            "reply": deflection,
+            "actionType": None,
+            "actionPayload": None,
+        }
     chat_res = ai_provider_service.generate_chat_response(
         messages=messages_list,
         trip_context=trip_context
@@ -4208,32 +3651,15 @@ def process_activity_swap_mutation(
     from models_itinerary import ItineraryModel, ItineraryDayModel, ItineraryActivityModel
     from models_package import TripExpenseModel
 
-    # 1. Resolve Trip
-    target_trip = None
-    if trip_id and trip_id != "active_trip":
-        target_trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
-    if not target_trip and current_user:
-        target_trip = db.query(TripModel).filter(TripModel.user_id == current_user.id).order_by(TripModel.created_at.desc()).first()
-    if not target_trip:
-        target_trip = db.query(TripModel).order_by(TripModel.created_at.desc()).first()
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
-    # 2. Resolve Activity
-    activity = None
-    if activity_id:
-        activity = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).first()
-
-    # Fallback to finding activity within trip's itinerary if direct ID query misses
-    if not activity and target_trip:
-        itin = db.query(ItineraryModel).filter(ItineraryModel.trip_id == target_trip.id).first()
-        if itin:
-            days = db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).all()
-            for d in days:
-                act = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.day_id == d.id).first()
-                if act:
-                    activity = act
-                    break
-
-    if not activity:
+    # 1. Resolve the activity, only within the user's own trips
+    owned = find_owned_activity(db, activity_id, current_user.id)
+    if not owned:
+        raise HTTPException(status_code=404, detail="Activity not found to swap")
+    activity, target_trip = owned
+    if trip_id and trip_id != "active_trip" and target_trip.id not in trip_id_candidates(trip_id):
         raise HTTPException(status_code=404, detail="Activity not found to swap")
 
     day = db.query(ItineraryDayModel).filter(ItineraryDayModel.id == activity.day_id).first()
@@ -4317,7 +3743,7 @@ def process_activity_swap_mutation(
 @app.post("/api/trips/itinerary/swap", dependencies=[Depends(ai_trip_limiter)])
 def apply_concierge_swap_endpoint(
     req: UniversalSwapRequest,
-    current_user: AuthUser = Depends(get_user_or_guest),
+    current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     effective_trip_id = req.trip_id or req.tripId
@@ -4339,7 +3765,7 @@ def patch_itinerary_activity(
     trip_id: str,
     activity_id: str,
     req: ActivityPatchRequest,
-    current_user: AuthUser = Depends(get_user_or_guest),
+    current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     # 1. If replacement or new_activity is provided, route through swap mutation:
@@ -4367,9 +3793,7 @@ def patch_itinerary_activity(
     from models_itinerary import ItineraryActivityModel, ItineraryDayModel
     from models_package import TripExpenseModel
 
-    activity = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).first()
-    if not activity:
-        raise HTTPException(status_code=404, detail="Activity not found")
+    activity, _trip = require_owned_activity(db, activity_id, current_user.id)
 
     day = db.query(ItineraryDayModel).filter(ItineraryDayModel.id == activity.day_id).first()
 
@@ -4462,12 +3886,10 @@ def toggle_activity_status_endpoint(
     trip_id: str,
     activity_id: str,
     payload: Optional[Dict[str, Any]] = None,
-    current_user: AuthUser = Depends(get_user_or_guest),
+    current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    activity = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).first()
-    if not activity:
-        raise HTTPException(status_code=404, detail="Activity not found")
+    activity, _trip = require_owned_activity(db, activity_id, current_user.id)
 
     p = payload or {}
     if "isConfirmed" in p:
@@ -4499,7 +3921,7 @@ def optimize_day_flow_endpoint(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     try:
         res = optimize_day_flow_service(db, trip_id, day_id, req.goal or "MINIMIZE_TRAVEL_TIME")
         return res
@@ -4512,7 +3934,7 @@ def optimize_budget_endpoint(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     try:
         res = optimize_budget_service(db, trip_id)
         return res
@@ -4525,7 +3947,7 @@ def weather_replan_endpoint(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     try:
         res = weather_replan_service(db, trip_id)
         return res
@@ -4539,7 +3961,7 @@ def execute_refinements_endpoint(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     try:
         res = execute_refinement_actions_service(db, trip_id, req.actions)
         return res
@@ -4556,8 +3978,7 @@ def create_trip_stay(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
-
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     stay_id = f"stay_{uuid.uuid4().hex[:12]}"
     now = datetime.utcnow().isoformat() + "Z"
 
@@ -4608,8 +4029,7 @@ def get_trip_stays(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
-
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     stays = db.query(TripStayModel).filter(TripStayModel.trip_id == trip_id).order_by(TripStayModel.created_at.desc()).all()
     return [
         {
@@ -4638,8 +4058,7 @@ def create_trip_transport(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
-
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     transport_id = f"trsp_{uuid.uuid4().hex[:12]}"
     now = datetime.utcnow().isoformat() + "Z"
 
@@ -4688,8 +4107,7 @@ def get_trip_transports(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
-
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     transports = db.query(TripTransportModel).filter(TripTransportModel.trip_id == trip_id).order_by(TripTransportModel.created_at.desc()).all()
     return [
         {
@@ -4717,8 +4135,7 @@ def create_trip_expense(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
-
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     expense_id = f"exp_{uuid.uuid4().hex[:12]}"
     now = datetime.utcnow().isoformat() + "Z"
 
@@ -4768,8 +4185,7 @@ def get_trip_expenses(
     current_user: AuthUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    verify_trip_ownership(trip_id, current_user.id, db)
-
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
     expenses = db.query(TripExpenseModel).filter(TripExpenseModel.trip_id == trip_id).order_by(TripExpenseModel.created_at.desc()).all()
     return [
         {

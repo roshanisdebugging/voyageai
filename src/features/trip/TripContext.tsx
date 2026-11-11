@@ -222,9 +222,11 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const handleItineraryReady = (payload: any) => {
       const payloadTripId = payload?.trip_id || payload?.tripId || payload?.id;
       if (!payloadTripId || payloadTripId === currentTripId) {
-        setItineraryStatus('READY');
-        setTrips(prev => prev.map(t => t.id === currentTripId ? { ...t, itineraryStatus: 'READY' } : t));
-        refetchItinerary(currentTripId);
+        // The worker reports READY or FAILED.
+        const finalStatus = payload?.status === 'FAILED' ? 'FAILED' : 'READY';
+        setItineraryStatus(finalStatus);
+        setTrips(prev => prev.map(t => t.id === currentTripId ? { ...t, itineraryStatus: finalStatus } : t));
+        if (finalStatus === 'READY') refetchItinerary(currentTripId);
       }
     };
 
@@ -327,22 +329,8 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       newStay = await wsClient.sendRequest('trips:add_stay', { ...payload, trip_id: currentTripId });
     } catch (err) {
-      console.warn('WebSocket stay creation error, falling back to local stay.', err);
-      newStay = {
-        id: `stay_${Date.now()}`,
-        tripId: currentTripId,
-        activityId: payload.activityId,
-        hotelName: payload.hotelName || 'Selected Hotel',
-        locationName: payload.locationName || 'Central Location',
-        checkInDate: payload.checkInDate || '2026-10-15',
-        checkOutDate: payload.checkOutDate || '2026-10-19',
-        nights: payload.nights || 4,
-        pricePerNight: payload.pricePerNight || 0,
-        totalPrice: payload.totalPrice || 0,
-        status: payload.status || 'SELECTED',
-        confirmationCode: payload.confirmationCode,
-        createdAt: new Date().toISOString(),
-      };
+      console.error('Could not save stay:', err);
+      throw err instanceof Error ? err : new Error('Could not save stay. Please try again.');
     }
 
     setStays(prev => [newStay, ...prev]);
@@ -356,21 +344,8 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       newTransport = await wsClient.sendRequest('trips:add_transport', { ...payload, trip_id: currentTripId });
     } catch (err) {
-      console.warn('WebSocket transport creation error, falling back to local transport.', err);
-      newTransport = {
-        id: `trsp_${Date.now()}`,
-        tripId: currentTripId,
-        activityId: payload.activityId,
-        transportType: payload.transportType || 'CAB',
-        providerName: payload.providerName || 'Cruiser Ride',
-        pickupLocation: payload.pickupLocation || 'Current Location',
-        dropoffLocation: payload.dropoffLocation || 'Destination',
-        pickupTime: payload.pickupTime || 'Immediate',
-        estimatedFare: payload.estimatedFare || 0,
-        status: payload.status || 'SELECTED',
-        bookingReference: payload.bookingReference,
-        createdAt: new Date().toISOString(),
-      };
+      console.error('Could not save transport:', err);
+      throw err instanceof Error ? err : new Error('Could not save transport. Please try again.');
     }
 
     setTransports(prev => [newTransport, ...prev]);
@@ -384,18 +359,8 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       newExpense = await wsClient.sendRequest('trips:add_expense', { ...payload, trip_id: currentTripId });
     } catch (err) {
-      console.warn('WebSocket expense creation error, falling back to local expense.', err);
-      newExpense = {
-        id: `exp_${Date.now()}`,
-        tripId: currentTripId,
-        activityId: payload.activityId,
-        title: payload.title || 'Expense',
-        amount: payload.amount || 0,
-        category: payload.category || 'Other',
-        paidBy: payload.paidBy || 'Me',
-        isSplit: payload.isSplit || false,
-        createdAt: new Date().toISOString(),
-      };
+      console.error('Could not save expense:', err);
+      throw err instanceof Error ? err : new Error('Could not save expense. Please try again.');
     }
 
     setExpenses(prev => [newExpense, ...prev]);
@@ -431,59 +396,28 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error('Trip end date cannot be earlier than start date.');
     }
 
-    const start = new Date(payload.startDate);
-    const end = new Date(payload.endDate);
-    const diffTime = Math.abs(end.getTime() - start.getTime());
-    const totalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
-
     let createdTrip: Trip;
 
     try {
       createdTrip = await wsClient.sendRequest('trips:create', { ...payload, clientRequestId });
-    } catch (e) {
-      console.warn('WebSocket trip creation error, constructing local fallback trip.', e);
-      createdTrip = {
-        id: `trip_${Date.now()}`,
-        userId: userId || '',
-        title: `${payload.destination.name} Tour Package`,
-        destination: payload.destination,
-        coverMedia: {
-          url: 'https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?auto=format&fit=crop&w=800&q=80',
-          alt: `${payload.destination.name} Banner`,
-          provider: 'fallback',
-        },
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-        totalDays,
-        travelers: Array.from({ length: payload.travelersCount }).map((_, idx) => ({
-          id: `tr_${idx + 1}`,
-          name: idx === 0 ? (userProfile?.firstName || 'Traveler') : `Companion ${idx + 1}`,
-          type: 'ADULT',
-          avatarUrl: idx === 0 ? userProfile?.avatarUrl : undefined,
-        })),
-        status: 'PLANNING',
-        itineraryStatus: 'GENERATING',
-        tripStyle: payload.tripStyle || userPreferences?.travelStyles || ['RELAXED'],
-        transportPreferences: userPreferences?.transportPreferences || ['CAB'],
-        budgetLevel: payload.budgetLevel || userPreferences?.budgetLevel || 'MODERATE',
-        currency: 'INR',
-        preferencesSnapshot: {
-          travelStyles: userPreferences?.travelStyles || [],
-          transportPreferences: userPreferences?.transportPreferences || [],
-          dietaryPreferences: userPreferences?.dietaryPreferences || [],
-          activityInterests: userPreferences?.activityInterests || [],
-          budgetLevel: userPreferences?.budgetLevel,
-          snapshotVersion: 1,
-        },
-        progress: {
-          totalDays,
-          currentDay: 1,
-          completedActivitiesCount: 0,
-          totalActivitiesCount: totalDays * 2,
-        },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+    } catch (wsErr) {
+      console.warn('WebSocket trip creation failed, retrying over HTTP.', wsErr);
+      try {
+        const res = await fetch(`${getApiBaseUrl()}/api/trips`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ ...payload, clientRequestId }),
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Could not create the trip. Please try again.');
+        }
+        createdTrip = await res.json();
+      } catch (httpErr) {
+        setIsLoading(false);
+        throw httpErr instanceof Error ? httpErr : new Error('Could not create the trip. Please try again.');
+      }
     }
 
     const updatedTrips = [createdTrip, ...trips];

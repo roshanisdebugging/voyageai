@@ -1,10 +1,11 @@
 import asyncio
 import time
 import ipaddress
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from fastapi import HTTPException, Request
 
-from rate_limiter import NetworkRateLimiter, UserRateLimiter, check_sliding_window_rate_limit, redis_client
+from rate_limiter import NetworkRateLimiter, UserRateLimiter, check_sliding_window_rate_limit, client_ip_from, redis_client
 
 async def test_ipv6_normalization():
     print("\n--- TEST 1: IPv6 Subnet Hopping Prevention (/64 Normalization) ---")
@@ -28,6 +29,23 @@ async def test_ipv6_normalization():
     ipv4 = "198.51.100.42"
     assert NetworkRateLimiter._normalize_ip(ipv4) == ipv4, "Failed: IPv4 was altered"
     print("✅ TEST 1 PASSED: IPv6 subnet hopping prevented; IPv4 remains exact.")
+
+def test_forwarded_for_spoofing():
+    print("\n--- TEST 1b: X-Forwarded-For spoofing is ignored ---")
+    import rate_limiter
+    headers = {"x-forwarded-for": "1.2.3.4, 203.0.113.9"}
+    original = rate_limiter.TRUSTED_PROXY_HOPS
+    try:
+        # No proxy (default): the header is client-controlled and ignored.
+        rate_limiter.TRUSTED_PROXY_HOPS = 0
+        assert client_ip_from(headers, "10.0.0.1") == "10.0.0.1"
+        # One proxy: only the address that proxy appended (the last entry) is trusted.
+        rate_limiter.TRUSTED_PROXY_HOPS = 1
+        assert client_ip_from(headers, "10.0.0.1") == "203.0.113.9"
+        assert client_ip_from({}, "10.0.0.1") == "10.0.0.1"
+    finally:
+        rate_limiter.TRUSTED_PROXY_HOPS = original
+    print("✅ TEST 1b PASSED: forwarded addresses are only trusted behind a configured proxy.")
 
 async def test_no_double_counting_and_lockout():
     print("\n--- TEST 2: Elimination of 429 Permanent Lockout (Double Counting) ---")
@@ -75,8 +93,7 @@ async def test_user_limiter_auth_enforcement():
     
     # A. Unauthenticated request without state or cookies -> must raise 401
     mock_req_unauth = MagicMock(spec=Request)
-    mock_req_unauth.state = MagicMock()
-    mock_req_unauth.state.user = None
+    mock_req_unauth.state = SimpleNamespace(user=None)
     mock_req_unauth.cookies = {}
     mock_req_unauth.headers = {}
     mock_req_unauth.query_params = {}
@@ -92,11 +109,8 @@ async def test_user_limiter_auth_enforcement():
     
     # B. Authenticated user request -> succeeds and keys by user_id
     mock_req_auth = MagicMock(spec=Request)
-    mock_req_auth.state = MagicMock()
-    mock_user = MagicMock()
-    mock_user.id = "usr_prod_secure_99"
-    mock_user.status = "ACTIVE"
-    mock_req_auth.state.user = mock_user
+    mock_user = SimpleNamespace(id="usr_prod_secure_99", status="ACTIVE")
+    mock_req_auth.state = SimpleNamespace(user=mock_user)
     
     test_key = "test:rl:usr:usr_prod_secure_99"
     await redis_client.delete(test_key)
@@ -126,16 +140,16 @@ async def test_session_cache_and_invalidation():
     # 2. Test UserRateLimiter._resolve_user_id sub-millisecond cache hit
     limiter = UserRateLimiter(requests=10, window_seconds=60, key_prefix="test:rl:cache")
     mock_req = MagicMock(spec=Request)
-    mock_req.state = MagicMock()
-    mock_req.state.user = None
+    mock_req.state = SimpleNamespace(user=None)
     mock_req.cookies = {"voyageai_session": test_token}
     mock_req.headers = {}
     mock_req.query_params = {}
     
     resolved_id = await limiter._resolve_user_id(mock_req)
     assert resolved_id == test_user_id, f"Expected resolved ID {test_user_id}, got {resolved_id}"
-    assert getattr(mock_req.state, "user", None) is not None
-    assert mock_req.state.user.get("id") == test_user_id
+    # The limiter must not overwrite request.state.user (get_current_user needs a full AuthUser there)
+    assert mock_req.state.user is None
+    assert mock_req.state.rate_limit_user_id == test_user_id
     print(f"UserRateLimiter successfully resolved user from Redis cache without DB query: {resolved_id}")
     
     # 3. Test Invalidation on Logout / Revocation
@@ -148,6 +162,7 @@ async def test_session_cache_and_invalidation():
 async def main():
     try:
         await test_ipv6_normalization()
+        test_forwarded_for_spoofing()
         await test_no_double_counting_and_lockout()
         await test_user_limiter_auth_enforcement()
         await test_session_cache_and_invalidation()

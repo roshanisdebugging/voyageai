@@ -16,24 +16,6 @@ if (typeof window !== 'undefined') {
   } catch {
     /* ignore */
   }
-
-  // Ensure all outbound requests to ngrok bypass the warning page automatically
-  if (window.fetch) {
-    const originalFetch = window.fetch;
-    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-      if (urlStr && urlStr.includes('ngrok')) {
-        const headers = new Headers(
-          init?.headers || (typeof input === 'object' && 'headers' in input ? (input.headers as HeadersInit) : undefined)
-        );
-        if (!headers.has('ngrok-skip-browser-warning')) {
-          headers.set('ngrok-skip-browser-warning', 'true');
-        }
-        return originalFetch(input, { ...init, headers });
-      }
-      return originalFetch(input, init);
-    };
-  }
 }
 
 createRoot(document.getElementById('root')!).render(

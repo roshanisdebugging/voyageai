@@ -64,44 +64,7 @@ export const authService = {
     const session = await this.getCurrentUser();
     if (session) return session;
 
-    const fallbackSession: SessionData = {
-      token: resJson.token || undefined,
-      authUser: {
-        id: resJson.user?.id || 'usr_registered',
-        provider: 'EMAIL',
-        providerUserId: resJson.user?.email || data.email,
-        email: resJson.user?.email || data.email,
-        emailVerified: true,
-        phoneVerified: false,
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-      },
-      userProfile: {
-        userId: resJson.user?.id || 'usr_registered',
-        firstName: resJson.user?.name ? resJson.user.name.split(' ')[0] : (data.name ? data.name.split(' ')[0] : 'Traveler'),
-        lastName: resJson.user?.name ? resJson.user.name.split(' ').slice(1).join(' ') || undefined : undefined,
-        preferredLanguage: 'en',
-        preferredCurrency: 'INR',
-        timezone: 'Asia/Kolkata',
-        onboardingStatus: 'NOT_STARTED',
-        onboardingStep: 'welcome',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      userPreferences: {
-        userId: resJson.user?.id || 'usr_registered',
-        travelStyles: [],
-        transportPreferences: [],
-        dietaryPreferences: [],
-        foodInterests: [],
-        activityInterests: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-    };
-    this.saveCachedSession(fallbackSession);
-    return fallbackSession;
+    throw new Error('Registration succeeded but the session could not be loaded. Please sign in.');
   },
 
   async login(payload: LoginPayload): Promise<SessionData> {
@@ -283,61 +246,7 @@ export const authService = {
       console.warn('WS Onboarding fallback error', wsErr);
     }
 
-    // Offline / Graceful Local Fallback: update profile state so the user is NEVER blocked
-    const activeSession: SessionData = cached || {
-      token,
-      authUser: {
-        id: 'usr_local',
-        provider: 'EMAIL',
-        providerUserId: 'local_traveler',
-        emailVerified: true,
-        phoneVerified: false,
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString(),
-        lastLoginAt: new Date().toISOString(),
-      },
-      userProfile: {
-        userId: 'usr_local',
-        firstName: payload.firstName || 'Traveler',
-        lastName: payload.lastName,
-        preferredLanguage: 'en',
-        preferredCurrency: 'INR',
-        timezone: 'Asia/Kolkata',
-        onboardingStatus: payload.onboardingStatus || 'IN_PROGRESS',
-        onboardingStep: payload.onboardingStep || 'welcome',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      userPreferences: {
-        userId: 'usr_local',
-        travelStyles: payload.travelStyles || [],
-        transportPreferences: payload.transportPreferences || [],
-        dietaryPreferences: payload.dietaryPreferences || [],
-        foodInterests: payload.foodInterests || [],
-        activityInterests: payload.activityInterests || [],
-        budgetLevel: payload.budgetLevel || 'MODERATE',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-    };
-
-    if (payload.firstName) activeSession.userProfile.firstName = payload.firstName;
-    if (payload.lastName) activeSession.userProfile.lastName = payload.lastName;
-    if (payload.onboardingStep) activeSession.userProfile.onboardingStep = payload.onboardingStep;
-    if (payload.onboardingStatus) activeSession.userProfile.onboardingStatus = payload.onboardingStatus;
-
-    if (payload.travelStyles) activeSession.userPreferences.travelStyles = payload.travelStyles;
-    if (payload.transportPreferences) activeSession.userPreferences.transportPreferences = payload.transportPreferences;
-    if (payload.dietaryPreferences) activeSession.userPreferences.dietaryPreferences = payload.dietaryPreferences;
-    if (payload.foodInterests) activeSession.userPreferences.foodInterests = payload.foodInterests;
-    if (payload.activityInterests) activeSession.userPreferences.activityInterests = payload.activityInterests;
-    if (payload.budgetLevel) activeSession.userPreferences.budgetLevel = payload.budgetLevel;
-
-    this.saveCachedSession(activeSession);
-    return {
-      userProfile: activeSession.userProfile,
-      userPreferences: activeSession.userPreferences,
-    };
+    throw new Error('Could not save your preferences. Please check your connection and try again.');
   },
 };
 

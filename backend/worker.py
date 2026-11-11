@@ -77,8 +77,9 @@ def start_worker():
                 trip_id = job.get("trip_id")
                 logger.info(f"Picked up job for trip_id: {trip_id}")
                 print(f"\n[WORKER RUNNING] Processing AI Itinerary for trip: {trip_id}", flush=True)
-                process_async_itinerary_generation(trip_id, SessionLocal)
-                publish_trip_event(trip_id=trip_id, status="READY", event_type="ITINERARY_READY")
+                final_status = process_async_itinerary_generation(trip_id, SessionLocal)
+                if final_status:
+                    publish_trip_event(trip_id=trip_id, status=final_status, event_type="ITINERARY_READY")
                 print(f"[WORKER COMPLETED] Trip {trip_id} generated and published.\n", flush=True)
 
             else:

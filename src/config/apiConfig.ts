@@ -1,11 +1,13 @@
 /**
  * VoyageAI — Centralized API & WebSocket Configuration
  * 
- * TO UPDATE YOUR BACKEND / NGROK URL IN THE FUTURE:
- * Simply update `DEFAULT_BACKEND_URL` below or edit `VITE_API_URL` in `.env` / `.env.production`.
+ * TO CHANGE THE BACKEND URL:
+ * Update VITE_API_URL, VITE_API_BASE_URL and VITE_WS_URL in `.env`, and
+ * `DEFAULT_BACKEND_URL` below (used when the env vars are missing).
+ * Test mode: everything runs on http://localhost:80.
  */
 
-export const DEFAULT_BACKEND_URL = 'https://1ba2-2401-4900-8f65-ac03-5052-abe4-b35-4d92.ngrok-free.app';
+export const DEFAULT_BACKEND_URL = 'http://localhost:80';
 
 /**
  * Returns the active HTTP/HTTPS API base URL.
@@ -24,7 +26,6 @@ export const getApiBaseUrl = (): string => {
 
 /**
  * Returns the WebSocket URL (ws:// or wss://) for any given endpoint path.
- * Automatically appends ?ngrok-skip-browser-warning=true when connecting to ngrok.
  */
 export const getWsBaseUrl = (endpointPath: string = '/ws/app'): string => {
   const envWsUrl = import.meta.env.VITE_WS_URL || import.meta.env.VITE_WS_BASE_URL;
@@ -38,14 +39,7 @@ export const getWsBaseUrl = (endpointPath: string = '/ws/app'): string => {
   }
 
   const cleanPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`;
-  let fullWsUrl = baseWs.endsWith(cleanPath) ? baseWs : `${baseWs}${cleanPath}`;
-
-  if (fullWsUrl.includes('ngrok') && !fullWsUrl.includes('ngrok-skip-browser-warning')) {
-    const separator = fullWsUrl.includes('?') ? '&' : '?';
-    fullWsUrl = `${fullWsUrl}${separator}ngrok-skip-browser-warning=true`;
-  }
-
-  return fullWsUrl;
+  return baseWs.endsWith(cleanPath) ? baseWs : `${baseWs}${cleanPath}`;
 };
 
 /**
@@ -53,7 +47,6 @@ export const getWsBaseUrl = (endpointPath: string = '/ws/app'): string => {
  */
 export const DEFAULT_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
-  'ngrok-skip-browser-warning': 'true',
 };
 
 let inMemoryToken: string | null = null;
@@ -88,7 +81,7 @@ export const getAuthHeaders = (): Record<string, string> => {
 
 /**
  * Standard fetch options with credentials: 'include' for HttpOnly cookie session handling,
- * and dynamic headers evaluation ensuring Bearer tokens & ngrok bypass headers are attached.
+ * and dynamic headers evaluation ensuring Bearer tokens are attached.
  */
 export const DEFAULT_FETCH_OPTIONS: RequestInit = {
   credentials: 'include',

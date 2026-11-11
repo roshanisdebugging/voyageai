@@ -62,11 +62,14 @@ end
 
 _script_executor = redis_client.register_script(SLIDING_WINDOW_LUA)
 
-async def check_sliding_window_rate_limit(redis_key: str, limit: int, window_seconds: int) -> bool:
+async def check_sliding_window_rate_limit(
+    redis_key: str, limit: int, window_seconds: int, fail_closed: bool = False
+) -> bool:
     """
     Executes the atomic Lua sliding-window rate limit check against Redis.
     Raises HTTPException(429) if limit is exceeded, with Retry-After header.
-    Fails open with a warning log if Redis is unreachable or times out.
+    If Redis is unreachable: fail_closed=True rejects with 503 (use for login and
+    paid AI calls); otherwise the request is allowed with a warning.
     """
     now = time.time()
     unique_member = f"{now}:{uuid.uuid4().hex[:8]}"
@@ -91,11 +94,39 @@ async def check_sliding_window_rate_limit(redis_key: str, limit: int, window_sec
     except HTTPException:
         raise
     except Exception as e:
-        logger.warning(
-            f"[RATE LIMITER WARN] Redis rate limit check failed for '{redis_key}' ({e}). "
-            "Failing open to avoid service disruption."
-        )
+        if fail_closed:
+            logger.error(f"[RATE LIMITER] Redis unavailable for '{redis_key}' ({e}). Rejecting request.")
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again shortly.")
+        logger.warning(f"[RATE LIMITER WARN] Redis unavailable for '{redis_key}' ({e}). Allowing request.")
         return True
+
+
+# Number of trusted reverse proxies in front of the app. Default 0: the API is
+# reached directly (localhost), so X-Forwarded-For is entirely client-controlled
+# and ignored. Behind a proxy (nginx, a tunnel) set this to the number of proxies:
+# each appends the address it saw, so the entry that many places from the right
+# is the real client.
+TRUSTED_PROXY_HOPS = int(os.getenv("TRUSTED_PROXY_HOPS", "0"))
+
+
+def client_ip_from(headers, fallback_host: Optional[str]) -> str:
+    forwarded_for = headers.get("x-forwarded-for")
+    if forwarded_for and TRUSTED_PROXY_HOPS > 0:
+        hops = [h.strip() for h in forwarded_for.split(",") if h.strip()]
+        if len(hops) >= TRUSTED_PROXY_HOPS:
+            return hops[-TRUSTED_PROXY_HOPS]
+    return fallback_host or "127.0.0.1"
+
+
+def normalize_ip(ip_str: str) -> str:
+    """IPv4 stays exact; IPv6 is masked to its /64 network so one host can't rotate addresses."""
+    try:
+        ip = ipaddress.ip_address(ip_str.strip())
+        if ip.version == 6:
+            return str(ipaddress.ip_network(f"{ip}/64", strict=False).network_address)
+        return str(ip)
+    except ValueError:
+        return ip_str.strip()
 
 
 # ----------------------------------------------------------------------------
@@ -109,45 +140,26 @@ class NetworkRateLimiter:
       - IPv4: kept as /32 (exact address)
       - IPv6: masked to /64 base network prefix to stop IPv6 subnet hopping
     """
-    def __init__(self, requests: int, window_seconds: int, key_prefix: str = "rl:net"):
+    def __init__(self, requests: int, window_seconds: int, key_prefix: str = "rl:net", fail_closed: bool = False):
         self.requests = requests
         self.window_seconds = window_seconds
         self.key_prefix = key_prefix
+        self.fail_closed = fail_closed
 
     async def __call__(self, request: Request) -> bool:
         client_ip = self._extract_client_ip(request)
-        normalized_net = self._normalize_ip(client_ip)
-        redis_key = f"{self.key_prefix}:{normalized_net}"
-        return await check_sliding_window_rate_limit(redis_key, self.requests, self.window_seconds)
+        redis_key = f"{self.key_prefix}:{normalize_ip(client_ip)}"
+        return await check_sliding_window_rate_limit(
+            redis_key, self.requests, self.window_seconds, fail_closed=self.fail_closed
+        )
 
     @staticmethod
     def _extract_client_ip(request: Request) -> str:
-        forwarded_for = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            client_ip = forwarded_for.split(",")[0].strip()
-            if client_ip:
-                return client_ip
-
-        real_ip = request.headers.get("x-real-ip") or request.headers.get("X-Real-IP")
-        if real_ip and real_ip.strip():
-            return real_ip.strip()
-
-        if request.client and request.client.host:
-            return request.client.host
-
-        return "127.0.0.1"
+        return client_ip_from(request.headers, request.client.host if request.client else None)
 
     @staticmethod
     def _normalize_ip(ip_str: str) -> str:
-        try:
-            ip = ipaddress.ip_address(ip_str.strip())
-            if ip.version == 6:
-                # Mask IPv6 to /64 base network address
-                net = ipaddress.ip_network(f"{ip}/64", strict=False)
-                return str(net.network_address)
-            return str(ip)
-        except ValueError:
-            return ip_str.strip()
+        return normalize_ip(ip_str)
 
 
 # ----------------------------------------------------------------------------
@@ -182,11 +194,19 @@ class UserRateLimiter:
     - Constructs key: {key_prefix}:{user.id}.
     - Immune to IP rotation, VPNs, or IPv6 pool hopping.
     """
-    def __init__(self, requests: int, window_seconds: int, key_prefix: str = "rl:usr", allow_guest: bool = False):
+    def __init__(
+        self,
+        requests: int,
+        window_seconds: int,
+        key_prefix: str = "rl:usr",
+        allow_guest: bool = False,
+        fail_closed: bool = False,
+    ):
         self.requests = requests
         self.window_seconds = window_seconds
         self.key_prefix = key_prefix
         self.allow_guest = allow_guest
+        self.fail_closed = fail_closed
 
     async def __call__(self, request: Request) -> bool:
         user_id = await self._resolve_user_id(request)
@@ -194,18 +214,25 @@ class UserRateLimiter:
             raise HTTPException(status_code=401, detail="Authentication required")
 
         redis_key = f"{self.key_prefix}:{user_id}"
-        return await check_sliding_window_rate_limit(redis_key, self.requests, self.window_seconds)
+        return await check_sliding_window_rate_limit(
+            redis_key, self.requests, self.window_seconds, fail_closed=self.fail_closed
+        )
 
     async def _resolve_user_id(self, request: Request) -> Optional[str]:
-        # Step 1: Check if user was already resolved and attached to request.state
-        user = getattr(request.state, "user", None)
-        if user is not None:
-            status = getattr(user, "status", None) or (user.get("status") if isinstance(user, dict) else None)
-            uid = getattr(user, "id", None) or (user.get("id") if isinstance(user, dict) else None)
-            if uid and (status != "GUEST" or self.allow_guest):
-                return str(uid)
+        # The limiter only needs a user ID for its Redis key. It stores that ID on
+        # request.state.rate_limit_user_id and never touches request.state.user,
+        # which belongs to get_current_user and must always hold a full AuthUser.
+        cached = getattr(request.state, "rate_limit_user_id", None)
+        if cached:
+            return cached
 
-        # Extract session token from cookie, Authorization, or X-Auth-Token
+        user = getattr(request.state, "user", None)
+        uid = getattr(user, "id", None)
+        if uid and (getattr(user, "status", None) != "GUEST" or self.allow_guest):
+            request.state.rate_limit_user_id = str(uid)
+            return str(uid)
+
+        # Session token from cookie, Authorization, or X-Auth-Token (never from the URL)
         token = request.cookies.get("voyageai_session")
         if not token:
             auth_hdr = request.headers.get("authorization") or request.headers.get("x-auth-token")
@@ -216,17 +243,13 @@ class UserRateLimiter:
                 else:
                     token = clean_hdr
 
-        if not token and hasattr(request, "query_params"):
-            token = request.query_params.get("token") or request.query_params.get("session_token")
-
         if token:
             # Step 2: Check Redis Session Cache (Cache Hit: sub-millisecond return)
             session_cache_key = f"session_cache:{token}"
             try:
                 cached_uid = await redis_client.get(session_cache_key)
                 if cached_uid:
-                    # Attach minimal user representation to avoid re-resolving in downstream dependencies
-                    request.state.user = {"id": str(cached_uid), "status": "ACTIVE"}
+                    request.state.rate_limit_user_id = str(cached_uid)
                     return str(cached_uid)
             except Exception as cache_read_err:
                 logger.warning(f"[SESSION CACHE WARN] Redis read failed for {session_cache_key} ({cache_read_err}), falling back to DB.")
@@ -239,6 +262,7 @@ class UserRateLimiter:
                     auth_user, _, _ = auth.get_session_user(db, token)
                     request.state.user = auth_user
                     user_id_str = str(auth_user.id)
+                    request.state.rate_limit_user_id = user_id_str
 
                     # Populate cache in Redis with TTL matching session lifetime
                     try:
@@ -252,13 +276,17 @@ class UserRateLimiter:
 
         # Step 4: If guest sessions are explicitly permitted, extract guest_session_id
         if self.allow_guest:
-            guest_id = request.cookies.get("guest_session_id") or request.headers.get("x-guest-id") or (
-                request.query_params.get("guest_id") if hasattr(request, "query_params") else None
-            )
-            if guest_id and str(guest_id).strip():
-                return str(guest_id).strip()
+            # Guests are limited per network address. A guest ID cookie or header is
+            # chosen by the client and could be rotated to dodge the limit.
+            client_ip = client_ip_from(request.headers, request.client.host if request.client else None)
+            return f"guest:{normalize_ip(client_ip)}"
 
         return None
+
+
+async def check_ws_rate_limit(bucket: str, subject: str, limit: int, window_seconds: int = 60) -> None:
+    """Rate limit for WebSocket actions. Raises HTTPException(429/503) like the HTTP limiters."""
+    await check_sliding_window_rate_limit(f"rl:ws:{bucket}:{subject}", limit, window_seconds, fail_closed=True)
 
 
 # Backward compatibility aliases

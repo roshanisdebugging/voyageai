@@ -951,8 +951,8 @@ Output ONLY a valid JSON object matching this schema:
             if isinstance(recs, list) and len(recs) > 0:
                 return recs
         except Exception as e:
-            logger.warning(f"[SWAP RECS WARN] Live Gemini call failed: {e}. Falling back to mock.")
-        return MockAIProvider().generate_swap_recommendations(current_activity, trip_context)
+            logger.warning(f"[SWAP RECS WARN] Live Gemini call failed: {e}.")
+        raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_swap_recommendations result")
 
     def generate_chat_response(self, messages: List[Dict[str, str]], trip_context: Dict[str, Any]) -> Dict[str, Any]:
         dest_name = (trip_context.get("destination") or {}).get("name") or "India"
@@ -1006,8 +1006,8 @@ Output ONLY valid JSON:
                         pass
                 return data
         except Exception as e:
-            logger.warning(f"[CHAT WARN] Live Gemini call failed: {e}. Falling back to mock.")
-        return MockAIProvider().generate_chat_response(messages, trip_context)
+            logger.warning(f"[CHAT WARN] Live Gemini call failed: {e}.")
+        raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_chat_response result")
 
     def generate_day_optimization(self, day_info: Dict[str, Any], activities: List[Dict[str, Any]], goal: str) -> List[Dict[str, Any]]:
         prompt = f"""You are VoyageAI's Route Optimization Engine. Reorder and balance activities for Day {day_info.get('dayNumber', 1)} to achieve: "{goal}".
@@ -1051,8 +1051,8 @@ Output ONLY valid JSON:
                 if len(result) == len(activities):
                     return result
         except Exception as e:
-            logger.warning(f"[DAY OPTIMIZATION WARN] Live Gemini call failed: {e}. Falling back to mock.")
-        return MockAIProvider().generate_day_optimization(day_info, activities, goal)
+            logger.warning(f"[DAY OPTIMIZATION WARN] Live Gemini call failed: {e}.")
+        raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_day_optimization result")
 
     def generate_budget_optimization(self, trip_budget: Dict[str, Any], current_costs: Dict[str, Any], activities: List[Dict[str, Any]]) -> Dict[str, Any]:
         prompt = f"""You are VoyageAI's Budget Optimization Specialist. Identify disproportionately expensive activities in the itinerary and propose lower-cost, high-value alternatives to meet the target budget.
@@ -1103,8 +1103,8 @@ Output ONLY valid JSON:
             if "recommendations" in data:
                 return data
         except Exception as e:
-            logger.warning(f"[BUDGET OPTIMIZATION WARN] Live Gemini call failed: {e}. Falling back to mock.")
-        return MockAIProvider().generate_budget_optimization(trip_budget, current_costs, activities)
+            logger.warning(f"[BUDGET OPTIMIZATION WARN] Live Gemini call failed: {e}.")
+        raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_budget_optimization result")
 
     def generate_weather_replan(self, forecast: Dict[str, Any], activities: List[Dict[str, Any]]) -> Dict[str, Any]:
         prompt = f"""You are VoyageAI's Dynamic Weather Re-planning Assistant.
@@ -1150,8 +1150,8 @@ Output ONLY valid JSON:
             if "recommendations" in data:
                 return data
         except Exception as e:
-            logger.warning(f"[WEATHER REPLAN WARN] Live Gemini call failed: {e}. Falling back to mock.")
-        return MockAIProvider().generate_weather_replan(forecast, activities)
+            logger.warning(f"[WEATHER REPLAN WARN] Live Gemini call failed: {e}.")
+        raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_weather_replan result")
 
     def generate_refinement_actions(self, instruction: str, current_itinerary: Dict[str, Any]) -> List[Dict[str, Any]]:
         prompt = f"""You are VoyageAI's conversational itinerary editing engine.
@@ -1191,8 +1191,8 @@ Generate structured actions to execute. Return ONLY valid JSON matching this sch
             if isinstance(acts, list):
                 return acts
         except Exception as e:
-            logger.warning(f"[REFINEMENT WARN] Live Gemini call failed: {e}. Falling back to mock.")
-        return MockAIProvider().generate_refinement_actions(instruction, current_itinerary)
+            logger.warning(f"[REFINEMENT WARN] Live Gemini call failed: {e}.")
+        raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_refinement_actions result")
 
 
 def get_ai_provider() -> AIProviderInterface:
@@ -1203,84 +1203,16 @@ def get_ai_provider() -> AIProviderInterface:
         return GeminiProvider()
 
 
-class DynamicAIProviderProxy(AIProviderInterface):
+class DynamicAIProviderProxy:
     """
-    Proxy that dynamically routes to the currently configured AIProvider based on AI_PROVIDER env var.
-    If the active provider (e.g. Gemini) encounters an error (503, 429, timeout, network error),
-    it automatically falls back to MockAIProvider so that trip itinerary generation and AI concierge never hang.
+    Routes every call to the provider named by AI_PROVIDER at call time.
+    Errors from the real provider are raised, never replaced with mock data:
+    mock output looks real to users and must only appear when AI_PROVIDER=mock.
     """
-    def generate_itinerary_json(self, ai_input: Dict[str, Any], prompt: str) -> str:
-        provider = get_ai_provider()
-        try:
-            return provider.generate_itinerary_json(ai_input, prompt)
-        except Exception as err:
-            if not isinstance(provider, MockAIProvider):
-                print(f"\n[AI_FALLBACK] Primary AI Provider ({provider.__class__.__name__}) error: {err}", flush=True)
-                print(f"[AI_FALLBACK] Automatically falling back to MockAIProvider to complete generation cleanly...\n", flush=True)
-                return MockAIProvider().generate_itinerary_json(ai_input, prompt)
-            raise
+    def __getattr__(self, name: str):
+        return getattr(get_ai_provider(), name)
 
-    def generate_swap_recommendations(self, current_activity: Dict[str, Any], trip_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        provider = get_ai_provider()
-        try:
-            return provider.generate_swap_recommendations(current_activity, trip_context)
-        except Exception as err:
-            if not isinstance(provider, MockAIProvider):
-                print(f"\n[AI_FALLBACK] Swap recommendations error ({err}). Falling back to MockAIProvider...", flush=True)
-                return MockAIProvider().generate_swap_recommendations(current_activity, trip_context)
-            raise
 
-    def generate_chat_response(self, messages: List[Dict[str, str]], trip_context: Dict[str, Any]) -> Dict[str, Any]:
-        provider = get_ai_provider()
-        try:
-            return provider.generate_chat_response(messages, trip_context)
-        except Exception as err:
-            if not isinstance(provider, MockAIProvider):
-                print(f"\n[AI_FALLBACK] Chat response error ({err}). Falling back to MockAIProvider...", flush=True)
-                return MockAIProvider().generate_chat_response(messages, trip_context)
-            raise
-
-    def generate_day_optimization(self, day_info: Dict[str, Any], activities: List[Dict[str, Any]], goal: str) -> List[Dict[str, Any]]:
-        provider = get_ai_provider()
-        try:
-            return provider.generate_day_optimization(day_info, activities, goal)
-        except Exception as err:
-            if not isinstance(provider, MockAIProvider):
-                print(f"\n[AI_FALLBACK] Day optimization error ({err}). Falling back to MockAIProvider...", flush=True)
-                return MockAIProvider().generate_day_optimization(day_info, activities, goal)
-            raise
-
-    def generate_budget_optimization(self, trip_budget: Dict[str, Any], current_costs: Dict[str, Any], activities: List[Dict[str, Any]]) -> Dict[str, Any]:
-        provider = get_ai_provider()
-        try:
-            return provider.generate_budget_optimization(trip_budget, current_costs, activities)
-        except Exception as err:
-            if not isinstance(provider, MockAIProvider):
-                print(f"\n[AI_FALLBACK] Budget optimization error ({err}). Falling back to MockAIProvider...", flush=True)
-                return MockAIProvider().generate_budget_optimization(trip_budget, current_costs, activities)
-            raise
-
-    def generate_weather_replan(self, forecast: Dict[str, Any], activities: List[Dict[str, Any]]) -> Dict[str, Any]:
-        provider = get_ai_provider()
-        try:
-            return provider.generate_weather_replan(forecast, activities)
-        except Exception as err:
-            if not isinstance(provider, MockAIProvider):
-                print(f"\n[AI_FALLBACK] Weather replan error ({err}). Falling back to MockAIProvider...", flush=True)
-                return MockAIProvider().generate_weather_replan(forecast, activities)
-            raise
-
-    def generate_refinement_actions(self, instruction: str, current_itinerary: Dict[str, Any]) -> List[Dict[str, Any]]:
-        provider = get_ai_provider()
-        try:
-            return provider.generate_refinement_actions(instruction, current_itinerary)
-        except Exception as err:
-            if not isinstance(provider, MockAIProvider):
-                print(f"\n[AI_FALLBACK] Refinement error ({err}). Falling back to MockAIProvider...", flush=True)
-                return MockAIProvider().generate_refinement_actions(instruction, current_itinerary)
-            raise
-
-# Active Provider Service Instance
 ai_provider_service = DynamicAIProviderProxy()
 
 

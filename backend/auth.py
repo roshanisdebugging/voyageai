@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Tuple, Optional
 from sqlalchemy.orm import Session
 
-from database import engine, Base
 from models import AuthUser, UserProfile, UserPreferences, LoginRequest, RegisterRequest, OnboardingRequest
 from models_db import AuthUserModel, UserProfileModel, UserPreferencesModel, SessionModel
 from passlib.context import CryptContext
@@ -21,9 +20,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not hashed_password:
         return False
     return pwd_context.verify(plain_password[:72], hashed_password)
-
-# Create database tables automatically if they don't exist
-Base.metadata.create_all(bind=engine)
 
 SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "7"))
 
@@ -173,132 +169,57 @@ def register_user(db: Session, req: RegisterRequest) -> Tuple[str, AuthUser, Use
         to_pydantic_user_prefs(db_prefs)
     )
 
-def authenticate_or_create_user(db: Session, req: LoginRequest) -> Tuple[str, AuthUser, UserProfile, UserPreferences]:
-    clean_email = req.email.strip().lower()
+def authenticate_user(db: Session, req: LoginRequest) -> Tuple[str, AuthUser, UserProfile, UserPreferences]:
+    """
+    Email + password login for an existing account. Accounts are only created by
+    register_user, so this never creates users and never skips the password check.
+    """
+    clean_email = (req.email or "").strip().lower()
+    generic_error = "Invalid email or password."
 
-    # Basic Email Validation
-    if not clean_email or "@" not in clean_email or "." not in clean_email.split("@")[-1] or len(clean_email) < 5:
-        raise ValueError("Invalid email format. Please enter a valid email address.")
+    if not clean_email or not req.password:
+        raise ValueError(generic_error)
 
-    provider_id = f"email_{clean_email}"
-    now = get_current_iso_time()
-
-    # Search existing user by email or provider_user_id
     db_user = db.query(AuthUserModel).filter(
-        (AuthUserModel.provider_user_id == provider_id)
+        (AuthUserModel.email == clean_email)
         | (AuthUserModel.provider_user_id == clean_email)
-        | (AuthUserModel.email == clean_email)
+        | (AuthUserModel.provider_user_id == f"email_{clean_email}")
     ).first()
 
-    if db_user:
-        # Check password if user has password_hash
-        if db_user.password_hash:
-            if not req.password:
-                raise ValueError("Password is required for this account.")
-            if not verify_password(req.password, db_user.password_hash):
-                raise ValueError("Invalid password. Please check your credentials.")
+    # Same message for "no account", "no password set" and "wrong password",
+    # so the response doesn't reveal which emails are registered.
+    if not db_user or not db_user.password_hash or not verify_password(req.password, db_user.password_hash):
+        raise ValueError(generic_error)
 
-        db_user.last_login_at = now
-        raw_token, _ = create_session_record(db, db_user.id)
+    if db_user.status != "ACTIVE":
+        raise ValueError("This account is not active.")
 
-        db_profile = db.query(UserProfileModel).filter(UserProfileModel.user_id == db_user.id).first()
-        if not db_profile:
-            first_name = req.name.split()[0] if req.name else clean_email.split('@')[0].capitalize()
-            db_profile = UserProfileModel(
-                user_id=db_user.id,
-                first_name=first_name,
-                avatar_url=req.avatarUrl or "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=400&q=80",
-                created_at=now,
-                updated_at=now
-            )
-            db.add(db_profile)
+    now = get_current_iso_time()
+    db_user.last_login_at = now
+    raw_token, _ = create_session_record(db, db_user.id)
 
-        db_prefs = db.query(UserPreferencesModel).filter(UserPreferencesModel.user_id == db_user.id).first()
-        if not db_prefs:
-            db_prefs = UserPreferencesModel(
-                user_id=db_user.id,
-                travel_styles_json=json.dumps(["RELAXED", "FOODIE", "NIGHTLIFE"]),
-                transport_preferences_json=json.dumps(["CAB", "AUTO"]),
-                dietary_preferences_json=json.dumps(["EVERYTHING"]),
-                food_interests_json=json.dumps(["LOCAL", "STREET_FOOD"]),
-                activity_interests_json=json.dumps(["BEACHES", "FOOD"]),
-                budget_level="MODERATE",
-                created_at=now,
-                updated_at=now
-            )
-            db.add(db_prefs)
-
-        db.commit()
-
-        return (
-            raw_token,
-            to_pydantic_auth_user(db_user),
-            to_pydantic_user_profile(db_profile),
-            to_pydantic_user_prefs(db_prefs)
+    db_profile = db.query(UserProfileModel).filter(UserProfileModel.user_id == db_user.id).first()
+    if not db_profile:
+        db_profile = UserProfileModel(
+            user_id=db_user.id,
+            first_name=clean_email.split("@")[0].capitalize(),
+            created_at=now,
+            updated_at=now,
         )
+        db.add(db_profile)
 
-    # User does NOT exist in database
-    if not getattr(req, "isRegister", False) and req.provider != "GUEST":
-        raise ValueError("No account found with this email address. Please switch to 'Create Account' to register.")
+    db_prefs = db.query(UserPreferencesModel).filter(UserPreferencesModel.user_id == db_user.id).first()
+    if not db_prefs:
+        db_prefs = UserPreferencesModel(user_id=db_user.id, budget_level="MODERATE", created_at=now, updated_at=now)
+        db.add(db_prefs)
 
-    # Create new user in PostgreSQL
-    user_id = f"usr_{uuid.uuid4().hex[:10]}"
-    name_parts = req.name.split() if req.name else []
-    first_name = name_parts[0] if name_parts else clean_email.split('@')[0].capitalize()
-    last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
-    avatar = req.avatarUrl or "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=400&q=80"
-
-    db_user = AuthUserModel(
-        id=user_id,
-        provider="EMAIL",
-        provider_user_id=provider_id,
-        email=clean_email,
-        phone=None,
-        email_verified=True,
-        phone_verified=True,
-        status="ACTIVE",
-        created_at=now,
-        last_login_at=now
-    )
-
-    db_profile = UserProfileModel(
-        user_id=user_id,
-        first_name=first_name,
-        last_name=last_name,
-        avatar_url=avatar,
-        preferred_language="en",
-        preferred_currency="INR",
-        timezone="Asia/Kolkata",
-        onboarding_status="NOT_STARTED",
-        onboarding_step="welcome",
-        created_at=now,
-        updated_at=now
-    )
-
-    db_prefs = UserPreferencesModel(
-        user_id=user_id,
-        travel_styles_json=json.dumps(["RELAXED", "FOODIE", "NIGHTLIFE"]),
-        transport_preferences_json=json.dumps(["CAB", "AUTO"]),
-        dietary_preferences_json=json.dumps(["EVERYTHING"]),
-        food_interests_json=json.dumps(["LOCAL", "STREET_FOOD", "FINE_DINING"]),
-        activity_interests_json=json.dumps(["BEACHES", "NIGHTLIFE", "FOOD"]),
-        budget_level="MODERATE",
-        created_at=now,
-        updated_at=now
-    )
-
-    raw_token, _ = create_session_record(db, user_id)
-
-    db.add(db_user)
-    db.add(db_profile)
-    db.add(db_prefs)
     db.commit()
 
     return (
         raw_token,
         to_pydantic_auth_user(db_user),
         to_pydantic_user_profile(db_profile),
-        to_pydantic_user_prefs(db_prefs)
+        to_pydantic_user_prefs(db_prefs),
     )
 
 def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, UserPreferences]:
@@ -358,11 +279,6 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
     if not db_prefs:
         db_prefs = UserPreferencesModel(
             user_id=db_user.id,
-            travel_styles_json=json.dumps(["RELAXED", "FOODIE"]),
-            transport_preferences_json=json.dumps(["CAB"]),
-            dietary_preferences_json=json.dumps(["EVERYTHING"]),
-            food_interests_json=json.dumps(["LOCAL"]),
-            activity_interests_json=json.dumps(["BEACHES"]),
             budget_level="MODERATE",
             created_at=now_iso,
             updated_at=now_iso
@@ -423,11 +339,6 @@ def update_user_onboarding(db: Session, user_id: str, req: OnboardingRequest) ->
     if not db_prefs:
         db_prefs = UserPreferencesModel(
             user_id=user_id,
-            travel_styles_json=json.dumps(["RELAXED", "FOODIE"]),
-            transport_preferences_json=json.dumps(["CAB"]),
-            dietary_preferences_json=json.dumps(["EVERYTHING"]),
-            food_interests_json=json.dumps(["LOCAL"]),
-            activity_interests_json=json.dumps(["BEACHES"]),
             budget_level="MODERATE",
             created_at=now,
             updated_at=now
