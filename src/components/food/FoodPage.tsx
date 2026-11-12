@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useToast } from '../common/UndoToast';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
@@ -54,7 +55,14 @@ export const FoodPage: React.FC = () => {
   const activeDestName = currentTrip?.destination?.name || 'Kerala';
   const destFoodItems = DESTINATION_FOOD_ITEMS[activeDestName] || DESTINATION_FOOD_ITEMS['Kerala'];
 
-  const [activeCategory, setActiveCategory] = useState<string>('All');
+  const [activeCategory, setActiveCategoryState] = useState<string>('All');
+  const { showToast } = useToast();
+  const setActiveCategory = (cat: string) => {
+    if (cat === activeCategory) return;
+    const previous = activeCategory;
+    setActiveCategoryState(cat);
+    showToast({ message: `Showing ${cat}`, undo: () => setActiveCategoryState(previous) });
+  };
   const [nearbyRestaurants, setNearbyRestaurants] = useState<any[]>([]);
   const [isLoadingRestaurants, setIsLoadingRestaurants] = useState<boolean>(true);
   const [filterVegOnly, setFilterVegOnly] = useState<boolean>(false);

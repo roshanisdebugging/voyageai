@@ -1,6 +1,7 @@
 import json
 from sqlalchemy import Column, String, Integer, Text, ForeignKey
 from database import Base
+import models_place  # noqa: F401  (registers the cities table for the origin_city_id foreign key)
 
 class TripModel(Base):
     __tablename__ = "trips"
@@ -8,6 +9,7 @@ class TripModel(Base):
     id = Column(String, primary_key=True, index=True)
     user_id = Column(String, ForeignKey("auth_users.id"), nullable=False, index=True)
     client_request_id = Column(String, nullable=True, index=True) # Idempotency guard
+    origin_city_id = Column(String, ForeignKey("cities.id"), nullable=True)  # starting city
     title = Column(String, nullable=False)
     status = Column(String, default="PLANNING")                   # PLANNING, UPCOMING, ACTIVE, COMPLETED, CANCELLED, ARCHIVED
     itinerary_status = Column(String, default="GENERATING")       # GENERATING, READY, FAILED

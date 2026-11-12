@@ -39,4 +39,5 @@ class ItineraryActivityModel(Base):
     estimated_cost_inr = Column(Integer, default=0)
     booking_required = Column(Boolean, default=False)
     is_confirmed = Column(Boolean, default=False)             # ALWAYS False for AI recommendations
+    is_done = Column(Boolean, default=False)                  # traveler marked it as done
     booking_reference_id = Column(String, nullable=True)

@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { useToast } from '../common/UndoToast';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Heart, MapPin, Star, Navigation, Trash2, Compass, Check, Loader2, ExternalLink } from 'lucide-react';
-import { getSavedPlaces, removeSavedPlace, type SavedPlace } from '../../services/savedPlacesApi';
+import { getSavedPlaces, removeSavedPlace, savePlace, type SavedPlace } from '../../services/savedPlacesApi';
 
 export const SavedPlacesPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [places, setPlaces] = useState<SavedPlace[]>([]);
+  const { showToast } = useToast();
   const [loading, setLoading] = useState<boolean>(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -38,8 +40,16 @@ export const SavedPlacesPage: React.FC = () => {
     try {
       await removeSavedPlace(placeId);
       setPlaces(prev => prev.filter(p => p.place_id !== placeId && p.id !== placeId));
-      setToastMessage('Place removed from favorites');
       setConfirmDeleteId(null);
+      if (targetPlace) {
+        showToast({
+          message: `Removed ${targetPlace.title || 'place'}`,
+          undo: async () => {
+            await savePlace(targetPlace);
+            setPlaces(prev => [targetPlace, ...prev]);
+          },
+        });
+      }
     } catch (err: any) {
       setToastMessage(err.message || 'Failed to remove place');
     } finally {

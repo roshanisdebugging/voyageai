@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from models_trip import TripModel
 from models_itinerary import ItineraryModel, ItineraryDayModel, ItineraryActivityModel
+from models_package import TripTransportModel
+from models_place import CityModel
 from schemas_itinerary import GeneratedItinerarySchema
 from ai_provider import ai_provider_service
 from itinerary_cache_service import build_itinerary_cache_key, get_cached_itinerary, set_cached_itinerary
@@ -136,8 +138,24 @@ def construct_ai_prompt(ai_input: Dict[str, Any]) -> str:
     start_date = ai_input.get('startDate', '2026-10-15')
     prefs = ai_input.get('preferencesSnapshot', {})
     styles = prefs.get('travelStyles', ['BALANCED'])
-    budget = ai_input.get('budget', {}).get('level', 'MODERATE')
+    budget_info = ai_input.get('budget') or {}
+    budget = budget_info.get('level', 'MODERATE')
+    budget_amount = budget_info.get('targetAmount')
     country = dest.get('country', 'India')
+    adults = ai_input.get('adultsCount') or ai_input.get('travelersCount', 2)
+    children = ai_input.get('childrenCount') or 0
+    origin = ai_input.get('origin')
+    group_text = f"{adults} adult{'s' if adults != 1 else ''}" + (f" and {children} child{'ren' if children != 1 else ''}" if children else "")
+    budget_text = f"₹{budget_amount:,} total for the whole group ({budget} tier)" if budget_amount else f"{budget} tier"
+    if origin:
+        origin_name = ", ".join(p for p in [origin.get('name'), origin.get('region')] if p)
+        transport_rule = (
+            f"8. GETTING THERE: The group starts from {origin_name}. In `transportSuggestions`, suggest 1 to 3 ways to "
+            f"travel from {origin_name} to {dest_name} and back (TRAIN, FLIGHT, BUS or CAB), choosing modes that fit the total "
+            "budget. Use real train names or airline routes where you know them. `estimatedFareInr` is per person, one way."
+        )
+    else:
+        transport_rule = "8. GETTING THERE: No starting city is known. Return `transportSuggestions` as an empty list."
 
     return f"""You are VoyageAI's lead itinerary architect. Generate an authentic, logistically viable {total_days}-day travel itinerary for {dest_name}, {country}.
 
@@ -145,9 +163,9 @@ TRIP PARAMETERS:
 - Destination: {dest_name}
 - Start Date: {start_date} (YYYY-MM-DD)
 - Duration: Exactly {total_days} days
-- Group Size: {ai_input.get('travelersCount', 2)} travelers
+- Group: {group_text}
 - Travel Style: {', '.join(styles)}
-- Budget Tier: {budget}
+- Budget: {budget_text}
 
 OPERATIONAL CONSTRAINTS:
 1. DATE ARITHMETIC: Days must strictly sequence from Day 1 ({start_date}) to Day {total_days} with no gaps.
@@ -157,6 +175,7 @@ OPERATIONAL CONSTRAINTS:
 5. TEMPORAL CONTINUITY: Activities must follow strict 12-hour chronological order (e.g., "09:00 AM" -> "01:00 PM" -> "04:30 PM" -> "08:00 PM").
 6. COORDINATES: Provide accurate, best-known latitude and longitude for the named attraction.
 7. FLAGS: Set `bookingRequired: false` and `isConfirmed: false` for all generated options.
+{transport_rule}
 
 Output ONLY a single valid JSON object following this exact structure:
 {{
@@ -182,6 +201,17 @@ Output ONLY a single valid JSON object following this exact structure:
         }}
       ]
     }}
+  ],
+  "transportSuggestions": [
+    {{
+      "mode": "TRAIN",
+      "description": "Specific train or flight name and class",
+      "fromLocation": "Starting station or airport",
+      "toLocation": "Arrival station or airport",
+      "estimatedFareInr": 900,
+      "durationText": "4h 30m",
+      "reason": "Why this fits the budget"
+    }}
   ]
 }}
 """
@@ -199,12 +229,19 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
             return None
 
         now = datetime.utcnow().isoformat() + "Z"
+        origin_city = None
+        if trip.origin_city_id:
+            origin_city = db.query(CityModel).filter(CityModel.id == trip.origin_city_id).first()
+        travelers = trip.travelers or []
         ai_input = {
             "destination": trip.destination,
+            "origin": {"name": origin_city.name, "region": origin_city.region} if origin_city else None,
             "startDate": trip.start_date,
             "endDate": trip.end_date,
             "totalDays": trip.total_days,
-            "travelersCount": len(trip.travelers),
+            "travelersCount": len(travelers),
+            "adultsCount": sum(1 for t in travelers if t.get("type") != "CHILD"),
+            "childrenCount": sum(1 for t in travelers if t.get("type") == "CHILD"),
             "budget": trip.budget,
             "preferencesSnapshot": trip.preferences_snapshot
         }
@@ -220,7 +257,8 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
             destination=dest_name,
             days=trip.total_days,
             travel_style=travel_style,
-            pace=pace
+            pace=pace,
+            origin=origin_city.name if origin_city else None,
         )
 
         print(f"\n[TRIP CREATION STEP 1/3] Generating AI itinerary for '{trip.title}' (Destination: {dest_name}, {trip.total_days} Days)", flush=True)
@@ -253,8 +291,8 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
                 validation_msg = f"Schema parsing failed: {pyd_err}"
 
             # Retry attempt if initial LLM generation was invalid
-            import os
-            current_provider = os.getenv("AI_PROVIDER", "gemini").lower().strip()
+            from ai_provider import ai_provider_name
+            current_provider = ai_provider_name()
             if not is_valid and current_provider != "mock":
                 print(f"[TRIP CREATION WARN] Validation retry triggered: {validation_msg}", flush=True)
                 retry_prompt = prompt + f"\n\nIMPORTANT CORRECTION: Your previous JSON response failed validation: {validation_msg}. Please fix this and return a valid JSON itinerary."
@@ -278,9 +316,8 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
 
 
         # 4. Save to Database
-        from ai_provider import get_ai_provider
-        active_provider_instance = get_ai_provider()
-        provider_name = active_provider_instance.__class__.__name__
+        from ai_provider import ai_provider_name
+        provider_name = ai_provider_name().upper()  # GROQ means Groq with Gemini as backup
 
         print(f"[TRIP CREATION STEP 3/3] Saving itinerary ({len(parsed_schema.days)} Days) to PostgreSQL database...", flush=True)
         itinerary_id = f"itin_{uuid.uuid4().hex[:12]}"
@@ -335,6 +372,8 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
                     is_confirmed=False
                 )
                 db.add(act_record)
+
+        _save_transport_suggestions(db, trip, parsed_schema)
 
         trip.itinerary_status = "READY"
         trip.updated_at = now
@@ -451,7 +490,9 @@ def optimize_budget_service(db: Session, trip_id: str) -> Dict[str, Any]:
                 "longitude": a.longitude
             })
 
-    trip_budget = trip.budget or {"targetAmount": 30000}
+    trip_budget = trip.budget or {}
+    if not trip_budget.get("targetAmount"):
+        raise ValueError("This trip has no budget amount. Add a budget to the trip to optimize it.")
     current_costs = {"totalProjected": total_act_cost}
 
     return ai_provider_service.generate_budget_optimization(trip_budget, current_costs, all_activities)
@@ -465,11 +506,21 @@ def weather_replan_service(db: Session, trip_id: str, forecast_override: Dict[st
     if not itin:
         raise ValueError("Itinerary not found for trip")
 
-    forecast = forecast_override or {
-        "condition": "Monsoon Heavy Downpour & Thunderstorm",
-        "temp": 28,
-        "icon": "Rain"
-    }
+    if forecast_override:
+        forecast = forecast_override
+    else:
+        from weather_service import get_trip_forecast
+        dest = trip.destination if isinstance(trip.destination, dict) else {}
+        if dest.get("latitude") is None or dest.get("longitude") is None:
+            raise ValueError("This trip's destination has no location, so weather can't be checked.")
+        forecast = get_trip_forecast(float(dest["latitude"]), float(dest["longitude"]), trip.start_date, trip.end_date)
+        if not forecast["badWeatherDates"]:
+            return {
+                "status": "NO_CHANGES_NEEDED",
+                "forecast": forecast,
+                "message": forecast["summary"],
+                "recommendations": [],
+            }
 
     days = db.query(ItineraryDayModel).filter(ItineraryDayModel.itinerary_id == itin.id).all()
     all_activities = []
@@ -479,6 +530,7 @@ def weather_replan_service(db: Session, trip_id: str, forecast_override: Dict[st
             all_activities.append({
                 "id": a.id,
                 "dayId": d.id,
+                "date": d.date,
                 "timeSlot": a.time_slot,
                 "title": a.title,
                 "description": a.description,
@@ -543,3 +595,35 @@ def execute_refinement_actions_service(db: Session, trip_id: str, actions: List[
         "executedCount": executed_count
     }
 
+
+_TRANSPORT_MODES = {"TRAIN", "FLIGHT", "BUS", "CAB"}
+
+
+def _save_transport_suggestions(db: Session, trip: TripModel, parsed_schema: GeneratedItinerarySchema) -> None:
+    """Replaces the trip's AI-recommended transport with the new suggestions. User-selected transport is kept."""
+    db.query(TripTransportModel).filter(
+        TripTransportModel.trip_id == trip.id, TripTransportModel.status == "RECOMMENDED"
+    ).delete()
+    if not trip.origin_city_id:
+        return
+    people = max(1, len(trip.travelers or []))
+    now = datetime.utcnow().isoformat() + "Z"
+    for suggestion in parsed_schema.transportSuggestions[:3]:
+        mode = (suggestion.mode or "").strip().upper()
+        if mode not in _TRANSPORT_MODES:
+            continue
+        details = " · ".join(p for p in [suggestion.durationText, suggestion.reason] if p)
+        db.add(TripTransportModel(
+            id=f"trn_{uuid.uuid4().hex[:10]}",
+            trip_id=trip.id,
+            transport_type=mode,
+            provider_name=suggestion.description[:200],
+            pickup_location=suggestion.fromLocation[:200],
+            dropoff_location=suggestion.toLocation[:200],
+            pickup_time=trip.start_date,
+            estimated_fare=max(0, int(suggestion.estimatedFareInr)) * people,
+            status="RECOMMENDED",
+            booking_reference=details[:250] or None,
+            created_at=now,
+            updated_at=now,
+        ))

@@ -64,9 +64,8 @@ def generate_live_destination_highlights(
         except Exception as e:
             print(f"[REDIS READ ERROR] {e}", flush=True)
 
-    print(f"[LLM GEN] Generating live dynamic content for {clean_dest} via Gemini (Lat: {lat}, Lng: {lng}, Key: {cache_key})...", flush=True)
+    print(f"[LLM GEN] Generating live dynamic content for {clean_dest} via the AI provider (Lat: {lat}, Lng: {lng}, Key: {cache_key})...", flush=True)
 
-    api_key = os.getenv("GEMINI_API_KEY")
 
     if use_coords_prompt:
         prompt = f"""
@@ -156,38 +155,12 @@ Provide 5 diverse real activities and 2 real events. Replace [26.9124, 75.7873] 
 """
 
     parsed_data = None
-    model_candidates = [
-        "gemini-3.5-flash-lite",
-        "gemini-flash-lite-latest",
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-    ]
-
-    if api_key:
-        for m_name in model_candidates:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "response_mime_type": "application/json",
-                        "temperature": 0.3,
-                        "maxOutputTokens": 2000
-                    }
-                }
-                res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=15.0)
-                if res.status_code == 200:
-                    res_json = res.json()
-                    candidates = res_json.get("candidates", [])
-                    if candidates and "content" in candidates[0]:
-                        text = candidates[0]["content"]["parts"][0]["text"].strip()
-                        parsed_data = json.loads(text)
-                        print(f">>> [GEMINI SUCCESS] Generated live content for {clean_dest} using model {m_name}", flush=True)
-                        break
-                else:
-                    print(f"[GEMINI WARN] Model {m_name} HTTP {res.status_code}: {res.text[:120]}", flush=True)
-            except Exception as m_err:
-                print(f"[GEMINI ERROR] Model {m_name} failed: {m_err}", flush=True)
+    try:
+        from ai_provider import complete_json
+        parsed_data = json.loads(complete_json(prompt, temperature=0.3, timeout=15))
+        print(f">>> [AI SUCCESS] Generated live content for {clean_dest}", flush=True)
+    except Exception as gen_err:
+        print(f"[AI ERROR] Highlights generation failed for {clean_dest}: {gen_err}", flush=True)
 
     if not parsed_data or not isinstance(parsed_data, dict):
         print(f"[HIGHLIGHTS FETCH FAILED]: LLM generation failed or returned invalid payload for {clean_dest}", flush=True)

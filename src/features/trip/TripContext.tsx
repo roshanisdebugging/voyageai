@@ -36,6 +36,15 @@ interface TripContextType {
   optimizeBudget: (tripId: string) => Promise<any>;
   weatherReplan: (tripId: string) => Promise<any>;
   executeRefinement: (tripId: string, actions: any[]) => Promise<any>;
+  setActivityDone: (tripId: string, activityId: string, done: boolean) => Promise<void>;
+  readyNotice: ItineraryReadyNotice | null;
+  dismissReadyNotice: () => void;
+}
+
+export interface ItineraryReadyNotice {
+  tripId: string;
+  tripTitle: string;
+  status: 'READY' | 'FAILED';
 }
 
 const TripContext = createContext<TripContextType | undefined>(undefined);
@@ -53,6 +62,7 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [expenses, setExpenses] = useState<TripExpense[]>([]);
 
   const [draft, setDraftState] = useState<TripDraft | null>(null);
+  const [readyNotice, setReadyNotice] = useState<ItineraryReadyNotice | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   const userId = authUser?.id;
@@ -211,6 +221,24 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setExpenses([]);
     }
   }, [currentTripId, fetchPackageData]);
+
+  // ── "Itinerary ready" notice: for any of the user's trips, wherever they are in the app ──
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const handleReadyNotice = (payload: any) => {
+      const tripId = payload?.trip_id || payload?.tripId;
+      if (!tripId) return;
+      const status: 'READY' | 'FAILED' = payload?.status === 'FAILED' ? 'FAILED' : 'READY';
+      setTrips(prev => prev.map(t => (t.id === tripId ? { ...t, itineraryStatus: status } : t)));
+      setReadyNotice(prev => {
+        const title = trips.find(t => t.id === tripId)?.title || prev?.tripTitle || 'Your trip';
+        return { tripId, tripTitle: title, status };
+      });
+    };
+    return wsClient.on('ITINERARY_READY', handleReadyNotice);
+  }, [isAuthenticated, trips]);
+
+  const dismissReadyNotice = useCallback(() => setReadyNotice(null), []);
 
   // ── Reactive WebSocket Event Listeners (No 3-Second Polling) ──
   useEffect(() => {
@@ -531,6 +559,20 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return wsClient.sendRequest('trips:weather_replan', { trip_id: tripId });
   }, []);
 
+  const setActivityDone = useCallback(async (tripId: string, activityId: string, done: boolean): Promise<void> => {
+    const res = await wsClient.sendRequest('trips:set_activity_done', { trip_id: tripId, activity_id: activityId, done });
+    setCurrentItinerary(prev => prev && {
+      ...prev,
+      days: prev.days.map(d => ({
+        ...d,
+        activities: d.activities.map(a => (a.id === activityId ? { ...a, isDone: Boolean(res?.isDone) } : a)),
+      })),
+    });
+    if (res?.progress) {
+      setTrips(prev => prev.map(t => (t.id === tripId ? { ...t, progress: res.progress } : t)));
+    }
+  }, []);
+
   const executeRefinement = useCallback(async (tripId: string, actions: any[]): Promise<any> => {
     const data = await wsClient.sendRequest('trips:refine', { trip_id: tripId, actions });
     await refetchItinerary(tripId);
@@ -568,6 +610,9 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       optimizeBudget,
       weatherReplan,
       executeRefinement,
+      setActivityDone,
+      readyNotice,
+      dismissReadyNotice,
     }}>
       {children}
     </TripContext.Provider>

@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 # 7 Days in seconds (604,800s)
 ITINERARY_CACHE_TTL = 7 * 24 * 60 * 60
 
-def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "standard", pace: str = "moderate") -> str:
+def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "standard", pace: str = "moderate", origin: str = None) -> str:
     """Creates a normalized, deterministic cache key with sorted style tags."""
     norm_dest = str(destination or "india").strip().lower().replace(" ", "_")
     norm_pace = str(pace or "moderate").strip().lower().replace(" ", "_")
@@ -17,7 +17,9 @@ def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "
     styles.sort()
     norm_style = "_".join(styles) if styles else "standard"
 
-    return f"itinerary:{norm_dest}:{days}d:{norm_style}:{norm_pace}"
+    # Transport suggestions depend on the starting city, so it is part of the key.
+    norm_origin = str(origin).strip().lower().replace(" ", "_") if origin else "noorigin"
+    return f"itinerary:{norm_dest}:{days}d:{norm_style}:{norm_pace}:from_{norm_origin}"
 
 
 def get_cached_itinerary(cache_key: str):

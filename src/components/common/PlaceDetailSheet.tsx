@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useToast } from './UndoToast';
 import { useApp } from '../../context/AppContext';
 import { MapPin, Star, Navigation, Sparkles, X, Car, Heart, Check, Loader2 } from 'lucide-react';
 import { checkPlaceSaved, savePlace, removeSavedPlace } from '../../services/savedPlacesApi';
@@ -28,6 +29,8 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
   const { openInAppNavigation, openCabModal, openAiAssistant } = useApp();
 
   const [isSaved, setIsSaved] = useState<boolean>(false);
+  const { showToast } = useToast();
+  const handleToggleSaveRef = React.useRef<(fromUndo?: boolean) => Promise<void>>(async () => {});
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -49,7 +52,7 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
 
   const hasCoordinates = typeof item.latitude === 'number' && typeof item.longitude === 'number' && !isNaN(item.latitude) && !isNaN(item.longitude);
 
-  const handleToggleSave = async () => {
+  const handleToggleSave = async (fromUndo = false) => {
     if (!item || isSaving) return;
     setIsSaving(true);
     const previous = isSaved;
@@ -71,10 +74,10 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
           cost_text: item.estimatedCost ? `₹${item.estimatedCost}` : 'Free',
           description: item.description,
         });
-        setToastMessage('Saved to your places');
+        if (!fromUndo) showToast({ message: 'Saved to your places', undo: () => handleToggleSaveRef.current(true) });
       } else {
         await removeSavedPlace(item.id);
-        setToastMessage('Removed from saved places');
+        if (!fromUndo) showToast({ message: 'Removed from saved places', undo: () => handleToggleSaveRef.current(true) });
       }
     } catch (err: any) {
       setIsSaved(previous);
@@ -84,6 +87,10 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
       setTimeout(() => setToastMessage(null), 3000);
     }
   };
+
+  useEffect(() => {
+    handleToggleSaveRef.current = handleToggleSave;
+  });
 
   const handleNavigate = () => {
     if (!hasCoordinates || item.latitude === undefined || item.longitude === undefined) return;
@@ -143,7 +150,7 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
           <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={handleToggleSave}
+              onClick={() => handleToggleSave()}
               disabled={isSaving}
               className={`w-10 h-10 rounded-full flex items-center justify-center transition-all press-scale border ${
                 isSaved

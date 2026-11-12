@@ -24,6 +24,8 @@ import { CabBookingModal } from './components/cabs/CabBookingModal';
 import { FoodSheet } from './components/food/FoodSheet';
 import { EmergencyModal } from './components/common/EmergencyModal';
 import { SwapActivityModal } from './components/itinerary/SwapActivityModal';
+import { ItineraryReadyNotice } from './components/trip/ItineraryReadyNotice';
+import { ToastProvider } from './components/common/UndoToast';
 
 import { HomePage } from './components/home/HomePage';
 import { MyTripsPage } from './components/trips/MyTripsPage';
@@ -210,6 +212,7 @@ const AppShell: React.FC = () => {
       <FoodSheet />
       <EmergencyModal />
       <SwapActivityModal />
+      <ItineraryReadyNotice />
     </div>
   );
 };
@@ -223,6 +226,7 @@ export default function App() {
             <AuthProvider>
               <TripProvider>
                 <AppProvider>
+                  <ToastProvider>
                   <Routes>
                     {/* Public Auth Route */}
                     <Route path="/login" element={<LoginScreen />} />
@@ -257,6 +261,7 @@ export default function App() {
                       }
                     />
                   </Routes>
+                  </ToastProvider>
                 </AppProvider>
               </TripProvider>
             </AuthProvider>

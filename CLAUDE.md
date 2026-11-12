@@ -46,11 +46,26 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
 - **`main.py` is a ~4.9k-line monolith** that holds nearly all HTTP and WebSocket routes. Many routes are registered under several aliases at once (for example `/trips` and `/api/trips`, or `/api/chat` and `/api/tour-guide/chat`). Keep the stacked decorators together when you edit a handler. The `*_service.py` modules hold the logic, and some are imported lazily inside handlers.
 - **DB**: `database.py` has one pooled SQLAlchemy engine tuned for Neon serverless Postgres (pre_ping, recycle=300). Use `get_db` for routes and `get_db_context` elsewhere. Tables are created by `init_db()` at import time in `main.py`, using `Base.metadata.create_all`. There is no Alembic, so schema changes to existing tables need manual SQL or a script like `create_subscription_tables.py`. ORM models are split across `models*.py` and `payment_models.py`. They must be imported before `init_db()` so they register.
 - **Async itinerary pipeline**: WS `trips:create` (or `POST /api/trips`) → `task_queue.enqueue_itinerary_generation` (Redis LPUSH on `voyageai:tasks:itinerary`) → `worker.py` (BRPOP) → `itinerary_service.process_async_itinerary_generation` → `publish_trip_event` (Pub/Sub `voyageai:events:trip`) → `events_listener` (started in the FastAPI lifespan, reconnects on Redis loss) → `connection_registry.push_to_user` sends `ITINERARY_READY` (status `READY` or `FAILED`) only to the trip owner's `/ws/app` sockets. If the worker is not running, itineraries never complete. Generated itineraries are cached in Redis for 7 days keyed by destination/days/styles/budget level (`itinerary_cache_service.py`) and copied into each trip; mock output is never cached.
-- **Trip creation** lives in `trip_lifecycle.create_trip_for_user` (validation, 30-day and 20-traveler limits, idempotency via `clientRequestId`, queueing). Both REST and WS call it; don't re-implement it in a handler.
+- **Trip creation** lives in `trip_lifecycle.create_trip_for_user`. It handles:
+  - validation, with a 30-day and 20-traveler limit
+  - idempotency via `clientRequestId`
+  - `adultsCount`/`childrenCount`
+  - `budgetAmount`, saved as `budget.targetAmount`. `budget.level` is derived from it by `budget_level_for` (per person per day; a child counts as half).
+  - an optional `origin` starting city, stored once in the `cities` table (`models_place.get_or_create_city`) and linked by `trips.origin_city_id`
+  - queueing the itinerary job
+
+  Both REST and WS call it, and so will the voice agent. Don't re-implement it in a handler. `serialize_trip(trip, db)` is the shared response shape.
+- **Itinerary generation** asks the AI for `transportSuggestions` when the trip has a starting city. They're saved as `trip_transports` rows with status `RECOMMENDED`, replaced on regenerate. The itinerary cache key includes the origin.
+- **Schema additions without migrations:** new columns on existing tables must also be added as `ALTER TABLE … ADD COLUMN IF NOT EXISTS` in `database.init_db()`. `create_all` won't add them. Examples: `trips.origin_city_id`, `itinerary_activities.is_done`.
+- **Weather** comes from `weather_service.get_trip_forecast` (Open-Meteo, no key, up to 16 days ahead). It raises `ForecastUnavailable` instead of inventing weather.
 - **Ownership**: all "does this user own this trip/activity" checks go through `ownership.py` (`find_owned_trip`, `require_owned_trip`, `find_owned_activity`, …). They never fall back to another user's data. `verify_trip_ownership` in `main.py` wraps `require_owned_trip`; use the returned trip's `id` afterwards, since the frontend sends IDs with or without the `trip_` prefix.
 - **`request.state.user`** only ever holds a full `AuthUser` (set by `get_current_user`). `UserRateLimiter` stores its key in `request.state.rate_limit_user_id` instead.
 - **Redis has two clients**: a sync one in `redis_client.py` (queue/pubsub/cache, `REDIS_HOST`/`REDIS_PORT`) and an async one inside `rate_limiter.py` (`REDIS_URL`).
-- **AI**: `ai_provider.py` defines `AIProviderInterface` with `MockAIProvider` and `GeminiProvider`. `DynamicAIProviderProxy` picks one per call from the `AI_PROVIDER` env var (`gemini|mock`). Gemini errors are raised, never replaced with mock data: mock output (a Goa/Bihar dataset or a generic "{dest} Zone N" template) looks real to users and must only appear with `AI_PROVIDER=mock`. Add new AI capabilities to the interface and to both implementations. The tour-guide chat (`tour_guide_service.py`) calls Gemini through its own SDK/REST tiers, not through `ai_provider.py`.
+- **AI**: `ai_provider.py` defines `MockAIProvider`, `GeminiProvider` and `GroqProvider`. `GroqProvider` uses the same prompts; only the call goes through `groq_client.py`.
+  - `AI_PROVIDER` (default `groq`) chooses the provider per call: `groq` means `FallbackAIProvider([Groq, Gemini])`; `gemini` and `mock` mean only that provider.
+  - Call sites with their own prompt use `ai_provider.complete_json(prompt)`. Never call Gemini or Groq HTTP directly elsewhere.
+  - `GROQ_API_KEY` and `GROQ_MODEL` (default `openai/gpt-oss-120b`) are in `backend/.env`. With no Groq key, calls quietly go to Gemini.
+  - The cost guard follows the same order (`COST_GUARD_BACKEND=groq`: `GroqClassifier`, then `GeminiClassifier`) and still fails closed. Gemini errors are raised, never replaced with mock data: mock output (a Goa/Bihar dataset or a generic "{dest} Zone N" template) looks real to users and must only appear with `AI_PROVIDER=mock`. Add new AI capabilities to the interface and to both implementations. The tour-guide chat (`tour_guide_service.py`) calls Gemini through its own SDK/REST tiers, not through `ai_provider.py`.
 - **Cost guard** (`cost_guard.py`, see `backend/COST_GUARD.md`): a fail-closed intent classifier (`travel/emergency/off_topic/unknown`) runs before any paid concierge answer. Keep the `(allowed, gate, reply)` return contract and the `PASSED_ESSENTIAL_NEED` emergency path. Never make it fail open. It guards `tour_guide:chat`/`/api/chat` and the free-chat path of `/api/ai/concierge`.
 - **Rate limiting** (`rate_limiter.py`): Redis ZSET sliding window. `NetworkRateLimiter` keys on the client IP, normalized to /64 for IPv6. The IP comes from `client_ip_from`, which ignores `X-Forwarded-For` unless `TRUSTED_PROXY_HOPS` > 0 (default 0, because the API is reached directly). Behind a proxy, set it to the number of proxies, and only the entry that proxy appended is trusted. Login, register and paid-AI limiters use `fail_closed=True` (503 when Redis is down); the rest fail open. Tokens are never read from URL query strings on HTTP routes. `UserRateLimiter` keys on the session user and uses a cache-aside session lookup (`session_cache:{token}`), which is warmed on login and invalidated on logout. Routes attach the named limiter instances (`general_limiter`, `ai_limiter`, `ai_chat_limiter`, `places_limiter`, …) via `dependencies=[Depends(...)]`.
 - Google Maps calls live in `services/google_maps_service.py`; the tour guide in top-level `tour_guide_service.py`.
@@ -62,6 +77,12 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
 ## Frontend architecture
 
 - `src/config/apiConfig.ts` resolves the backend URL: `VITE_API_URL`/`VITE_API_BASE_URL` (and `VITE_WS_URL` for WebSockets) from `.env`, else `DEFAULT_BACKEND_URL`. Send requests with `getDefaultFetchOptions()` (credentials: 'include' + auth headers). `getWsBaseUrl()` derives WebSocket URLs.
+- **Trip wizard** (`features/trip/screens/TripCreationWizard.tsx`): Where (with optional starting city) → When → Who (adults/children) → Style → Budget amount → Review.
+  - Review is step 6, where every field is editable on one page with a Proceed button.
+  - `navigate('/trips/new', { state: { prefill: TripDraft } })` opens it pre-filled at Review. This is the voice "jump" target.
+  - India-only place search is `features/trip/components/PlaceSearchField.tsx`.
+- **Small actions with Undo:** `useToast().showToast({ message, undo })` from `components/common/UndoToast.tsx`. `ToastProvider` is mounted in `App.tsx`. Used for mark done (`TripContext.setActivityDone` → WS `trips:set_activity_done`), save/unsave place, and Explore/Food filters.
+- **`ITINERARY_READY`** for any of the user's trips sets `TripContext.readyNotice`. `components/trip/ItineraryReadyNotice.tsx` then offers to open the itinerary or download page.
 - Data access is mostly WS-first with a REST fallback (see `features/trip/TripContext.tsx`). When both fail, throw an error for the UI to show; don't fabricate local stand-in records or sessions.
 - The auth token is kept **in memory only** (`setAuthToken`). `main.tsx` clears localStorage and sessionStorage on every load, keeping only `cruiser_theme`. Do not add browser-storage persistence, since it is wiped on boot. Persist state server-side instead.
 - State is split between React contexts (`AuthContext`, `AppContext`, `TripContext` in `features/trip/`, `NavigationContext`, `ThemeContext`) and a Redux Toolkit store (`src/store/reducers/`: `tourGuide`, `nearby`, `mapPlaces`, `trips` slices).
@@ -108,14 +129,18 @@ Mistakes made in earlier sessions, and what to do instead:
 
 ## Roadmap: voice-first mode (next major feature)
 
-Goal: the user can do everything by speaking as well as by tapping. Planned design:
-- **Normal / Voice toggle**, with a push-to-talk mic.
-- **One voice turn:** audio goes over `/ws/app` as a `voice:turn` action. The backend runs Sarvam speech-to-text, then a Gemini "voice agent" with tools, then Sarvam TTS. The frontend gets back `{audio, text, ui_actions}`.
-- **What `ui_actions` does on the frontend:** navigate, open the trip wizard pre-filled, show a confirm card.
-- **Tools that only change the screen run immediately.** Tools that change data (`create_trip`, `add_expense`, `swap_activity`) only create a pending action on the server, which runs after the user says yes or taps Confirm.
-- **Agent tools must call the shared services** (`trip_lifecycle.create_trip_for_user`, `ownership.py`) and never re-implement logic.
-- **Data gap:** trips have no "travelling from" (origin) field yet.
-- **Still to decide with the user:** languages (Hindi/English/Hinglish?), hold-to-talk vs tap-and-auto-stop, and build order.
+Goal: the user can do everything by speaking as well as by tapping. Summary of `voicefirst.md` v2:
+- **Mic and voice turn:**
+  - One floating mic button after login. There's no Voice/Normal toggle. Tap to start, tap to stop, up to 30 seconds.
+  - A voice turn is a `voice:turn` action on `/ws/app`.
+  - Speech-to-text is Groq Whisper (swappable). The agent is a Groq function-calling model. Replies are spoken by Sarvam TTS with the `ritu` voice.
+  - The server keeps a draft trip in Redis and finally jumps the app to the pre-filled review page (wizard step 6).
+- **Tool rules:**
+  - Small actions run at once, with an Undo toast.
+  - Big actions (create trip, add expense, swap, regenerate, optimize, weather replan) become a server-side pending action. It runs only after "haan" or a Proceed/Confirm tap.
+  - Voice never deletes trips.
+  - Agent tools must call the shared services (`trip_lifecycle.create_trip_for_user`, `ownership.py`) and never re-implement logic.
+- **The plan of record is `voicefirst.md`** (decisions closed 12 Nov 2026). Step 0 is done on branch `step0`. Start voice step 1 only when the user says "start on voice".
 
 ## Specs in progress
 

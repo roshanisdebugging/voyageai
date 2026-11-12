@@ -56,6 +56,7 @@ export interface ItineraryActivity {
   estimatedCostInr?: number;
   bookingRequired?: boolean;
   isConfirmed?: boolean;
+  isDone?: boolean;
 }
 
 export interface ItineraryDay {
@@ -82,12 +83,16 @@ export interface Trip {
   userId: string;
   title: string;
   destination: DestinationReference;
+  origin?: DestinationReference | null;
   coverImage?: string;
   coverMedia?: CoverMedia;
   startDate: string;
   endDate: string;
   totalDays?: number;
   travelers: TripTraveler[];
+  adultsCount?: number;
+  childrenCount?: number;
+  budget?: TripBudget;
   status: TripStatus;
   itineraryStatus?: ItineraryStatus;
   tripStyle: TravelStyle[];
@@ -100,8 +105,17 @@ export interface Trip {
   updatedAt: string;
 }
 
+export interface TripBudget {
+  level?: BudgetLevel;
+  targetAmount?: number | null;
+  currency?: string;
+}
+
 export interface TripDraft {
   destination?: DestinationReference;
+  origin?: DestinationReference | null;
+  adultsCount?: number;
+  childrenCount?: number;
   startDate?: string;
   endDate?: string;
   travelersCount?: number;
@@ -116,12 +130,13 @@ export interface CreateTripPayload {
   clientRequestId?: string;
   title?: string;
   destination: DestinationReference;
+  origin?: DestinationReference | null;
   startDate: string;
   endDate: string;
-  travelersCount: number;
+  adultsCount: number;
+  childrenCount: number;
   tripStyle?: TravelStyle[];
-  budgetLevel?: BudgetLevel;
-  customBudgetAmount?: number;
+  budgetAmount: number;
 }
 
 export type PackageItemStatus = 'RECOMMENDED' | 'SELECTED' | 'PENDING' | 'CONFIRMED' | 'CANCELLED';
@@ -147,7 +162,7 @@ export interface TripTransport {
   id: string;
   tripId: string;
   activityId?: string;
-  transportType: 'CAB' | 'FLIGHT' | 'TRAIN' | 'RENTAL';
+  transportType: 'CAB' | 'FLIGHT' | 'TRAIN' | 'BUS' | 'RENTAL';
   providerName: string;
   pickupLocation: string;
   dropoffLocation: string;

@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
-import { MapPin, Sparkles, Wallet, CloudRain, RefreshCw, Navigation, Car, Calendar, ArrowLeft, Download, Copy, Check, Printer } from 'lucide-react';
+import { MapPin, Sparkles, Wallet, CloudRain, RefreshCw, Navigation, Car, Calendar, ArrowLeft, Download, Copy, Check, Printer, CheckCircle2, Circle, TrainFront, Plane, Bus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getApiBaseUrl, DEFAULT_HEADERS } from '../../config/apiConfig';
+import { getApiBaseUrl, getAuthHeaders } from '../../config/apiConfig';
+import { useToast } from '../common/UndoToast';
 
 export const ItineraryView: React.FC = () => {
   const navigate = useNavigate();
   const { openCabModal, openInAppNavigation, openSwapAssistant } = useApp();
-  const { currentTrip, currentItinerary, optimizeDayItinerary, optimizeBudget, weatherReplan } = useTrip();
+  const { currentTrip, currentItinerary, optimizeDayItinerary, optimizeBudget, weatherReplan, setActivityDone, transports } = useTrip();
+  const { showToast } = useToast();
+  const [doneBusyId, setDoneBusyId] = useState<string | null>(null);
 
   const [expandedDayNumber, setExpandedDayNumber] = useState<number>(1);
   const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
@@ -31,6 +34,7 @@ export const ItineraryView: React.FC = () => {
       forecast: any;
       affectedActivities: any[];
       recommendations: any[];
+      message?: string;
     } | null;
   }>({ isOpen: false, data: null });
 
@@ -68,7 +72,7 @@ export const ItineraryView: React.FC = () => {
         isOpen: true,
         data: {
           projectedCost: res.projectedCost || 0,
-          targetBudget: res.targetBudget || 30000,
+          targetBudget: res.targetBudget ?? currentTrip?.budget?.targetAmount ?? 0,
           savingsRequired: res.savingsRequired || 0,
           recommendations: res.recommendations || []
         }
@@ -91,9 +95,10 @@ export const ItineraryView: React.FC = () => {
       setWeatherReplanModal({
         isOpen: true,
         data: {
-          forecast: res.forecast || { condition: "Rain Alert" },
-          affectedActivities: res.affectedActivities || [],
-          recommendations: res.recommendations || []
+          forecast: res.forecast || res.weatherAlert || {},
+          affectedActivities: res.affectedActivities || res.recommendations || [],
+          recommendations: res.recommendations || [],
+          message: res.message || res.forecast?.summary || res.weatherAlert?.summary
         }
       });
       setOptStatusMessage(null);
@@ -104,6 +109,28 @@ export const ItineraryView: React.FC = () => {
       setIsOptimizing(false);
     }
   };
+
+  const handleToggleDone = async (activityId: string, title: string, currentlyDone: boolean) => {
+    if (!currentTrip?.id || doneBusyId) return;
+    const tripId = currentTrip.id;
+    const nextDone = !currentlyDone;
+    setDoneBusyId(activityId);
+    try {
+      await setActivityDone(tripId, activityId, nextDone);
+      showToast({
+        message: nextDone ? `Marked "${title}" as done` : `"${title}" marked not done`,
+        undo: () => setActivityDone(tripId, activityId, currentlyDone),
+      });
+    } catch (err: any) {
+      showToast({ message: err?.message || "Couldn't update the activity. Please try again.", tone: 'error' });
+    } finally {
+      setDoneBusyId(null);
+    }
+  };
+
+  const recommendedTransport = transports.filter(t => t.status === 'RECOMMENDED');
+  const transportIcon = (type: string) =>
+    type === 'FLIGHT' ? <Plane className="w-4 h-4" /> : type === 'BUS' ? <Bus className="w-4 h-4" /> : type === 'TRAIN' ? <TrainFront className="w-4 h-4" /> : <Car className="w-4 h-4" />;
 
   const destName = currentTrip?.destination?.name || 'Trip Destination';
 
@@ -152,7 +179,8 @@ export const ItineraryView: React.FC = () => {
     try {
       const baseUrl = getApiBaseUrl();
       const res = await fetch(`${baseUrl}/api/trips/${currentTrip.id}/export?format=json`, {
-        headers: DEFAULT_HEADERS,
+        credentials: 'include',
+        headers: getAuthHeaders(),
       });
       if (!res.ok) throw new Error("Failed to export JSON");
       const data = await res.json();
@@ -295,6 +323,32 @@ export const ItineraryView: React.FC = () => {
         </p>
       </div>
 
+      {recommendedTransport.length > 0 && (
+        <div className="bg-white border border-[#D9DEDA] rounded-3xl p-4 space-y-2.5 shadow-xs">
+          <h2 className="text-xs font-extrabold uppercase tracking-wider text-[#355F58]">
+            Getting there{currentTrip?.origin?.name ? ` from ${currentTrip.origin.name}` : ''}
+          </h2>
+          {recommendedTransport.map(t => (
+            <div key={t.id} className="flex items-start gap-3 p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA]">
+              <div className="w-8 h-8 rounded-xl bg-[#E8F0EE] text-[#355F58] flex items-center justify-center shrink-0">
+                {transportIcon(t.transportType)}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-extrabold text-[#1F2522]">{t.providerName}</div>
+                <div className="text-[11px] text-[#5F6863]">{t.pickupLocation} → {t.dropoffLocation}</div>
+                {t.bookingReference && <div className="text-[11px] text-[#5F6863]">{t.bookingReference}</div>}
+              </div>
+              {t.estimatedFare > 0 && (
+                <span className="text-xs font-bold text-[#355F58] shrink-0" title="Estimated one-way fare for the whole group">
+                  ~₹{t.estimatedFare.toLocaleString('en-IN')}
+                </span>
+              )}
+            </div>
+          ))}
+          <p className="text-[10px] text-[#7C8580]">Suggested by AI to fit your budget. Fares are estimates for the whole group, one way.</p>
+        </div>
+      )}
+
       {optStatusMessage && (
         <div className="p-3.5 rounded-2xl bg-[#E8F0EE] border border-[#355F58]/30 text-xs font-bold text-[#355F58] flex items-center gap-2 animate-fadeIn shadow-xs">
           <RefreshCw className="w-4 h-4 animate-spin shrink-0 text-[#355F58]" />
@@ -346,7 +400,7 @@ export const ItineraryView: React.FC = () => {
 
               <div className="space-y-3">
                 {selectedDay.activities.map((act, idx) => {
-                  const isDone = Boolean((act as any).isCompleted);
+                  const isDone = Boolean(act.isDone);
                   return (
                     <div
                       key={act.id}
@@ -388,6 +442,19 @@ export const ItineraryView: React.FC = () => {
 
                       {/* Action Buttons */}
                       <div className="flex items-center gap-2 pt-2 border-t border-[#D9DEDA]">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleDone(act.id, act.title, isDone)}
+                          disabled={doneBusyId === act.id}
+                          aria-pressed={isDone}
+                          aria-label={isDone ? `Mark ${act.title} as not done` : `Mark ${act.title} as done`}
+                          className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 press-scale transition-all min-h-[40px] disabled:opacity-50 ${
+                            isDone ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-[#D9DEDA] text-[#1F2522] hover:bg-[#F0F2EF]'
+                          }`}
+                        >
+                          {isDone ? <CheckCircle2 className="w-4 h-4" /> : <Circle className="w-4 h-4 text-[#355F58]" />}
+                          <span>{isDone ? 'Done' : 'Mark done'}</span>
+                        </button>
                         <button
                           type="button"
                           disabled={!act.latitude || !act.longitude}
@@ -554,7 +621,10 @@ export const ItineraryView: React.FC = () => {
             <div className="p-3.5 rounded-2xl bg-[#E8F0EE] border border-[#355F58]/30 flex items-center justify-between">
               <div>
                 <span className="text-[10px] font-extrabold uppercase text-[#355F58] block">Forecast Alert</span>
-                <span className="text-sm font-black text-[#1F2522]">{weatherReplanModal.data.forecast?.condition || 'Rain Alert'}</span>
+                <span className="text-sm font-black text-[#1F2522]">{weatherReplanModal.data.forecast?.condition || 'Forecast'}</span>
+                {weatherReplanModal.data.message && (
+                  <span className="text-[11px] text-[#5F6863] font-medium block mt-0.5">{weatherReplanModal.data.message}</span>
+                )}
               </div>
               <span className="px-3 py-1 rounded-full bg-white text-[#355F58] font-bold text-xs border border-[#D9DEDA]">
                 {weatherReplanModal.data.affectedActivities.length} Outdoor Activities Flagged

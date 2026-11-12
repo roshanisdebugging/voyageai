@@ -192,6 +192,90 @@ class GeminiClassifier:
             self.slots.release()
 
 
+class GroqClassifier:
+    """Same policy and fail-closed rules as GeminiClassifier, served by Groq.
+
+    Uses Groq structured outputs (strict JSON schema). Any error is raised so the
+    caller can try the backup classifier; an uncertain answer becomes unknown.
+    """
+
+    SCHEMA = {
+        "type": "object",
+        "properties": {
+            "intent": {"type": "string", "enum": sorted(LABELS | {"unknown"})},
+            "unambiguous": {"type": "boolean"},
+        },
+        "required": ["intent", "unambiguous"],
+        "additionalProperties": False,
+    }
+
+    def __init__(self):
+        if not (os.getenv("GROQ_API_KEY") or "").strip():
+            raise ValueError("Missing Groq classifier API key")
+        self.slots = threading.BoundedSemaphore(8)
+
+    def classify(self, query: str) -> Decision:
+        from groq_client import groq_chat
+
+        if not self.slots.acquire(blocking=False):
+            return Decision("unknown", "CLASSIFIER_UNAVAILABLE")
+        try:
+            content = groq_chat(
+                [
+                    {"role": "system", "content": INTENT_INSTRUCTION},
+                    {"role": "user", "content": query},
+                ],
+                temperature=0,
+                timeout=float(os.getenv("COST_GUARD_READ_TIMEOUT", "3.5")) + float(os.getenv("COST_GUARD_CONNECT_TIMEOUT", "1.5")),
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "intent_decision", "strict": True, "schema": self.SCHEMA},
+                },
+                max_completion_tokens=512,
+                reasoning_effort="low",
+            )
+            result = json.loads(content)
+            if not isinstance(result, dict) or set(result) != {"intent", "unambiguous"}:
+                raise ValueError("Classifier schema mismatch")
+            intent = result["intent"]
+            if intent not in LABELS | {"unknown"} or type(result["unambiguous"]) is not bool:
+                raise ValueError("Invalid intent decision")
+            if not result["unambiguous"] or intent == "unknown":
+                return Decision("unknown", "LOW_CONFIDENCE")
+            return Decision(intent, "OFF_TOPIC" if intent == "off_topic" else "ACCEPTED")
+        finally:
+            self.slots.release()
+
+
+class FallbackClassifier:
+    """Tries each classifier in order. If all fail, the error propagates (fail closed)."""
+
+    def __init__(self, classifiers):
+        if not classifiers:
+            raise ValueError("No classifier configured")
+        self.classifiers = classifiers
+
+    def classify(self, query: str) -> Decision:
+        last_error = None
+        for classifier in self.classifiers:
+            try:
+                return classifier.classify(query)
+            except Exception as exc:
+                last_error = exc
+                log.warning("Cost guard %s failed (%s)", type(classifier).__name__, type(exc).__name__)
+        raise RuntimeError("All cost guard classifiers failed") from last_error
+
+
+def _build_groq_with_gemini_backup():
+    classifiers = []
+    for factory in (GroqClassifier, GeminiClassifier):
+        try:
+            classifiers.append(factory())
+        except ValueError:
+            pass  # that provider's key is not configured
+    return FallbackClassifier(classifiers)
+
+
 class SemanticClassifier:
     """Exact cosine index; acceptance does not depend on index library defaults.
 
@@ -300,10 +384,15 @@ def get_guard() -> CostGuard:
             if time.monotonic() < _retry_at:
                 raise RuntimeError("Classifier initialization cooling down")
             try:
-                backend = os.getenv("COST_GUARD_BACKEND", "gemini")
-                if backend not in {"gemini", "semantic"}:
+                backend = os.getenv("COST_GUARD_BACKEND", "groq")
+                if backend == "groq":
+                    classifier = _build_groq_with_gemini_backup()
+                elif backend == "gemini":
+                    classifier = GeminiClassifier()
+                elif backend == "semantic":
+                    classifier = SemanticClassifier()
+                else:
                     raise ValueError("Unknown COST_GUARD_BACKEND")
-                classifier = GeminiClassifier() if backend == "gemini" else SemanticClassifier()
                 _guard = CostGuard(classifier)
             except Exception:
                 _retry_at = time.monotonic() + 60

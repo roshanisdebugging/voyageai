@@ -524,9 +524,23 @@ class MockAIProvider(AIProviderInterface):
                     ]
                 })
 
+        origin = ai_input.get("origin") or {}
+        transport = []
+        if origin.get("name"):
+            transport.append({
+                "mode": "TRAIN",
+                "description": f"MOCK train {origin['name']} → {dest_name}",
+                "fromLocation": f"{origin['name']} Railway Station",
+                "toLocation": f"{dest_name} Railway Station",
+                "estimatedFareInr": 800,
+                "durationText": "MOCK",
+                "reason": "MOCK suggestion (AI_PROVIDER=mock)",
+            })
+
         return json.dumps({
             "title": f"{dest_name} Custom Tour Package",
-            "days": days_list
+            "days": days_list,
+            "transportSuggestions": transport,
         })
 
     def generate_swap_recommendations(self, current_activity: Dict[str, Any], trip_context: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -715,7 +729,7 @@ class MockAIProvider(AIProviderInterface):
         return optimized
 
     def generate_budget_optimization(self, trip_budget: Dict[str, Any], current_costs: Dict[str, Any], activities: List[Dict[str, Any]]) -> Dict[str, Any]:
-        target_budget = trip_budget.get("targetAmount", 30000)
+        target_budget = trip_budget.get("targetAmount") or 0
         current_projected = current_costs.get("totalProjected", 35000)
         savings_needed = max(0, current_projected - target_budget)
 
@@ -1058,9 +1072,9 @@ Output ONLY valid JSON:
         prompt = f"""You are VoyageAI's Budget Optimization Specialist. Identify disproportionately expensive activities in the itinerary and propose lower-cost, high-value alternatives to meet the target budget.
 
 FINANCIAL SNAPSHOT:
-- Target Budget: ₹{trip_budget.get('targetAmount', 30000)}
+- Target Budget: ₹{(trip_budget.get('targetAmount') or 0)}
 - Current Total Projected: ₹{current_costs.get('totalProjected', 35000)}
-- Deficit to Cut: ₹{max(0, current_costs.get('totalProjected', 35000) - trip_budget.get('targetAmount', 30000))}
+- Deficit to Cut: ₹{max(0, current_costs.get('totalProjected', 35000) - (trip_budget.get('targetAmount') or 0))}
 
 SCHEDULED ACTIVITIES:
 {json.dumps(activities, indent=2)}
@@ -1073,8 +1087,8 @@ INSTRUCTIONS:
 Output ONLY valid JSON:
 {{
   "currentProjectedCost": {current_costs.get('totalProjected', 35000)},
-  "targetBudget": {trip_budget.get('targetAmount', 30000)},
-  "savingsRequired": {max(0, current_costs.get('totalProjected', 35000) - trip_budget.get('targetAmount', 30000))},
+  "targetBudget": {(trip_budget.get('targetAmount') or 0)},
+  "savingsRequired": {max(0, current_costs.get('totalProjected', 35000) - (trip_budget.get('targetAmount') or 0))},
   "recommendations": [
     {{
       "type": "REPLACE_ACTIVITY",
@@ -1117,7 +1131,7 @@ CURRENT ACTIVITIES:
 {json.dumps(activities, indent=2)}
 
 INSTRUCTIONS:
-1. Flag ONLY activities genuinely compromised by the forecast condition.
+1. Flag ONLY outdoor activities whose `date` is in `badWeatherDates` and that the forecast for that day genuinely compromises.
 2. Provide an indoor alternative in the same general neighborhood matching the original time slot.
 3. Retain exact `activityId` from the input for tracking.
 
@@ -1195,12 +1209,74 @@ Generate structured actions to execute. Return ONLY valid JSON matching this sch
         raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_refinement_actions result")
 
 
-def get_ai_provider() -> AIProviderInterface:
-    provider_type = os.getenv("AI_PROVIDER", "gemini").lower().strip()
+class GroqProvider(GeminiProvider):
+    """
+    Same prompts and parsing as GeminiProvider; only the model call goes to Groq
+    (GROQ_MODEL, default openai/gpt-oss-120b) in JSON mode.
+    """
+    def _execute_gemini_request(self, prompt: str, temperature: float = 0.2, timeout: int = 25) -> str:
+        from groq_client import groq_json
+        raw_text = groq_json(prompt, temperature=temperature, timeout=max(timeout, 30))
+        if raw_text.startswith("```"):
+            raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text, flags=re.IGNORECASE)
+            raw_text = re.sub(r"\n?```$", "", raw_text)
+        return raw_text
+
+
+class FallbackAIProvider:
+    """
+    Tries each provider in order and returns the first success.
+    Used for AI_PROVIDER=groq: Groq first, Gemini as the backup when Groq fails
+    or hits its free-tier limit. Never falls back to mock data.
+    """
+    def __init__(self, providers: List[AIProviderInterface]):
+        self.providers = providers
+
+    def __getattr__(self, name: str):
+        def call(*args, **kwargs):
+            last_error: Optional[Exception] = None
+            for provider in self.providers:
+                try:
+                    return getattr(provider, name)(*args, **kwargs)
+                except Exception as err:
+                    last_error = err
+                    logger.warning(f"[AI FALLBACK] {provider.__class__.__name__}.{name} failed: {err}")
+            raise RuntimeError(f"AI_GENERATION_ERROR: all providers failed ({last_error})")
+        return call
+
+
+def ai_provider_name() -> str:
+    """The configured provider setting: groq (default), gemini or mock."""
+    return os.getenv("AI_PROVIDER", "groq").lower().strip()
+
+
+def get_ai_provider():
+    provider_type = ai_provider_name()
     if provider_type == "mock":
         return MockAIProvider()
-    else:
+    if provider_type == "gemini":
         return GeminiProvider()
+    return FallbackAIProvider([GroqProvider(), GeminiProvider()])
+
+
+def complete_json(prompt: str, temperature: float = 0.3, timeout: int = 25) -> str:
+    """
+    One JSON-mode completion through the configured provider chain
+    (Groq, then Gemini as backup). For call sites that build their own prompt.
+    Raises RuntimeError if every provider fails, and in mock mode.
+    """
+    provider_type = ai_provider_name()
+    if provider_type == "mock":
+        raise RuntimeError("AI_PROVIDER=mock: no live completion available")
+    chain = [GeminiProvider()] if provider_type == "gemini" else [GroqProvider(), GeminiProvider()]
+    last_error: Optional[Exception] = None
+    for provider in chain:
+        try:
+            return provider._execute_gemini_request(prompt, temperature=temperature, timeout=timeout)
+        except Exception as err:
+            last_error = err
+            logger.warning(f"[AI FALLBACK] {provider.__class__.__name__} completion failed: {err}")
+    raise RuntimeError(f"AI_GENERATION_ERROR: all providers failed ({last_error})")
 
 
 class DynamicAIProviderProxy:

@@ -115,7 +115,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 import { useTrip } from '../features/trip/TripContext';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { currentTrip } = useTrip();
+  const { currentTrip, expenses: tripExpenses } = useTrip();
 
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [tripView, setTripView] = useState<TripView>('home');
@@ -130,14 +130,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: currentTrip.id,
         title: currentTrip.title,
         destination: currentTrip.destination?.name || currentTrip.title,
-        budgetTotal: currentTrip.budgetLevel === 'LUXURY' ? 75000 : currentTrip.budgetLevel === 'MODERATE' ? 35000 : 15000,
-        budgetSpent: currentTrip.progress?.completedActivitiesCount ? currentTrip.progress.completedActivitiesCount * 1200 : 8500,
+        // Real numbers only: the trip's budget amount (0 if none) and the sum of its logged expenses.
+        budgetTotal: currentTrip.budget?.targetAmount ?? 0,
+        budgetSpent: tripExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
         travellersCount: currentTrip.travelers?.length || 2,
         currentDay: currentTrip.progress?.currentDay || 1,
       } as unknown as Trip;
     }
     return null as unknown as Trip;
-  }, [currentTrip]);
+  }, [currentTrip, tripExpenses]);
 
   const setActiveTrip = useCallback(() => {
     console.warn('[AppContext] setActiveTrip called. TripContext is the single source of truth for active trip state.');

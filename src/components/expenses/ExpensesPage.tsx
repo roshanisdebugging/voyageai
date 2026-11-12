@@ -35,9 +35,10 @@ export const ExpensesPage: React.FC = () => {
   ];
 
   const totalSpent = combinedExpenses.reduce((acc, e) => acc + e.amount, 0);
-  const targetBudget = 30000;
+  // The trip's real budget amount; 0 when the trip has none.
+  const targetBudget = currentTrip?.budget?.targetAmount ?? 0;
   const budgetRemaining = Math.max(0, targetBudget - totalSpent);
-  const progressPct = Math.min(100, Math.round((totalSpent / targetBudget) * 100));
+  const progressPct = targetBudget > 0 ? Math.min(100, Math.round((totalSpent / targetBudget) * 100)) : 0;
 
   // Category totals breakdown
   const categoryTotals: Record<string, number> = {
@@ -139,7 +140,7 @@ export const ExpensesPage: React.FC = () => {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs font-bold">
             <span className="text-[#5F6863]">Budget Spent ({progressPct}%)</span>
-            <span className="text-[#355F58] font-mono">Target: ₹{targetBudget.toLocaleString()}</span>
+            <span className="text-[#355F58] font-mono">{targetBudget > 0 ? `Target: ₹${targetBudget.toLocaleString()}` : 'No budget set'}</span>
           </div>
           <div className="w-full bg-[#F0F2EF] h-2.5 rounded-full overflow-hidden p-0.5 border border-[#D9DEDA]">
             <div

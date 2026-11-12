@@ -3,6 +3,7 @@ Shared trip creation and serialization.
 
 REST (POST /api/trips) and the WebSocket action trips:create both call
 create_trip_for_user, so validation, limits and queueing behave the same way.
+The voice agent's create_trip tool must call it too.
 """
 import json
 import uuid
@@ -13,19 +14,43 @@ from sqlalchemy.orm import Session
 
 from media_service import media_service
 from models import AuthUser, UserPreferences, UserProfile
+from models_place import CityModel, city_to_dict, get_or_create_city
 from models_trip import TripModel
 from places import validate_destination_payload
 from task_queue import enqueue_itinerary_generation
 
 MAX_TRIP_DAYS = 30
 MAX_TRAVELERS = 20
+MIN_BUDGET_INR = 1000
+MAX_BUDGET_INR = 10_000_000
+
+# Budget level from rupees per person per day. A child counts as half a person.
+# The level is never shown to the user; it only steers the itinerary prompt and cache.
+BUDGET_LEVEL_THRESHOLDS = [
+    (2500, "BUDGET"),
+    (6000, "MODERATE"),
+    (12000, "PREMIUM"),
+]
 
 
 class TripValidationError(ValueError):
     """Bad trip input. The message is safe to show to the user."""
 
 
-def serialize_trip(trip: TripModel) -> Dict[str, Any]:
+def budget_level_for(amount_inr: float, days: int, adults: int, children: int) -> str:
+    people = max(1.0, adults + 0.5 * children)
+    per_person_per_day = amount_inr / (people * max(1, days))
+    for limit, level in BUDGET_LEVEL_THRESHOLDS:
+        if per_person_per_day < limit:
+            return level
+    return "LUXURY"
+
+
+def serialize_trip(trip: TripModel, db: Optional[Session] = None) -> Dict[str, Any]:
+    origin = None
+    if trip.origin_city_id and db is not None:
+        origin = city_to_dict(db.query(CityModel).filter(CityModel.id == trip.origin_city_id).first())
+    travelers = trip.travelers or []
     return {
         "id": trip.id,
         "userId": trip.user_id,
@@ -36,8 +61,11 @@ def serialize_trip(trip: TripModel) -> Dict[str, Any]:
         "endDate": trip.end_date,
         "totalDays": trip.total_days,
         "destination": trip.destination,
+        "origin": origin,
         "coverMedia": trip.cover_media,
-        "travelers": trip.travelers,
+        "travelers": travelers,
+        "adultsCount": sum(1 for t in travelers if t.get("type") != "CHILD"),
+        "childrenCount": sum(1 for t in travelers if t.get("type") == "CHILD"),
         "preferencesSnapshot": trip.preferences_snapshot,
         "budget": trip.budget,
         "progress": trip.progress,
@@ -46,14 +74,29 @@ def serialize_trip(trip: TripModel) -> Dict[str, Any]:
     }
 
 
-def _parse_travelers_count(raw: Any) -> int:
+def _parse_int(raw: Any, field: str) -> int:
     try:
-        count = int(raw if raw is not None else 2)
+        return int(raw)
     except (TypeError, ValueError):
-        raise TripValidationError("Number of travelers must be a whole number.")
-    if not 1 <= count <= MAX_TRAVELERS:
-        raise TripValidationError(f"Number of travelers must be between 1 and {MAX_TRAVELERS}.")
-    return count
+        raise TripValidationError(f"{field} must be a whole number.")
+
+
+def _parse_travelers(trip_data: Dict[str, Any]) -> tuple[int, int]:
+    """Adults and children. Older clients send only travelersCount (all adults)."""
+    if trip_data.get("adultsCount") is not None:
+        adults = _parse_int(trip_data.get("adultsCount"), "Number of adults")
+        children = _parse_int(trip_data.get("childrenCount") or 0, "Number of children")
+    else:
+        adults = _parse_int(trip_data.get("travelersCount") if trip_data.get("travelersCount") is not None else 2,
+                            "Number of travelers")
+        children = 0
+    if adults < 1:
+        raise TripValidationError("At least one adult must travel.")
+    if children < 0:
+        raise TripValidationError("Number of children cannot be negative.")
+    if adults + children > MAX_TRAVELERS:
+        raise TripValidationError(f"A trip can have at most {MAX_TRAVELERS} travelers.")
+    return adults, children
 
 
 def _parse_dates(trip_data: Dict[str, Any]) -> tuple[str, str, int]:
@@ -73,6 +116,23 @@ def _parse_dates(trip_data: Dict[str, Any]) -> tuple[str, str, int]:
     if total_days > MAX_TRIP_DAYS:
         raise TripValidationError(f"Trips can be at most {MAX_TRIP_DAYS} days long.")
     return start.isoformat(), end.isoformat(), total_days
+
+
+def _parse_place(raw: Any, label: str) -> Dict[str, Any]:
+    place = {"name": raw, "country": "India"} if isinstance(raw, str) else (raw or {})
+    is_valid, err_msg = validate_destination_payload(place)
+    if not is_valid:
+        raise TripValidationError(f"{label}: {err_msg}")
+    return place
+
+
+def _parse_budget_amount(raw: Any) -> Optional[int]:
+    if raw in (None, ""):
+        return None
+    amount = _parse_int(raw, "Budget amount")
+    if not MIN_BUDGET_INR <= amount <= MAX_BUDGET_INR:
+        raise TripValidationError(f"Budget must be between ₹{MIN_BUDGET_INR:,} and ₹{MAX_BUDGET_INR:,}.")
+    return amount
 
 
 def create_trip_for_user(
@@ -98,29 +158,37 @@ def create_trip_for_user(
             .first()
         )
         if existing:
-            return serialize_trip(existing)
+            return serialize_trip(existing, db)
 
-    destination = trip_data.get("destination") or {}
-    if isinstance(destination, str):
-        destination = {"name": destination, "country": "India"}
-    is_valid, err_msg = validate_destination_payload(destination)
-    if not is_valid:
-        raise TripValidationError(err_msg)
+    destination = _parse_place(trip_data.get("destination"), "Destination")
     dest_name = destination["name"].strip()
 
+    origin_city = None
+    if trip_data.get("origin"):
+        origin_city = get_or_create_city(db, _parse_place(trip_data.get("origin"), "Starting city"))
+
     start_date, end_date, total_days = _parse_dates(trip_data)
-    travelers_count = _parse_travelers_count(trip_data.get("travelersCount"))
+    adults, children = _parse_travelers(trip_data)
+    budget_amount = _parse_budget_amount(trip_data.get("budgetAmount", trip_data.get("customBudgetAmount")))
+
+    if budget_amount is not None:
+        budget_level = budget_level_for(budget_amount, total_days, adults, children)
+    else:
+        budget_level = trip_data.get("budgetLevel") or prefs.budgetLevel or "MODERATE"
 
     first_name = user_profile.firstName if user_profile else "Me"
     avatar = user_profile.avatarUrl if user_profile else None
     travelers = [
         {
             "id": f"tr_{idx + 1}",
-            "name": first_name if idx == 0 else f"Companion {idx + 1}",
+            "name": first_name if idx == 0 else f"Adult {idx + 1}",
             "type": "ADULT",
             "avatarUrl": avatar if idx == 0 else None,
         }
-        for idx in range(travelers_count)
+        for idx in range(adults)
+    ] + [
+        {"id": f"tr_{adults + idx + 1}", "name": f"Child {idx + 1}", "type": "CHILD", "avatarUrl": None}
+        for idx in range(children)
     ]
 
     pref_snapshot = {
@@ -130,12 +198,12 @@ def create_trip_for_user(
         "dietaryPreferences": prefs.dietaryPreferences,
         "foodInterests": prefs.foodInterests,
         "activityInterests": prefs.activityInterests,
-        "budgetLevel": prefs.budgetLevel,
+        "budgetLevel": budget_level,
     }
 
     budget = {
-        "level": trip_data.get("budgetLevel") or prefs.budgetLevel or "MODERATE",
-        "targetAmount": 30000,
+        "level": budget_level,
+        "targetAmount": budget_amount,  # None when the user gave no amount
         "currency": "INR",
     }
 
@@ -144,6 +212,7 @@ def create_trip_for_user(
         id=f"trip_{uuid.uuid4().hex[:12]}",
         user_id=auth_user.id,
         client_request_id=client_req_id,
+        origin_city_id=origin_city.id if origin_city else None,
         title=f"{dest_name} Tour Package",
         status="PLANNING",
         itinerary_status="GENERATING",
@@ -169,4 +238,4 @@ def create_trip_for_user(
     print(f"[TRIP CREATED] {trip.id} '{trip.title}' ({total_days} days) for user {auth_user.id}", flush=True)
 
     enqueue_itinerary_generation(trip.id)
-    return serialize_trip(trip)
+    return serialize_trip(trip, db)

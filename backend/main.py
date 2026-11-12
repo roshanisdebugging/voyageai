@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 import json
 import os
 import uuid
-import requests
 from datetime import datetime, timezone
 
 from database import get_db, SessionLocal, engine, Base, get_db_context, get_db_pool_status
@@ -911,6 +910,7 @@ WS_TRIP_ACTIONS = {
     "trips:get_expenses", "trips:add_expense",
     "trips:weather_replan", "trips:optimize_day", "trips:optimize_budget",
     "trips:refine", "trips:regenerate_itinerary", "trips:swap_activity",
+    "trips:set_activity_done",
 }
 
 # (bucket, requests per minute) per action. Anything not listed uses "general".
@@ -1137,7 +1137,7 @@ async def process_ws_action(
     # 4. Trip Domain Actions
     elif reqname == "trips:list":
         db_trips = db.query(TripModel).filter(TripModel.user_id == user.id).all()
-        return [serialize_trip(t) for t in db_trips]
+        return [serialize_trip(t, db) for t in db_trips]
 
     elif reqname == "trips:create":
         auth_user, user_profile, user_prefs = session
@@ -1191,7 +1191,8 @@ async def process_ws_action(
                         "estimatedCost": getattr(a, "estimated_cost_inr", getattr(a, "estimated_cost", 0)),
                         "activityType": a.activity_type,
                         "bookingRequired": getattr(a, "booking_required", False),
-                        "isConfirmed": getattr(a, "is_confirmed", False)
+                        "isConfirmed": getattr(a, "is_confirmed", False),
+                        "isDone": bool(getattr(a, "is_done", False))
                     }
                     for a in acts
                 ]
@@ -1433,6 +1434,27 @@ async def process_ws_action(
             db.commit()
             enqueue_itinerary_generation(trip_id)
         return {"status": "GENERATING", "tripId": trip_id}
+
+    elif reqname == "trips:set_activity_done":
+        owned = find_owned_activity(db, data.get("activity_id") or data.get("activityId"), user.id)
+        if not owned or owned[1].id != data["trip_id"]:
+            raise LookupError("Activity not found")
+        activity, trip = owned
+        activity.is_done = bool(data.get("done", True))
+        db.flush()  # the session doesn't autoflush; count must see this change
+        trip_activities = (
+            db.query(ItineraryActivityModel.is_done)
+            .join(ItineraryDayModel, ItineraryDayModel.id == ItineraryActivityModel.day_id)
+            .join(ItineraryModel, ItineraryModel.id == ItineraryDayModel.itinerary_id)
+            .filter(ItineraryModel.trip_id == trip.id)
+            .all()
+        )
+        progress = dict(trip.progress or {})
+        progress["completedActivitiesCount"] = sum(1 for (done,) in trip_activities if done)
+        progress["totalActivitiesCount"] = len(trip_activities)
+        trip.progress = progress
+        db.commit()
+        return {"activityId": activity.id, "isDone": activity.is_done, "progress": progress}
 
     elif reqname == "trips:swap_activity":
         trip_id = data.get("trip_id") or data.get("tripId")
@@ -2347,7 +2369,6 @@ class SwapRecommendationRequest(BaseModel):
 
 @app.post("/api/trips/itinerary/swap-options", dependencies=[Depends(ai_trip_limiter)])
 def get_swap_options(req: SwapRecommendationRequest):
-    api_key = os.getenv("GEMINI_API_KEY")
     dest_clean = (req.destination or "Jaipur").strip().title()
     title_clean = (req.activity_title or "Activity").strip()
     cat_clean = req.category or "Sights"
@@ -2377,37 +2398,15 @@ def get_swap_options(req: SwapRecommendationRequest):
     }}
     """
 
-    if api_key:
-        model_candidates = [
-            "gemini-3.5-flash-lite",
-            "gemini-flash-lite-latest",
-            "gemini-3.8-flash",
-            "gemini-3.7-flash",
-        ]
-        for m_name in model_candidates:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "response_mime_type": "application/json",
-                        "temperature": 0.3,
-                        "maxOutputTokens": 1500
-                    }
-                }
-                res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=12.0)
-                if res.status_code == 200:
-                    res_json = res.json()
-                    candidates = res_json.get("candidates", [])
-                    if candidates and "content" in candidates[0]:
-                        text = candidates[0]["content"]["parts"][0]["text"].strip()
-                        parsed = json.loads(text)
-                        if isinstance(parsed, dict) and "alternatives" in parsed:
-                            return parsed
-            except Exception as e:
-                print(f"[SWAP OPTIONS GEMINI WARN] Model {m_name} error: {e}", flush=True)
+    try:
+        from ai_provider import complete_json
+        parsed = json.loads(complete_json(prompt, temperature=0.3, timeout=12))
+        if isinstance(parsed, dict) and "alternatives" in parsed:
+            return parsed
+    except Exception as e:
+        print(f"[SWAP OPTIONS AI WARN] {e}", flush=True)
 
-    # Explicit loud mock fallback options if Gemini is unavailable
+    # Explicit loud mock fallback options if every AI provider is unavailable
     return {
         "is_mock": True,
         "alternatives": [
@@ -2745,7 +2744,8 @@ def get_trip_by_id(
                             "latitude": a.latitude,
                             "longitude": a.longitude,
                             "estimatedCostInr": a.estimated_cost_inr,
-                            "isConfirmed": a.is_confirmed
+                            "isConfirmed": a.is_confirmed,
+                            "isDone": bool(a.is_done)
                         }
                         for a in db.query(ItineraryActivityModel).filter(ItineraryActivityModel.day_id == d.id).all()
                     ]
@@ -2766,6 +2766,10 @@ def get_trip_by_id(
         "endDate": trip.end_date,
         "totalDays": trip.total_days,
         "destination": trip.destination,
+        "origin": serialize_trip(trip, db)["origin"],
+        "travelers": trip.travelers,
+        "adultsCount": sum(1 for t in (trip.travelers or []) if t.get("type") != "CHILD"),
+        "childrenCount": sum(1 for t in (trip.travelers or []) if t.get("type") == "CHILD"),
         "coverMedia": trip.cover_media,
         "preferencesSnapshot": trip.preferences_snapshot,
         "budget": trip.budget,
@@ -2871,6 +2875,7 @@ def build_trip_export_payload(trip_id: str, db: Session) -> dict:
                     "longitude": a.longitude,
                     "estimatedCostInr": cost,
                     "isConfirmed": a.is_confirmed,
+                    "isDone": bool(a.is_done),
                     "bookingRequired": a.booking_required,
                     "bookingReferenceId": a.booking_reference_id
                 })
@@ -3258,7 +3263,8 @@ def get_itinerary(
                     "longitude": a.longitude,
                     "estimatedCostInr": a.estimated_cost_inr,
                     "bookingRequired": a.booking_required,
-                    "isConfirmed": a.is_confirmed
+                    "isConfirmed": a.is_confirmed,
+                    "isDone": bool(a.is_done)
                 })
 
             days_data.append({

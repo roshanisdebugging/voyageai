@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useToast } from '../common/UndoToast';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
@@ -31,6 +32,8 @@ export const ExplorePage: React.FC = () => {
 
   // Active Category filter
   const [activeCategory, setActiveCategory] = useState<string>('All');
+  const { showToast } = useToast();
+  const handleToggleSaveRef = useRef<(item: ActivityItem, fromUndo?: boolean) => Promise<void>>(async () => {});
 
   // Spotlight Data fetched from backend or dynamic fallback
   const activeDestinationName = (contextMode === 'trip' && currentTrip?.destination?.name)
@@ -68,15 +71,14 @@ export const ExplorePage: React.FC = () => {
     };
   }, []);
 
-  const handleToggleSave = async (item: ActivityItem) => {
+  const handleToggleSave = async (item: ActivityItem, fromUndo = false) => {
     const isSaved = savedPlaceIds.has(item.id);
-    const nextSet = new Set(savedPlaceIds);
-    if (isSaved) {
-      nextSet.delete(item.id);
-    } else {
-      nextSet.add(item.id);
-    }
-    setSavedPlaceIds(nextSet);
+    setSavedPlaceIds(prev => {
+      const next = new Set(prev);
+      if (isSaved) next.delete(item.id);
+      else next.add(item.id);
+      return next;
+    });
 
     try {
       if (isSaved) {
@@ -95,10 +97,32 @@ export const ExplorePage: React.FC = () => {
           description: item.description,
         });
       }
+      if (!fromUndo) {
+        showToast({
+          message: isSaved ? `Removed ${item.title} from saved places` : `Saved ${item.title}`,
+          undo: () => handleToggleSaveRef.current(item, true),
+        });
+      }
     } catch (err) {
       console.warn('[SAVE PLACE ERROR]', err);
-      setSavedPlaceIds(savedPlaceIds);
+      setSavedPlaceIds(prev => {
+        const next = new Set(prev);
+        if (isSaved) next.add(item.id);
+        else next.delete(item.id);
+        return next;
+      });
+      showToast({ message: "Couldn't update saved places. Please try again.", tone: 'error' });
     }
+  };
+  useEffect(() => {
+    handleToggleSaveRef.current = handleToggleSave;
+  });
+
+  const changeCategory = (cat: string) => {
+    if (cat === activeCategory) return;
+    const previous = activeCategory;
+    setActiveCategory(cat);
+    showToast({ message: `Showing ${cat}`, undo: () => setActiveCategory(previous) });
   };
 
   const handleNavigate = (item: ActivityItem) => {
@@ -430,7 +454,7 @@ export const ExplorePage: React.FC = () => {
           return (
             <button
               key={cat}
-              onClick={() => setActiveCategory(cat)}
+              onClick={() => changeCategory(cat)}
               className={`press-scale shrink-0 pb-2.5 text-xs font-semibold transition-all relative ${isActive ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'
                 }`}
             >

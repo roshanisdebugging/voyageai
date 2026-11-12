@@ -115,6 +115,7 @@ def init_db():
         import models_itinerary  # itineraries, itinerary_days, itinerary_activities
         import models_package  # trip_stays, trip_transports, trip_expenses
         import models_chat     # chat_messages
+        import models_place    # cities
 
         Base.metadata.create_all(bind=engine)
 
@@ -149,6 +150,10 @@ def init_db():
                 ON trips (user_id);
 
                 ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+
+                ALTER TABLE trips ADD COLUMN IF NOT EXISTS origin_city_id VARCHAR REFERENCES cities(id);
+
+                ALTER TABLE itinerary_activities ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT FALSE;
 
                 CREATE TABLE IF NOT EXISTS saved_places (
                     id VARCHAR PRIMARY KEY,
