@@ -25,7 +25,14 @@ interface PlaceDetailSheetProps {
   onClose: () => void;
 }
 
+// The hooks live in PlaceDetailSheetBody, which only mounts when there is an item,
+// so they always run in the same order (no hooks after an early return).
 export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClose }) => {
+  if (!item) return null;
+  return <PlaceDetailSheetBody item={item} onClose={onClose} />;
+};
+
+const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => void }> = ({ item, onClose }) => {
   const { openInAppNavigation, openCabModal, openAiAssistant } = useApp();
 
   const [isSaved, setIsSaved] = useState<boolean>(false);
@@ -36,7 +43,7 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
 
   useEffect(() => {
     let active = true;
-    if (item?.id) {
+    if (item.id) {
       checkPlaceSaved(item.id).then((saved) => {
         if (active) setIsSaved(saved);
       });
@@ -46,9 +53,7 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
     return () => {
       active = false;
     };
-  }, [item?.id]);
-
-  if (!item) return null;
+  }, [item.id]);
 
   const hasCoordinates = typeof item.latitude === 'number' && typeof item.longitude === 'number' && !isNaN(item.latitude) && !isNaN(item.longitude);
 
