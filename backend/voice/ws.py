@@ -44,6 +44,7 @@ class _Conn:
     ctx: Optional[pipeline.TurnContext] = None
     turns: int = 0
     task: Optional[asyncio.Task] = None
+    conversation_ids: set = field(default_factory=set)  # agent memory to clear on end_session
 
 
 def _resolve_session(token: str) -> Optional[Tuple[str, str]]:
@@ -60,6 +61,22 @@ def _resolve_session(token: str) -> Optional[Tuple[str, str]]:
             if not record:
                 return None
             return user.id, record.id
+    except Exception:
+        return None
+
+
+def _resolve_trip(trip_id: Optional[str], user_id: str) -> Optional[pipeline.TripInfo]:
+    """The open trip for the agent, only if it is the user's own. Title and dates only."""
+    if not trip_id:
+        return None
+    import database
+    from ownership import find_owned_trip
+    try:
+        with database.SessionLocal() as db:
+            trip = find_owned_trip(db, str(trip_id)[:80], user_id)
+            if not trip:
+                return None
+            return pipeline.TripInfo(title=(trip.title or "")[:120], start_date=trip.start_date, end_date=trip.end_date)
     except Exception:
         return None
 
@@ -102,7 +119,7 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
         if result.ok:
             await run_in_threadpool(pipeline.make_reply, ctx, result)
             await _send(ws, m.reply(ctx.turn_id, result.reply_text or "", result.reply_audio_b64,
-                                    result.reply_mime, result.tts_ms))
+                                    result.reply_mime, result.tts_ms, result.ui_actions, result.action, result.llm_ms))
             if result.tts_error and result.tts_error != "tts_disabled":
                 await _send(ws, m.error(m.ErrorCode.TTS_FAILED, turn_id=ctx.turn_id))
     except Exception as err:
@@ -155,11 +172,14 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
         if limited:
             await _send(ws, m.error(limited))
             return True
+        trip = await run_in_threadpool(_resolve_trip, msg.get("trip_id"), conn.user_id)
         conn.ctx = pipeline.TurnContext(
             turn_id=pipeline.new_turn_id(), user_id=conn.user_id, session_id=conn.session_id,
             conversation_id=str(msg.get("conversation_id") or "")[:100] or None,
             screen=str(msg.get("screen") or "")[:200] or None,
+            trip=trip,
         )
+        conn.conversation_ids.add(conn.ctx.conversation_id or conn.session_id)
         conn.recording = True
         conn.auto_stopped = False
         conn.buffer = bytearray()
@@ -180,7 +200,8 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
         return True
 
     if kind == "end_session":
-        await run_in_threadpool(pipeline.end_session, conn.user_id, conn.session_id)
+        await run_in_threadpool(pipeline.end_session, conn.user_id, conn.session_id, list(conn.conversation_ids))
+        conn.conversation_ids.clear()
         return True
 
     await _send(ws, m.error(m.ErrorCode.BAD_MESSAGE))

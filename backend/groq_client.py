@@ -77,6 +77,80 @@ def groq_chat(
     return content.strip()
 
 
+def groq_chat_tools(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    *,
+    tool_choice: Any = "auto",
+    temperature: float = 0.2,
+    timeout: float = 8,
+    reasoning_effort: Optional[str] = "low",
+) -> Dict[str, Any]:
+    """
+    One chat call with function calling (OpenAI-compatible "tools").
+    Returns {"content": str | None, "tool_calls": [{"name": str, "arguments": dict}]}.
+    Raises GroqError / GroqRateLimited; a tool call with bad JSON arguments is a GroqError.
+    Error messages carry the status only, never the request or response text (voice: no words in logs).
+    """
+    import json as _json
+
+    api_key = (os.getenv("GROQ_API_KEY") or "").strip()
+    if not api_key:
+        raise GroqError("GROQ_API_KEY is not set")
+
+    model = groq_model()
+    body: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "temperature": temperature,
+    }
+    if reasoning_effort and "gpt-oss" in model:
+        body["reasoning_effort"] = reasoning_effort
+
+    try:
+        res = requests.post(
+            GROQ_CHAT_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=body,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        raise GroqError(f"Groq request failed: {type(exc).__name__}") from exc
+
+    if res.status_code == 429:
+        raise GroqRateLimited("Groq rate limit reached")
+    if res.status_code != 200:
+        raise GroqError(f"Groq HTTP {res.status_code}")
+
+    try:
+        choice = res.json()["choices"][0]
+        message = choice.get("message") or {}
+    except (ValueError, KeyError, IndexError) as exc:
+        raise GroqError("Groq returned an unexpected response") from exc
+    if choice.get("finish_reason") not in (None, "stop", "tool_calls"):
+        raise GroqError(f"Groq answer incomplete ({choice.get('finish_reason')})")
+
+    calls = []
+    for call in message.get("tool_calls") or []:
+        fn = call.get("function") or {}
+        raw_args = fn.get("arguments") or "{}"
+        try:
+            args = _json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+        except (ValueError, TypeError) as exc:
+            raise GroqError("Groq tool call had malformed arguments") from exc
+        if not isinstance(args, dict):
+            raise GroqError("Groq tool call arguments were not an object")
+        calls.append({"name": fn.get("name") or "", "arguments": args})
+
+    content = message.get("content")
+    content = content.strip() if isinstance(content, str) and content.strip() else None
+    if not calls and not content:
+        raise GroqError("Groq returned neither text nor a tool call")
+    return {"content": content, "tool_calls": calls}
+
+
 def groq_json(prompt: str, *, temperature: float = 0.2, timeout: float = 30) -> str:
     """One user prompt in, a JSON string out (Groq JSON mode)."""
     return groq_chat(

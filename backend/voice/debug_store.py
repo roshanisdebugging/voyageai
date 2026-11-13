@@ -55,6 +55,8 @@ voice_speeches = Table(
     Column("total_time_ms", Integer),
     Column("reply_text", Text),          # step 1b; the reply AUDIO is never saved
     Column("tts_time_ms", Integer),
+    Column("agent_action", Text),        # step 2: navigate:<page> | reply | error
+    Column("llm_time_ms", Integer),
     Column("status", String(16), nullable=False),
     Column("error", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -114,6 +116,8 @@ def _engine_or_create() -> Engine:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS reply_text TEXT"))
                     conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS tts_time_ms INTEGER"))
+                    conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS agent_action TEXT"))
+                    conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS llm_time_ms INTEGER"))
                 _engine = engine
     return _engine
 
@@ -170,6 +174,8 @@ def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: 
             total_time_ms=total_ms,
             reply_text=result.reply_text,
             tts_time_ms=result.tts_ms if result.reply_text is not None else None,
+            agent_action=result.action if result.reply_text is not None else None,
+            llm_time_ms=result.llm_ms if result.reply_text is not None else None,
             status="ok" if result.ok else "failed",
             error=None if result.ok else f"{result.error_code}: {result.error_detail}",
             created_at=ctx.started_at,
