@@ -3,7 +3,7 @@ import { Portal } from '../common/Portal';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { MapPin, Sparkles, Wallet, CloudRain, RefreshCw, Navigation, Car, Calendar, ArrowLeft, Download, Copy, Check, Printer, CheckCircle2, Circle, TrainFront, Plane, Bus } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { getApiBaseUrl, getAuthHeaders } from '../../config/apiConfig';
 import { useToast } from '../common/UndoToast';
 import { isPastTrip } from '../../features/trip/tripRepository';
@@ -15,7 +15,18 @@ export const ItineraryView: React.FC = () => {
   const { showToast } = useToast();
   const [doneBusyId, setDoneBusyId] = useState<string | null>(null);
 
-  const [expandedDayNumber, setExpandedDayNumber] = useState<number>(1);
+  // ?day=N (voice: "day 2 dikhao") selects that day, on load and whenever the URL changes.
+  const { search } = useLocation();
+  const dayFromUrl = (() => {
+    const day = Number(new URLSearchParams(search).get('day'));
+    return Number.isInteger(day) && day >= 1 && day <= 30 ? day : null;
+  })();
+  const [expandedDayNumber, setExpandedDayNumber] = useState<number>(dayFromUrl ?? 1);
+  const [appliedSearch, setAppliedSearch] = useState(search);
+  if (search !== appliedSearch) {
+    setAppliedSearch(search);
+    if (dayFromUrl !== null) setExpandedDayNumber(dayFromUrl);
+  }
   const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
   const [optStatusMessage, setOptStatusMessage] = useState<string | null>(null);
 

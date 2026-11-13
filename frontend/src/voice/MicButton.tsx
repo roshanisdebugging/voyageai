@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Loader2, Mic, Square } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useToast } from '../components/common/UndoToast';
@@ -7,6 +7,8 @@ import { voiceSocket, type VoiceServerMessage } from './voiceSocket';
 import { MAX_RECORDING_MS, useVoiceRecorder } from './useVoiceRecorder';
 import { TestTranscriptPanel, type PanelEntry } from './TestTranscriptPanel';
 import { replyPlayer } from './replyPlayer';
+import { runUiActions } from './uiActions';
+import { useTrip } from '../features/trip/TripContext';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
 const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
@@ -22,6 +24,8 @@ const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slic
  */
 const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { currentTrip } = useTrip();
   const { showToast } = useToast();
   const [phase, setPhase] = useState<Phase>('idle');
   const [entries, setEntries] = useState<PanelEntry[]>([]);
@@ -102,8 +106,11 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
         const turnId = msg.turn_id;
         const update = (patch: Partial<PanelEntry>) =>
           setEntries((prev) => prev.map((e) => (e.id === turnId ? { ...e, ...patch } : e)));
-        update({ replyText: msg.reply_text, ttsMs: msg.tts_ms });
+        const navTo = (msg.ui_actions || []).find((a) => a.type === 'navigate')?.to;
+        update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
         if (phaseRef.current !== 'waiting') return; // the user already moved on (e.g. started recording)
+        // Step 2: run the agent's ui_actions FIRST (e.g. open the map), then speak.
+        runUiActions(msg.ui_actions, (to) => navigate(to));
         if (!msg.reply_audio_base64) {
           setPhaseBoth('idle'); // the error ("Couldn't play the reply.") follows as its own message
           return;
@@ -139,7 +146,7 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
         }
       }
     });
-  }, [report, recorder]);
+  }, [report, recorder, navigate]);
 
   // Close the voice session and stop any reply when the button goes away (logout, leaving the app).
   useEffect(() => () => {
@@ -188,7 +195,7 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
       setPhaseBoth('idle');
       return;
     }
-    if (!voiceSocket.start(conversationId.current, location.pathname)) {
+    if (!voiceSocket.start(conversationId.current, location.pathname, currentTrip?.id ?? null)) {
       await recorder.stop();
       report('Voice connection lost. Please try again.');
       setPhaseBoth('idle');

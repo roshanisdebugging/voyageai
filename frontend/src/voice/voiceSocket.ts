@@ -20,6 +20,9 @@ export type VoiceServerMessage =
       reply_audio_base64: string | null;
       mime: string;
       tts_ms: number;
+      ui_actions?: Array<{ type: string; to?: string }>;
+      action?: string; // "navigate:<page>" | "reply" | "error"
+      llm_ms?: number;
     }
   | { type: 'error'; code: string; message: string; turn_id?: string }
   | { type: 'closed'; code: number };
@@ -126,8 +129,9 @@ class VoiceSocket {
     return true;
   }
 
-  start(conversationId: string, screen: string): boolean {
-    return this.sendJson({ type: 'start', conversation_id: conversationId, screen });
+  /** tripId: the open trip (the server ownership-checks it; not yours = none), or null. */
+  start(conversationId: string, screen: string, tripId: string | null = null): boolean {
+    return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId });
   }
 
   sendAudio(chunk: ArrayBuffer) {

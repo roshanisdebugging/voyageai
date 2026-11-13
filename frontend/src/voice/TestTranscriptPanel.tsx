@@ -18,8 +18,20 @@ export interface PanelEntry {
   replyText?: string;
   ttsMs?: number;
   totalMs?: number; // second tap -> reply starts playing
+  // Agent (step 2)
+  action?: string;  // "navigate:<page>" | "reply" | "error"
+  llmMs?: number;
+  navTo?: string;   // the route it navigated to
   at: number;
 }
+
+/** "navigate:itinerary" + "/trip/itinerary?day=2" -> "navigate itinerary · day 2" */
+const actionLabel = (action: string, navTo?: string) => {
+  const [kind, page] = action.split(':');
+  if (kind !== 'navigate') return action;
+  const day = navTo ? new URLSearchParams(navTo.split('?')[1] || '').get('day') : null;
+  return `navigate ${page}${day ? ` · day ${day}` : ''}`;
+};
 
 const seconds = (ms?: number) => (ms == null ? '–' : `${(ms / 1000).toFixed(1)} s`);
 
@@ -74,7 +86,7 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
                     <>
                       <p className="text-xs text-[#355F58] dark:text-emerald-400 leading-snug break-words">↳ {e.replyText}</p>
                       <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
-                        TTS {e.ttsMs} ms{e.totalMs != null ? ` · total ${e.totalMs} ms (tap → sound)` : ''}
+                        {e.action ? `→ ${actionLabel(e.action, e.navTo)} · ` : ''}{e.llmMs != null ? `LLM ${e.llmMs} ms · ` : ''}TTS {e.ttsMs} ms{e.totalMs != null ? ` · total ${e.totalMs} ms (tap → sound)` : ''}
                       </p>
                     </>
                   )}
