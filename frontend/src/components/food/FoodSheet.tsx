@@ -58,11 +58,10 @@ export const FoodSheet: React.FC = () => {
           place_id: r.id,
           title: r.name,
           category: 'food',
-          rating: r.rating,
+          rating: r.rating ?? undefined,
           location_name: r.location,
           coordinates: r.coordinates,
-          distance_text: `${r.distanceKm} km`,
-          cost_text: r.priceRange,
+          distance_text: r.distanceKm != null ? `${r.distanceKm} km` : undefined,
         });
       }
       if (!fromUndo) {
@@ -85,9 +84,6 @@ export const FoodSheet: React.FC = () => {
 
   const [dynamicRestaurants, setDynamicRestaurants] = useState<RestaurantPlace[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [filter, setFilter] = useState<'All' | 'Local Special' | 'Pure Veg'>('All');
-
-  const categories = ['All', 'Local Special', 'Pure Veg'] as const;
 
   useEffect(() => {
     if (!isFoodSheetOpen) return;
@@ -105,19 +101,22 @@ export const FoodSheet: React.FC = () => {
       .then(data => {
         const rawItems = Array.isArray(data) ? data : (data.places || data.results || []);
         if (Array.isArray(rawItems) && rawItems.length > 0) {
-          const formatted: RestaurantPlace[] = rawItems.map((p: any, idx: number) => ({
-            id: p.id || `food-${idx}`,
-            name: p.name || 'Local Eatery',
-            rating: p.rating || 4.5,
-            cuisine: p.cuisine ? (Array.isArray(p.cuisine) ? p.cuisine : [p.cuisine]) : ['Local Dining', 'Regional Food'],
-            priceRange: p.price_approx || '₹₹',
-            location: p.address || p.description || activeDestName,
-            coordinates: [p.latitude || activeDestCoords[0], p.longitude || activeDestCoords[1]],
-            distanceKm: p.distance_meters ? Number((p.distance_meters / 1000).toFixed(1)) : 1.2,
-            openingHours: '10:00 AM – 11:00 PM',
-            photos: p.photos && p.photos.length > 0 ? p.photos : ['https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=800&q=80'],
-            dietary: ['Vegetarian Friendly', 'Dine-in']
-          }));
+          // Only what the place search returned: no made-up rating, price, hours, diet or photo.
+          const formatted: RestaurantPlace[] = rawItems
+            .filter((p: any) => p.name && p.latitude != null && p.longitude != null)
+            .map((p: any, idx: number) => {
+              const meters = p.distanceMeters ?? p.distance_meters;
+              return {
+                id: p.id || `food-${idx}`,
+                name: p.name,
+                rating: typeof p.rating === 'number' ? p.rating : null,
+                cuisine: p.cuisine ? (Array.isArray(p.cuisine) ? p.cuisine : [p.cuisine]) : (p.category ? [p.category] : []),
+                location: p.address || '',
+                coordinates: [p.latitude, p.longitude] as [number, number],
+                distanceKm: typeof meters === 'number' ? Number((meters / 1000).toFixed(1)) : null,
+                photos: Array.isArray(p.photos) ? p.photos : [],
+              };
+            });
           setDynamicRestaurants(formatted);
         } else {
           setDynamicRestaurants([]);
@@ -130,11 +129,7 @@ export const FoodSheet: React.FC = () => {
       .finally(() => setIsLoading(false));
   }, [isFoodSheetOpen, activeDestCoords, activeDestName]);
 
-  const displayRestaurants = dynamicRestaurants.filter(r => {
-    if (filter === 'Local Special') return r.cuisine.some(c => c.toLowerCase().includes('local') || c.toLowerCase().includes('special') || c.toLowerCase().includes('thali') || c.toLowerCase().includes('signature'));
-    if (filter === 'Pure Veg') return (r.dietary || []).some(d => d.toLowerCase().includes('veg'));
-    return true;
-  });
+  const displayRestaurants = dynamicRestaurants;
 
   return (
     <BottomSheet
@@ -150,22 +145,11 @@ export const FoodSheet: React.FC = () => {
             <span>Fetching live nearby dining spots for {activeDestName}...</span>
           </div>
         )}
-        {/* Category Pills */}
-        <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
-          {categories.map(cat => (
-            <button
-              key={cat}
-              onClick={() => setFilter(cat)}
-              className={`press-scale shrink-0 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                filter === cat
-                  ? 'bg-teal-500 text-slate-950 shadow-md shadow-teal-500/20'
-                  : 'bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10'
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
+        {!isLoading && displayRestaurants.length === 0 && (
+          <p className="py-6 text-center text-xs text-slate-400">
+            {activeDestCoords ? 'No restaurants found nearby.' : 'Turn on location or open a trip to see restaurants nearby.'}
+          </p>
+        )}
 
         {/* Restaurant Cards List */}
         <div className="space-y-3">
@@ -174,13 +158,15 @@ export const FoodSheet: React.FC = () => {
             return (
               <div key={r.id} className="surface-card p-4 space-y-3">
                 <div className="flex gap-3">
-                  <img
-                    src={r.photos[0]}
-                    alt={r.name}
-                    className="w-20 h-20 rounded-xl object-cover shrink-0 bg-slate-800"
-                    loading="lazy"
-                    decoding="async"
-                  />
+                  {r.photos[0] && (
+                    <img
+                      src={r.photos[0]}
+                      alt={r.name}
+                      className="w-20 h-20 rounded-xl object-cover shrink-0 bg-slate-800"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between">
                       <h4 className="font-bold text-base text-white truncate">{r.name}</h4>
@@ -197,18 +183,20 @@ export const FoodSheet: React.FC = () => {
 
                     <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
                       <MapPin className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                      {r.location} · <span className="font-mono text-teal-300">{r.distanceKm} km</span>
+                      {r.location}{r.distanceKm != null && <> · <span className="font-mono text-teal-300">{r.distanceKm} km</span></>}
                     </p>
 
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className="text-xs font-bold text-amber-400 flex items-center gap-1">
-                        <Star className="w-3.5 h-3.5 fill-amber-400" /> {r.rating}
-                      </span>
-                      <span className="text-xs text-slate-400">•</span>
-                      <span className="text-xs font-mono font-bold text-teal-400">{r.priceRange}</span>
-                      <span className="text-xs text-slate-400">•</span>
-                      <span className="text-xs text-slate-300 truncate">{r.cuisine.join(', ')}</span>
-                    </div>
+                    {(r.rating != null || r.cuisine.length > 0) && (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        {r.rating != null && (
+                          <span className="text-xs font-bold text-amber-400 flex items-center gap-1">
+                            <Star className="w-3.5 h-3.5 fill-amber-400" /> {r.rating}
+                          </span>
+                        )}
+                        {r.rating != null && r.cuisine.length > 0 && <span className="text-xs text-slate-400">•</span>}
+                        {r.cuisine.length > 0 && <span className="text-xs text-slate-300 truncate">{r.cuisine.join(', ')}</span>}
+                      </div>
+                    )}
                   </div>
                 </div>
 

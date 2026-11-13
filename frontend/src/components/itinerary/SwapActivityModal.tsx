@@ -207,7 +207,7 @@ export const SwapActivityModal: React.FC = () => {
                         {opt.cost > 0 ? `₹${opt.cost}` : 'Free'}
                       </span>
                       <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1 mt-0.5 justify-end">
-                        <Clock className="w-3 h-3 text-slate-400" /> {opt.duration || '2 hrs'}
+                        <Clock className="w-3 h-3 text-slate-400" /> {opt.duration || '—'}
                       </span>
                     </div>
                   </div>

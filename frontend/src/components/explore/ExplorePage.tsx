@@ -589,9 +589,11 @@ export const ExplorePage: React.FC = () => {
                       <span className="px-2.5 py-1 rounded-lg bg-white/90 backdrop-blur-md text-[11px] font-semibold text-gray-600 border border-white/40 flex items-center gap-1">
                         <Clock className="w-3 h-3 text-gray-500" /> {act.duration}
                       </span>
-                      <span className="px-2.5 py-1 rounded-lg bg-white/90 backdrop-blur-md text-[11px] font-semibold text-amber-600 border border-white/40 flex items-center gap-1">
-                        <Star className="w-3 h-3 fill-amber-500" /> {act.rating || 4.8}
-                      </span>
+                      {act.rating ? (
+                        <span className="px-2.5 py-1 rounded-lg bg-white/90 backdrop-blur-md text-[11px] font-semibold text-amber-600 border border-white/40 flex items-center gap-1">
+                          <Star className="w-3 h-3 fill-amber-500" /> {act.rating}
+                        </span>
+                      ) : null}
                     </div>
 
                     {/* Title & Location Overlay */}

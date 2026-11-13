@@ -1,15 +1,13 @@
+/** A nearby restaurant. Only values the place search actually returned; unknown ones are left out. */
 export interface RestaurantPlace {
   id: string;
   name: string;
-  rating: number;
+  rating?: number | null;
   cuisine: string[];
-  priceRange: string;
   location: string;
   coordinates: [number, number];
-  distanceKm: number;
-  openingHours: string;
+  distanceKm?: number | null;
   photos: string[];
-  dietary: string[];
 }
 
 export interface HotelPlace {

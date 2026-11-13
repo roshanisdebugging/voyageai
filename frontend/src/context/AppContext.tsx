@@ -1,13 +1,9 @@
 import React, { createContext, useContext, useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import type {
-  NavTab, TripView, AppUIState, Trip, Hotel, Restaurant, ExperienceActivity,
-  Booking, Expense, UserProfile, NotificationItem, ActivityItem,
+  NavTab, TripView, AppUIState, Trip,
+  Booking, Expense, NotificationItem, ActivityItem,
   SwapActivityPayload, NavigationTarget
 } from '../types';
-import {
-  mockHotels, mockRestaurants, mockExperiences,
-  mockBookings, mockExpenses, mockUserProfile, mockNotifications
-} from '../data/mockData';
 
 import { ManualLocationModal } from '../components/common/ManualLocationModal';
 import { locationService, reverseGeocodeCoords, type NormalizedLocationPoint } from '../services/locationService';
@@ -33,7 +29,6 @@ interface AppContextType {
   bookings: Booking[];
   expenses: Expense[];
   notifications: NotificationItem[];
-  userProfile: UserProfile;
 
   userLocation: [number, number] | null;
   userLocationAccuracy: number | null;
@@ -57,11 +52,6 @@ interface AppContextType {
   toggleFollowMode: () => void;
   retryGPS: () => Promise<void>;
 
-  // Catalogs
-  hotels: Hotel[];
-  restaurants: Restaurant[];
-  experiences: ExperienceActivity[];
-
   // Overlays / Sheets State
   isAiOpen: boolean;
   setIsAiOpen: (open: boolean) => void;
@@ -80,8 +70,6 @@ interface AppContextType {
   setNavigationTarget: (target: NavigationTarget | null) => void;
   openInAppNavigation: (target: NavigationTarget) => void;
 
-  selectedHotel: Hotel | null;
-  setSelectedHotel: (hotel: Hotel | null) => void;
   isCabModalOpen: boolean;
   setIsCabModalOpen: (open: boolean) => void;
   cabDestination: string;
@@ -103,7 +91,6 @@ interface AppContextType {
   optimizeDayItinerary: (dayNumber: number) => void;
   removeActivity: (dayNumber: number, actId: string) => void;
   addActivityToItinerary: (dayNumber: number, activity: Omit<ActivityItem, 'id'>) => void;
-  openHotelDetail: (hotel: Hotel) => void;
   openCabModal: (destinationName?: string) => void;
   openAiAssistant: (query?: string) => void;
   markNotificationAsRead: (id: string) => void;
@@ -131,7 +118,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Real numbers only: the trip's budget amount (0 if none) and the sum of its logged expenses.
         budgetTotal: currentTrip.budget?.targetAmount ?? 0,
         budgetSpent: tripExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0),
-        travellersCount: currentTrip.travelers?.length || 2,
+        // Real count only: adults + children, else the travellers list (0 when unknown).
+        travellersCount: ((currentTrip.adultsCount ?? 0) + (currentTrip.childrenCount ?? 0)) || currentTrip.travelers?.length || 0,
         currentDay: currentTrip.progress?.currentDay || 1,
       } as unknown as Trip;
     }
@@ -142,15 +130,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     console.warn('[AppContext] setActiveTrip called. TripContext is the single source of truth for active trip state.');
   }, []);
 
-  const [bookings, setBookings] = useState<Booking[]>(mockBookings);
-  const [expenses, setExpenses] = useState<Expense[]>(mockExpenses);
-  const [notifications, setNotifications] = useState<NotificationItem[]>(mockNotifications);
-  const [userProfile] = useState<UserProfile>(mockUserProfile);
-
-  // Catalogs
-  const [hotels] = useState<Hotel[]>(mockHotels);
-  const [restaurants] = useState<Restaurant[]>(mockRestaurants);
-  const [experiences] = useState<ExperienceActivity[]>(mockExperiences);
+  // Start empty: no demo bookings, expenses or notifications. Real ones are added as they happen.
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [userLocationAccuracy, setUserLocationAccuracy] = useState<number | null>(null);
@@ -326,9 +309,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Modals & Sheets
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiPromptQuery, setAiPromptQuery] = useState('');
-  const [selectedHotel, setSelectedHotel] = useState<Hotel | null>(null);
   const [isCabModalOpen, setIsCabModalOpen] = useState(false);
-  const [cabDestination, setCabDestination] = useState('Vagator Beach Rd');
+  const [cabDestination, setCabDestination] = useState('');
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isFoodSheetOpen, setIsFoodSheetOpen] = useState(false);
@@ -404,7 +386,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     console.log('[AppContext] Activity addition delegated to TripContext.');
   }, []);
 
-  const openHotelDetail = useCallback((hotel: Hotel) => setSelectedHotel(hotel), []);
   const openCabModal = useCallback((destName?: string) => {
     if (destName) setCabDestination(destName);
     setIsCabModalOpen(true);
@@ -428,11 +409,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncUserLocation, requestGPSLocation,
       isLiveTracking, toggleLiveTracking, startLiveTracking, stopLiveTracking, liveTrackingLastUpdated,
       isFollowMode, setIsFollowMode, toggleFollowMode, retryGPS,
-      hotels, restaurants, experiences, bookings, expenses, notifications, userProfile,
+      bookings, expenses, notifications,
       isAiOpen, setIsAiOpen, aiPromptQuery, setAiPromptQuery, aiContextLabel,
       swapContext, setSwapContext, isSwapModalOpen, setIsSwapModalOpen, openSwapAssistant, closeSwapAssistant,
       navigationTarget, setNavigationTarget, openInAppNavigation,
-      selectedHotel, setSelectedHotel,
       isCabModalOpen, setIsCabModalOpen, cabDestination, setCabDestination,
       isProfileOpen, setIsProfileOpen,
       isNotificationsOpen, setIsNotificationsOpen,
@@ -440,7 +420,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isEmergencyOpen, setIsEmergencyOpen,
       addBooking, cancelBooking, addExpense,
       optimizeDayItinerary, removeActivity, addActivityToItinerary,
-      openHotelDetail, openCabModal, openAiAssistant, markNotificationAsRead
+      openCabModal, openAiAssistant, markNotificationAsRead
     }}>
       {children}
       <ManualLocationModal />

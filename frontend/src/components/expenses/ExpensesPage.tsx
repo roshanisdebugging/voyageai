@@ -9,10 +9,10 @@ import type { Expense } from '../../types';
 
 export const ExpensesPage: React.FC = () => {
   const navigate = useNavigate();
-  const { activeTrip, expenses: appExpenses, addExpense: addAppExpense, setTripView, setActiveTab, openAiAssistant } = useApp();
+  const { activeTrip, setTripView, setActiveTab, openAiAssistant } = useApp();
   const { currentTrip, expenses: tripExpenses, addExpense: addTripExpense } = useTrip();
 
-  const activeDestName = (currentTrip?.destination?.name) || (typeof activeTrip?.destination === 'string' ? activeTrip.destination : '') || 'Kerala';
+  const activeDestName = (currentTrip?.destination?.name) || (typeof activeTrip?.destination === 'string' ? activeTrip.destination : '') || 'your trip';
 
   const [showAddModal, setShowAddModal] = useState(false);
   const [title, setTitle] = useState('');
@@ -20,19 +20,18 @@ export const ExpensesPage: React.FC = () => {
   const [category, setCategory] = useState<Expense['category']>('Food');
   const [isSplit, setIsSplit] = useState(true);
 
-  // Combine persisted trip expenses with local app expenses
-  const combinedExpenses: Expense[] = [
-    ...tripExpenses.map(e => ({
-      id: e.id,
-      title: e.title,
-      amount: e.amount,
-      category: e.category,
-      date: 'Today',
-      paidBy: e.paidBy || 'Me',
-      isSplit: e.isSplit,
-    })),
-    ...appExpenses.filter(ae => !tripExpenses.some(te => te.id === ae.id)),
-  ];
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Only the trip's saved expenses, with their real date (no local copies, so nothing is counted twice).
+  const combinedExpenses: Expense[] = tripExpenses.map(e => ({
+    id: e.id,
+    title: e.title,
+    amount: e.amount,
+    category: e.category,
+    date: e.createdAt ? new Date(e.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '',
+    paidBy: e.paidBy || 'Me',
+    isSplit: e.isSplit,
+  }));
 
   const totalSpent = combinedExpenses.reduce((acc, e) => acc + e.amount, 0);
   // The trip's real budget amount; 0 when the trip has none.
@@ -59,6 +58,7 @@ export const ExpensesPage: React.FC = () => {
     if (!title || !amount) return;
     const numAmount = Number(amount);
 
+    setSaveError(null);
     try {
       await addTripExpense({
         title,
@@ -68,18 +68,10 @@ export const ExpensesPage: React.FC = () => {
         isSplit,
       });
     } catch (err) {
-      console.warn('Expense persistence error:', err);
+      // Not saved: say so and keep the form open. Never show it as if it were saved.
+      setSaveError((err as Error)?.message || 'Could not save the expense. Please try again.');
+      return;
     }
-
-    addAppExpense({
-      title,
-      amount: numAmount,
-      category,
-      date: 'Today',
-      paidBy: 'Me',
-      isSplit,
-      splitWith: isSplit ? ['Aman', 'Priya'] : undefined
-    });
 
     setTitle('');
     setAmount('');
@@ -226,8 +218,12 @@ export const ExpensesPage: React.FC = () => {
                   <h4 className="font-extrabold text-sm text-[#1F2522] truncate">{exp.title}</h4>
                   <div className="text-xs text-[#5F6863] flex items-center gap-1.5 mt-0.5">
                     <span>{exp.paidBy}</span>
-                    <span>·</span>
-                    <span>{exp.date}</span>
+                    {exp.date && (
+                      <>
+                        <span>·</span>
+                        <span>{exp.date}</span>
+                      </>
+                    )}
                     {exp.isSplit && (
                       <span className="px-1.5 py-0.5 rounded bg-[#E8F0EE] text-[#355F58] text-[10px] font-bold border border-[#D9DEDA]">
                         Split
@@ -312,6 +308,10 @@ export const ExpensesPage: React.FC = () => {
               />
               <span>Split cost evenly among trip members</span>
             </label>
+
+            {saveError && (
+              <p role="alert" className="text-xs font-semibold text-rose-700">{saveError}</p>
+            )}
 
             <div className="flex gap-2 pt-2">
               <button

@@ -129,6 +129,8 @@ export const ItineraryView: React.FC = () => {
     }
   };
 
+  // Real count only: adults + children, else the travellers list; 0 = unknown (not shown).
+  const travellerCount = ((currentTrip?.adultsCount ?? 0) + (currentTrip?.childrenCount ?? 0)) || currentTrip?.travelers?.length || 0;
   const recommendedTransport = transports.filter(t => t.status === 'RECOMMENDED');
   const transportIcon = (type: string) =>
     type === 'FLIGHT' ? <Plane className="w-4 h-4" /> : type === 'BUS' ? <Bus className="w-4 h-4" /> : type === 'TRAIN' ? <TrainFront className="w-4 h-4" /> : <Car className="w-4 h-4" />;
@@ -149,7 +151,7 @@ export const ItineraryView: React.FC = () => {
     let text = `✈️ ${currentTrip.title || `${destName} Tour Package`}\n`;
     text += `📍 Destination: ${destName}\n`;
     text += `📅 Dates: ${currentTrip.startDate} to ${currentTrip.endDate}\n`;
-    text += `👥 Travelers: ${currentTrip.travelers?.length || 2}\n\n`;
+    if (travellerCount > 0) text += `👥 Travelers: ${travellerCount}\n\n`;
 
     days.forEach(d => {
       text += `🗓️ Day ${d.dayNumber}: ${d.title || ''}\n`;
@@ -362,7 +364,7 @@ export const ItineraryView: React.FC = () => {
           {currentTrip?.title || `${destName} Tour Package`}
         </h1>
         <p className="text-xs text-[#5F6863] font-medium">
-          {days.length} Days Detailed AI Itinerary · {currentTrip?.travelers?.length || 2} Travelers
+          {days.length} Days Detailed AI Itinerary{travellerCount > 0 ? ` · ${travellerCount} Travelers` : ''}
         </p>
       </div>
 

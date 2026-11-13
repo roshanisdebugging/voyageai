@@ -76,7 +76,7 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
           coordinates: hasCoordinates ? [item.latitude!, item.longitude!] : undefined,
           distance_text: item.distanceText,
           duration_text: item.durationText,
-          cost_text: item.estimatedCost ? `₹${item.estimatedCost}` : 'Free',
+          cost_text: item.estimatedCost == null ? undefined : item.estimatedCost > 0 ? `₹${item.estimatedCost}` : 'Free',
           description: item.description,
         });
         if (!fromUndo) showToast({ message: 'Saved to your places', undo: () => handleToggleSaveRef.current(true) });
@@ -187,18 +187,18 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
         <div className="grid grid-cols-3 gap-2">
           <div className="p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-center">
             <span className="text-[10px] font-bold text-[#5F6863] uppercase block">Distance</span>
-            <span className="text-sm font-extrabold text-[#1F2522]">{item.distanceText || 'Near you'}</span>
+            <span className="text-sm font-extrabold text-[#1F2522]">{item.distanceText || '—'}</span>
           </div>
 
           <div className="p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-center">
             <span className="text-[10px] font-bold text-[#5F6863] uppercase block">Duration</span>
-            <span className="text-sm font-extrabold text-[#1F2522]">{item.durationText || '1 - 2 hrs'}</span>
+            <span className="text-sm font-extrabold text-[#1F2522]">{item.durationText || '—'}</span>
           </div>
 
           <div className="p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-center">
             <span className="text-[10px] font-bold text-[#5F6863] uppercase block">Est. Cost</span>
             <span className="text-sm font-extrabold text-[#355F58]">
-              {item.estimatedCost ? `₹${item.estimatedCost}` : 'Free'}
+              {item.estimatedCost == null ? '—' : item.estimatedCost > 0 ? `₹${item.estimatedCost}` : 'Free'}
             </span>
           </div>
         </div>
@@ -207,7 +207,7 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
         <div className="space-y-1">
           <h4 className="text-xs font-bold text-[#5F6863] uppercase tracking-wider">About This Place</h4>
           <p className="text-sm text-[#1F2522] leading-relaxed font-medium">
-            {item.description || 'Popular destination recommended for travelers. Beautiful views and cultural significance.'}
+            {item.description || 'No description available yet.'}
           </p>
         </div>
 

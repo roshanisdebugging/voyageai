@@ -206,15 +206,15 @@ export const SavedPlacesPage: React.FC = () => {
                 <div className="grid grid-cols-3 gap-2 pt-1 text-center">
                   <div className="p-2 rounded-xl bg-[#F0F2EF] border border-[#D9DEDA]">
                     <span className="text-[10px] uppercase font-bold text-[#5F6863] block">Distance</span>
-                    <span className="text-xs font-extrabold text-[#1F2522] truncate block">{place.distance_text || 'Nearby'}</span>
+                    <span className="text-xs font-extrabold text-[#1F2522] truncate block">{place.distance_text || '—'}</span>
                   </div>
                   <div className="p-2 rounded-xl bg-[#F0F2EF] border border-[#D9DEDA]">
                     <span className="text-[10px] uppercase font-bold text-[#5F6863] block">Duration</span>
-                    <span className="text-xs font-extrabold text-[#1F2522] truncate block">{place.duration_text || '1 - 2 hrs'}</span>
+                    <span className="text-xs font-extrabold text-[#1F2522] truncate block">{place.duration_text || '—'}</span>
                   </div>
                   <div className="p-2 rounded-xl bg-[#F0F2EF] border border-[#D9DEDA]">
                     <span className="text-[10px] uppercase font-bold text-[#5F6863] block">Cost</span>
-                    <span className="text-xs font-extrabold text-[#355F58] truncate block">{place.cost_text || 'Free'}</span>
+                    <span className="text-xs font-extrabold text-[#355F58] truncate block">{place.cost_text || '—'}</span>
                   </div>
                 </div>
 

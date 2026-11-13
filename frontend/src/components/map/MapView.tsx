@@ -151,9 +151,9 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
 
     const targetDay = modalDays.find((d) => d.id === dayId);
     const dayNumber = targetDay?.dayNumber || 1;
-    const priceStr = selectedPlaceForModal.price_approx || 'Free Entry';
-    const digits = priceStr.replace(/[^\d]/g, '');
-    const costInt = digits ? parseInt(digits, 10) : 0;
+    // First number of the price text ("₹500 - ₹1,500" -> 500). Unknown price -> 0.
+    const firstNumber = (selectedPlaceForModal.price_approx || '').match(/\d[\d,]*/);
+    const costInt = firstNumber ? parseInt(firstNumber[0].replace(/,/g, ''), 10) : 0;
     const loc = sanitizeLocationName(selectedPlaceForModal.address || userLocationName);
 
     const payload = {
@@ -167,7 +167,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       location: loc,
       location_name: loc,
       tag: selectedPlaceForModal.category || 'spotlight',
-      price: priceStr,
+      price: selectedPlaceForModal.price_approx || undefined,
       estimated_cost_inr: costInt,
       activity_type: selectedPlaceForModal.category || 'spotlight',
       is_confirmed: true,
@@ -287,10 +287,11 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
               latitude: p.latitude,
               longitude: p.longitude,
               distanceMeters: p.distance_meters || p.distanceMeters || Math.round(calculateDistance(centerLat, centerLng, p.latitude, p.longitude)),
-              address: p.address || p.description || 'Near live location',
-              rating: p.rating || 4.7,
-              price_approx: p.price_approx || '₹500 - ₹1,500',
-              description: p.description || 'Popular local spot on your route.',
+              // Only real values from the place search; nothing invented.
+              address: p.address || '',
+              rating: typeof p.rating === 'number' ? p.rating : undefined,
+              price_approx: p.price_approx || undefined,
+              description: p.description || undefined,
             };
           });
           setAllPlaces(fetchedPlaces);

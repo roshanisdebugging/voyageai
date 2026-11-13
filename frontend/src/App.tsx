@@ -19,7 +19,6 @@ import { FloatingAIButton } from './components/ai/FloatingAIButton';
 import { NotificationDrawer } from './components/common/NotificationDrawer';
 import { AIAssistantSheet } from './components/ai/AIAssistantDrawer';
 import { ProfileSheet } from './components/profile/ProfilePage';
-import { HotelDetailModal } from './components/hotels/HotelDetailModal';
 import { CabBookingModal } from './components/cabs/CabBookingModal';
 import { FoodSheet } from './components/food/FoodSheet';
 import { EmergencyModal } from './components/common/EmergencyModal';
@@ -211,7 +210,6 @@ const AppShell: React.FC = () => {
       <NotificationDrawer />
       <AIAssistantSheet />
       <ProfileSheet />
-      <HotelDetailModal />
       <CabBookingModal />
       <FoodSheet />
       <EmergencyModal />
