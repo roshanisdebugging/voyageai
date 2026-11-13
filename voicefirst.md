@@ -375,7 +375,7 @@ Each step works and can be tested on its own. We review after every step before 
 | 0e. Fixes | Past trips closed automatically, /trip empty state, Past trips section; map search (India only) with straight-line distance | Ended trips never open by themselves; "Hawa Mahal" search pins it with distance |
 | 1. Voice pipeline (test phase) | Dedicated `/ws/voice` pipeline: tap mic, PCM streamed to the backend, Groq Whisper transcribes, transcript shown in a temporary test panel. Nothing stored. See "Step 1 in detail" | Hindi, English and Hinglish transcripts appear on screen; nothing saved anywhere |
 | 1b. Spoken reply | Sarvam speaks a short reply on top of the step 1 pipeline. **Built 13 Nov 2026**, see "Step 1b notes" | Reply audio plays after each turn |
-| 2. Navigation | "Open my itinerary", "food dikhao" | Every page reachable by voice |
+| 2. Navigation | "Open my itinerary", "food dikhao". **Built 13 Nov 2026, waiting for owner test** (eval 91%), see "Step 2 notes" | Every page reachable by voice |
 | 3. Questions | "Amber Fort kab jaana best hai?" | Short spoken answer |
 | 4. Create trip | Collect, confirm date, review page, Proceed | Nothing created without Proceed or "haan" |
 | 5. More actions | Small actions with Undo; expense, swap, regenerate with confirmation; delete redirects | Each behaves as decided; other users' trips untouchable |
@@ -572,6 +572,64 @@ VITE_VOICE_TEST_TRANSCRIPT=true
 - Hindi, Hinglish and English said by a person: does the ritu voice sound natural?
 - Remove `SARVAM_API_KEY` and restart the backend. The transcript should still show, the panel should say "Couldn't play the reply.", and the next recording should still work. This is covered by the test with a simulated failure, not tried live.
 - About 10 of your own clips for the timing table.
+
+#### Step 2 notes (13 Nov 2026, local branch `voice-step2`, not pushed)
+
+**Status: built, waiting for the owner's test. Not done.** The step 1b echo is replaced by the agent. Each turn: mic → `/ws/voice` → Groq Whisper (transcript) → the agent decides → the backend checks the decision → the app navigates → Sarvam speaks a short reply.
+
+**How it's built**
+- `backend/groq_client.py`: `groq_chat_tools()` sends `tools` and `tool_choice`, accepts `finish_reason` "stop" or "tool_calls", and returns `{content, tool_calls: [{name, arguments}]}`.
+  - Bad argument JSON raises `GroqError`.
+  - Errors carry the status code only, never the response body.
+  - `groq_chat()` is unchanged.
+- `backend/voice/pages.py`: the only map from page names to routes.
+  - `NEEDS_TRIP = {trip, itinerary}`; `day` is only for the itinerary, 1–30.
+  - `resolve()` returns the route or `unknown_page` / `no_trip` / `bad_day`.
+  - Confirm sentences for every page, in Hinglish and English.
+- `backend/voice/agent.py`: one Groq call per turn, with the system prompt as specified and one tool, `navigate`. The decision is checked with `pages.resolve`:
+  - **OK:** the confirm sentence plus `ui_actions: [{type: navigate, to}]`. There's no second LLM call.
+  - **`no_trip`:** "Abhi koi trip khuli nahi hai…" and a jump to `/trips`.
+  - **Unknown page or bad day:** "Kaunsa page kholun?"
+  - **No tool called:** the model's text, trimmed to 2 sentences.
+  - **Groq error:** "Abhi samajh nahi paaya, phir se boliye."
+  - Template language follows the STT language: `en` → English, everything else → Hinglish.
+  - **Memory:** Redis `voice:mem:{user}:{conversation}`, the last 10 turns, 30-minute expiry refreshed each turn, deleted on `end_session`.
+  - Logs carry only the action, `llm_ms` and an error code. Never the words.
+- **Trip context:** `start` carries `trip_id`. The server checks it with `ownership.find_owned_trip`; another user's trip, or a missing one, counts as "none". Only the title and dates go into the prompt.
+- **`reply` message:** gains `ui_actions`, `action` (`navigate:<page>` | `reply` | `error`) and `llm_ms`. An empty transcript gets a fixed reply with no LLM call.
+- **Test-only store:** new columns `agent_action` and `llm_time_ms`, added to existing tables with `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
+- **Frontend:**
+  - `frontend/src/voice/uiActions.ts` runs only `navigate`, and only to routes in an allowlist that mirrors `pages.py`, plus `?day=1–30` on `/trip/itinerary`. Anything else is ignored with a console warning.
+  - `MicButton` sends `trip_id`, runs `ui_actions` first and then plays the reply. Everything from step 1b is kept.
+  - `ItineraryView` selects the day given by `?day=N`.
+  - The test panel shows "→ navigate itinerary · day 2" and "LLM … ms".
+
+**Tested**
+- `backend/tests/test_voice_step2.py`: **49/49**, with Groq simulated at the HTTP level. All other backend tests still pass:
+  - the rate limiter
+  - step 0: 27/27
+  - ownership: 21/21
+  - step 0e: 13/13
+  - voice step 1: 31/31
+  - voice step 1b: 22/22, now with a stand-in agent that echoes
+- Frontend: the build passes, lint has no errors, and the route allowlist passes 14/14 checks.
+- **Eval** (`python -m scripts.eval_navigation`, 32 typed phrases, real Groq): **29/32 = 91%** on two runs. Average `llm_ms` was 731 and 910.
+  - Misses: "nayi trip banani hai" and "plan a new trip" ask for destination and dates instead of opening `/trips/new`. "settings kholo" asked "which setting?" in one of the two runs.
+  - Likely fix: one line of meaning per page in the tool (for example "plan_trip: start planning a new trip; more: settings and profile"). Not done, because the tool definition was to be kept exactly as given.
+- **Live through the running server** (recorded clips, real Groq + Sarvam):
+  - "Show me good places to eat near Hawa Mahal" → `/food`.
+  - "Open my itinerary for day 2" with no trip → `/trips` and the no-trip reply.
+  - A Hinglish trip request got one transient Groq error, which produced the fallback reply; on retry it asked a short question.
+  - Second tap → reply received was about 2.3–2.7 s.
+  - No `audio:text:*` keys were written.
+
+**Open items for later**
+- **Speech-to-text:**
+  - Place names come out wrong (for example Varanasi).
+  - Language detection is sometimes wrong, for example Icelandic for Hindi/Hinglish speech.
+  - Romanized Hinglish is tagged `en`, so it gets English confirm sentences and the `en-IN` voice.
+- **Occasional Groq errors:** they reach the fallback reply. If they're frequent, retry once on Groq's 400 "tool_use_failed".
+- **Speed:** the agent adds about 0.5–1 s per turn.
 
 ## 9. Cost, speed and safety
 

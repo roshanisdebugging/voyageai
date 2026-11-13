@@ -33,7 +33,7 @@ The IDs are real ones:
 
 ## Local database: two tables
 
-The connection is `VOICE_DEBUG_DATABASE_URL`, pointing at **local Postgres** (e.g. `postgresql://postgres:postgres@localhost:5432/voice_test`). It's kept separate from `DATABASE_URL`, so these tables can never end up in the cloud database. The tables are created on startup if they don't exist. Columns added later (step 1b: `reply_text`, `tts_time_ms`) are added to an existing table at startup with `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
+The connection is `VOICE_DEBUG_DATABASE_URL`, pointing at **local Postgres** (e.g. `postgresql://postgres:postgres@localhost:5432/voice_test`). It's kept separate from `DATABASE_URL`, so these tables can never end up in the cloud database. The tables are created on startup if they don't exist. Columns added later (step 1b: `reply_text`, `tts_time_ms`; step 2: `agent_action`, `llm_time_ms`) are added to an existing table at startup with `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
 
 ### `voice_speeches`: one row per recording
 
@@ -53,6 +53,8 @@ The connection is `VOICE_DEBUG_DATABASE_URL`, pointing at **local Postgres** (e.
 | `total_time_ms` | int | `stop` received → transcript sent to the app |
 | `reply_text` | text | Step 1b: the spoken reply's text (the reply **audio** is never saved) |
 | `tts_time_ms` | int | Step 1b: time taken by Sarvam to make the reply audio |
+| `agent_action` | text | Step 2: what the agent did, `navigate:<page>`, `reply` or `error` |
+| `llm_time_ms` | int | Step 2: time taken by the agent's Groq call |
 | `status` | text | `ok` or `failed` |
 | `error` | text | Error message if failed |
 | `created_at` | timestamptz | |
