@@ -6,6 +6,9 @@ import ipaddress
 from typing import Optional, Any
 from fastapi import Request, HTTPException
 import redis.asyncio as aioredis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger("voyageai.rate_limiter")
 
@@ -22,7 +25,8 @@ redis_client = aioredis.from_url(
     decode_responses=True,
     protocol=2,
     socket_timeout=2.0,
-    socket_connect_timeout=2.0
+    socket_connect_timeout=2.0,
+    retry=Retry(NoBackoff(), 0),
 )
 
 # ----------------------------------------------------------------------------
@@ -167,6 +171,16 @@ class NetworkRateLimiter:
 # ----------------------------------------------------------------------------
 SESSION_CACHE_TTL = int(os.getenv("SESSION_CACHE_TTL", "3600"))
 
+
+def _load_session_user(token: str):
+    from database import SessionLocal
+    import auth
+
+    with SessionLocal() as db:
+        auth_user, _, _ = auth.get_session_user(db, token)
+        return auth_user
+
+
 async def cache_user_session(token: str, user_id: str, ttl: int = SESSION_CACHE_TTL) -> None:
     """Pre-warm or update user session cache in Redis."""
     if not token or not user_id:
@@ -252,25 +266,16 @@ class UserRateLimiter:
                     request.state.rate_limit_user_id = str(cached_uid)
                     return str(cached_uid)
             except Exception as cache_read_err:
-                logger.warning(f"[SESSION CACHE WARN] Redis read failed for {session_cache_key} ({cache_read_err}), falling back to DB.")
+                logger.warning("[SESSION CACHE WARN] Redis read failed (%s), falling back to DB.", cache_read_err)
 
             # Step 3: Cache Miss -> Fallback to Database once, then populate cache
             try:
-                from database import SessionLocal
-                import auth
-                with SessionLocal() as db:
-                    auth_user, _, _ = auth.get_session_user(db, token)
-                    request.state.user = auth_user
-                    user_id_str = str(auth_user.id)
-                    request.state.rate_limit_user_id = user_id_str
-
-                    # Populate cache in Redis with TTL matching session lifetime
-                    try:
-                        await redis_client.set(session_cache_key, user_id_str, ex=SESSION_CACHE_TTL)
-                    except Exception as cache_write_err:
-                        logger.warning(f"[SESSION CACHE WARN] Redis write failed for {session_cache_key} ({cache_write_err}).")
-
-                    return user_id_str
+                auth_user = await run_in_threadpool(_load_session_user, token)
+                request.state.user = auth_user
+                user_id_str = str(auth_user.id)
+                request.state.rate_limit_user_id = user_id_str
+                await cache_user_session(token, user_id_str)
+                return user_id_str
             except Exception:
                 pass
 

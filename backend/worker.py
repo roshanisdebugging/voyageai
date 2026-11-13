@@ -37,8 +37,8 @@ def start_worker():
 
     while running:
         try:
-            # BRPOP blocks for up to 5 seconds waiting for a new job
-            item = redis_conn.brpop(TASK_QUEUE_KEY, timeout=5)
+            # Let Redis return from an idle poll before the client read times out.
+            item = redis_conn.brpop(TASK_QUEUE_KEY, timeout=2)
             if not item:
                 continue
 

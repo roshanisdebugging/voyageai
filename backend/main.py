@@ -531,7 +531,7 @@ async def register(req: RegisterRequest, request: Request, response: Response, d
 async def login(req: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     log_frontend_payload(
         endpoint="POST /api/auth/login",
-        payload=req,
+        payload={"provider": req.provider, "isRegister": req.isRegister},
         user_email=req.email,
         usage_summary={
             "email & provider": f"User login credentials ({req.provider}). Used to look up or register user session in PostgreSQL."
@@ -624,7 +624,7 @@ def update_onboarding(
 
     log_frontend_payload(
         endpoint="POST /api/user/onboarding",
-        payload=req,
+        payload=req.model_dump(exclude={"token"}),
         user_email=current_user.email,
         usage_summary={
             "firstName / lastName": "User profile name saved to PostgreSQL.",

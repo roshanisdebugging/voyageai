@@ -1,7 +1,7 @@
 """
 VoyageAI - Google Maps Platform Backend Proxy Service
 Replaces unreliable Overpass / Nominatim APIs with Google Places API (New) & Google Geocoding.
-Includes an intelligent Redis caching layer (with protocol=2 support & in-memory fallback)
+Includes a Redis caching layer with an in-memory fallback
 to conserve API quota and eliminate synthetic mock fallbacks.
 """
 
@@ -12,13 +12,13 @@ import math
 from typing import List, Dict, Any, Optional
 import httpx
 from dotenv import load_dotenv
+from starlette.concurrency import run_in_threadpool
+from redis_client import redis_conn
 
 # Ensure environment variables are loaded
 load_dotenv()
 
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_MAP_DEMO_KEY") or ""
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 
 # In-memory LRU/TTL cache fallback when Redis is offline
 _in_memory_cache: Dict[str, tuple[float, Any]] = {}
@@ -43,51 +43,22 @@ def _set_in_memory(key: str, val: Any, ttl_seconds: int):
 
 
 class RedisCacheManager:
-    """Async Redis manager with RESP2 protocol and resilient fallback."""
-    def __init__(self):
-        self._client = None
-        self._disabled = False
-
-    async def get_client(self):
-        if self._disabled:
-            return None
-        if self._client is None:
-            try:
-                import redis.asyncio as aioredis
-                self._client = aioredis.Redis(
-                    host=REDIS_HOST,
-                    port=REDIS_PORT,
-                    db=0,
-                    decode_responses=True,
-                    socket_connect_timeout=1.5,
-                    protocol=2
-                )
-                await self._client.ping()
-            except Exception as e:
-                # Log once and fallback to in-memory cache
-                print(f"[REDIS PROXY] Redis connection unavailable ({e}). Using in-memory cache fallback.", flush=True)
-                self._disabled = True
-                self._client = None
-        return self._client
+    """Reuse the thread-safe Redis pool across the API and highlights event loops."""
 
     async def get(self, key: str) -> Optional[Any]:
-        client = await self.get_client()
-        if client:
-            try:
-                data = await client.get(key)
-                if data:
-                    return json.loads(data)
-            except Exception:
-                pass
+        try:
+            data = await run_in_threadpool(redis_conn.get, key)
+            if data:
+                return json.loads(data)
+        except Exception:
+            pass
         return _get_in_memory(key)
 
     async def set(self, key: str, value: Any, ttl_seconds: int = 3600):
-        client = await self.get_client()
-        if client:
-            try:
-                await client.set(key, json.dumps(value), ex=ttl_seconds)
-            except Exception:
-                pass
+        try:
+            await run_in_threadpool(redis_conn.set, key, json.dumps(value), ex=ttl_seconds)
+        except Exception:
+            pass
         _set_in_memory(key, value, ttl_seconds)
 
 
