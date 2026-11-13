@@ -1,6 +1,9 @@
 # VoyageAI OS — Netlify Deployment & Edge Optimization Configuration
 
+# The frontend lives in frontend/. In the Netlify UI set "Base directory" to `frontend`
+# so Netlify finds this file; `publish` is relative to the base directory.
 [build]
+  base = "frontend"
   command = "npm run build"
   publish = "dist"
 

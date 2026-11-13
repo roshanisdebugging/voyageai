@@ -246,7 +246,7 @@ print("Database cleared successfully.")
 ## 🔧 Environment Variables Summary
 
 Concierge intent routing uses a structured Flash-Lite classifier before paid
-answer generation. See [cost guard configuration, tests and measured limitations](backend/COST_GUARD.md).
+answer generation. See [cost guard configuration, tests and measured limitations](docs/COST_GUARD.md).
 
 ### Backend (`backend/.env`)
 ```env

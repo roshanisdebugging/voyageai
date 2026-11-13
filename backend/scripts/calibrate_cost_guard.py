@@ -1,8 +1,15 @@
-"""Fit rejection boundaries on calibration data only; never read the test matrix."""
+"""Fit rejection boundaries on calibration data only; never read the test matrix.
+
+Run from backend/: python -m scripts.calibrate_cost_guard
+"""
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+# backend/ on the import path (this file is in backend/scripts/).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cost_guard import LABELS, POLICY_PATH, ROOT, SemanticClassifier, corpus_fingerprint
 

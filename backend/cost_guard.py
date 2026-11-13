@@ -418,5 +418,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     classifier = SemanticClassifier(download=args.download)
     if classifier.policy is None:
-        raise SystemExit("Missing calibration policy; run calibrate_cost_guard.py")
+        raise SystemExit("Missing calibration policy; run `python -m scripts.calibrate_cost_guard` from backend/")
     print("CPU evaluation router ready; production default remains Gemini")

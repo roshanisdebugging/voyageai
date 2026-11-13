@@ -1,3 +1,10 @@
+"""Rate limiter checks against a live local Redis. Run from backend/: python -m tests.test_rate_limiter"""
+import sys
+from pathlib import Path
+
+# backend/ on the import path, so this runs as `python -m tests.<name>` or `python tests/<name>.py` from backend/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import asyncio
 import time
 import ipaddress

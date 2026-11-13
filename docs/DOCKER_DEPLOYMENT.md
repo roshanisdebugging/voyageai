@@ -2,7 +2,7 @@
 
 Full-stack 3-tier containerized deployment:
 - **2 Dockerfiles**:
-  - `Dockerfile` (Frontend: React + Vite + Nginx)
+  - `frontend/Dockerfile` (Frontend: React + Vite + Nginx, served with `frontend/nginx.conf`)
   - `backend/Dockerfile` (Backend: FastAPI + Python 3.11)
 - **1 Docker Compose (`docker-compose.yml`)** with **3 services on the same internal network**:
   - `frontend` (Port `80:80` forwarded to host — **ONLY public port**)

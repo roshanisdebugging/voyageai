@@ -94,7 +94,7 @@ overflow instead of classifying a silently truncated query.
 pip install -r backend/requirements-cost-guard-local.txt
 export COST_GUARD_MODEL_CACHE=/path/to/model-cache
 python backend/cost_guard.py --download
-python backend/calibrate_cost_guard.py
+python backend/scripts/calibrate_cost_guard.py
 python backend/test_cost_guard_matrix.py --backend semantic --report /tmp/guard-local.json
 ```
 

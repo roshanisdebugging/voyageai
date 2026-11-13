@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 VoyageAI - Neon Cloud Schema Initializer & Session Isolation Verifier
-Run from /backend: python init_neon_schema.py
+Run from /backend: python -m scripts.init_neon_schema
 """
 import os, sys, uuid, hashlib, json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = Path(__file__).resolve().parents[1]  # this file is in backend/scripts/
 sys.path.insert(0, str(BACKEND_DIR))
 
 from dotenv import load_dotenv

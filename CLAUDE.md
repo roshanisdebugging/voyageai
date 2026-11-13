@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-VoyageAI (also called "Cruiser" in Docker/infra names): an AI travel companion. The repo root is the React/Vite frontend; `backend/` is a FastAPI service. The README's "Frontend Setup" refers to a `frontend/` dir that does not exist, so run frontend commands from the repo root.
+VoyageAI (also called "Cruiser" in Docker/infra names): an AI travel companion. Layout: `frontend/` is the React/Vite app, `backend/` is a FastAPI service (flat modules, plus `backend/voice/`, `backend/tests/`, `backend/scripts/`), `docs/` holds specs and deployment notes. `CLAUDE.md`, `voicefirst.md`, `testing.md`, `README.md` and `docker-compose.yml` stay at the root.
 
 ## Commands
 
-Frontend (repo root):
+Frontend (run from `frontend/`):
 ```sh
 npm run dev       # Vite dev server on :5173
 npm run build     # tsc -b && vite build. This is the only type check, there is no separate typecheck script
@@ -21,28 +21,34 @@ Backend (run from `backend/`, needs Postgres + Redis reachable):
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 80     # API + /docs (test mode runs on port 80)
 python worker.py                                       # Redis queue worker; required for itinerary generation
-python test_rate_limiter.py                            # standalone async script (not pytest); hits a live Redis
-python init_neon_schema.py                             # schema init + session isolation check against DATABASE_URL
-python create_subscription_tables.py                   # idempotent create/seed of the 8 subscription/payment tables
+python -m tests.test_rate_limiter                      # standalone async script (not pytest); hits a live Redis
+python -m tests.test_step0                             # Step 0 checks: SQLite + local Redis, no real AI
+python -m tests.test_ownership                         # another user's trip refused everywhere
+python -m tests.test_step0e                            # past trips closed, itinerary/add ownership
+python -m tests.test_voice_step1                       # /ws/voice; the debug-store part needs VOICE_TEST_PG_ADMIN_URL
+python -m scripts.init_neon_schema                     # schema init + session isolation check against DATABASE_URL
+python -m scripts.create_subscription_tables           # idempotent create/seed of the 8 subscription/payment tables
+python -m scripts.calibrate_cost_guard                 # refit the local semantic cost-guard thresholds
 ```
-`backend/COST_GUARD.md` lists `test_cost_guard_contract.py` and `test_cost_guard_matrix.py`, but those files are not in the repo.
+Tests are plain scripts (not pytest) in `backend/tests/`; one-off scripts are in `backend/scripts/`. Both add `backend/` to `sys.path`, so they also run as `python tests/<name>.py`. The test scripts delete every `rl:*` key in the local Redis.
+`docs/COST_GUARD.md` lists `test_cost_guard_contract.py` and `test_cost_guard_matrix.py`, but those files are not in the repo.
 
-Docker: `docker-compose up` starts postgres (5432), the backend (host 5247 → 8000) and the frontend served by nginx (5248). Compose does not start Redis or the worker. See `DOCKER_DEPLOYMENT.md`. The frontend is also deployed to Netlify (`netlify.toml`, SPA catch-all redirect).
+Docker: `docker-compose up` starts postgres (5432), the backend (host 5247 → 8000) and the frontend served by nginx (5248). Compose does not start Redis or the worker. Compose builds the frontend from `./frontend` (`frontend/Dockerfile` + `frontend/nginx.conf`) and the backend from `./backend`; it reads `${VITE_API_BASE_URL}` and `POSTGRES_*` from a root `.env` (see the root `.env.example`). See `docs/DOCKER_DEPLOYMENT.md`. The frontend is also deployed to Netlify (`frontend/netlify.toml`, base `frontend`; the Netlify UI's Base directory must be `frontend`; SPA catch-all redirect).
 
 ## Backend URL (test mode: everything on http://localhost:80)
 
 ngrok is no longer used. The frontend dev server runs on :5173, and the backend on `http://localhost:80` (HTTP and `ws://localhost:80/ws/app`). When the user asks to change the backend URL, update **all** of these together:
-1. `.env` (repo root): `VITE_API_URL`, `VITE_API_BASE_URL`, `VITE_WS_URL` (ws:// or wss://).
-2. `src/config/apiConfig.ts`: `DEFAULT_BACKEND_URL`.
-3. `vite.config.ts`: the `/api` and `/ws` proxy targets.
+1. `frontend/.env`: `VITE_API_URL`, `VITE_API_BASE_URL`, `VITE_WS_URL` (ws:// or wss://).
+2. `frontend/src/config/apiConfig.ts`: `DEFAULT_BACKEND_URL`.
+3. `frontend/vite.config.ts`: the `/api` and `/ws` proxy targets.
 4. If the *frontend* moves to a new origin: add it to `ALLOWED_ORIGINS` in `backend/.env` (or `_DEFAULT_ALLOWED_ORIGINS` in `main.py`).
 5. If a proxy or tunnel is put in front of the API: set `TRUSTED_PROXY_HOPS` in `backend/.env`.
 6. The uvicorn `--port` in the commands above, and this section.
-Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
+Restart `npm run dev` after editing `frontend/.env`; Vite reads it only at startup.
 
 ## Backend architecture
 
-- **Two parallel APIs.** The frontend's main transport is one long-lived WebSocket (`/ws/app`, `src/services/wsClient.ts`). It sends RPC frames `{id, action, payload}`, and `process_ws_action` in `main.py` dispatches them by action name (`trips:create`, `trips:get_itinerary`, `tour_guide:chat`, `auth:login`, …). The connection loop (`websocket_tour_app_endpoint`) resolves the user from each frame's token once (`resolve_ws_session`), applies a per-action Redis rate limit (`WS_RATE_LIMITS`), and passes `session` into `process_ws_action`. Actions not in `WS_PUBLIC_ACTIONS` require login, and every action in `WS_TRIP_ACTIONS` has its `trip_id` ownership-checked and normalized before the branch runs. When adding a WS action, add it to these sets rather than doing auth inside the branch. REST (`/api/*`) is used for register/login/session, saved places, and as a fallback when a WS call fails. Most features are implemented separately in both paths, so a behaviour change usually has to be made in both.
+- **Two parallel APIs.** The frontend's main transport is one long-lived WebSocket (`/ws/app`, `frontend/src/services/wsClient.ts`). It sends RPC frames `{id, action, payload}`, and `process_ws_action` in `main.py` dispatches them by action name (`trips:create`, `trips:get_itinerary`, `tour_guide:chat`, `auth:login`, …). The connection loop (`websocket_tour_app_endpoint`) resolves the user from each frame's token once (`resolve_ws_session`), applies a per-action Redis rate limit (`WS_RATE_LIMITS`), and passes `session` into `process_ws_action`. Actions not in `WS_PUBLIC_ACTIONS` require login, and every action in `WS_TRIP_ACTIONS` has its `trip_id` ownership-checked and normalized before the branch runs. When adding a WS action, add it to these sets rather than doing auth inside the branch. REST (`/api/*`) is used for register/login/session, saved places, and as a fallback when a WS call fails. Most features are implemented separately in both paths, so a behaviour change usually has to be made in both.
 - **`main.py` is a ~4.9k-line monolith** that holds nearly all HTTP and WebSocket routes. Many routes are registered under several aliases at once (for example `/trips` and `/api/trips`, or `/api/chat` and `/api/tour-guide/chat`). Keep the stacked decorators together when you edit a handler. The `*_service.py` modules hold the logic, and some are imported lazily inside handlers.
 - **DB**: `database.py` has one pooled SQLAlchemy engine tuned for Neon serverless Postgres (pre_ping, recycle=300). Use `get_db` for routes and `get_db_context` elsewhere. Tables are created by `init_db()` at import time in `main.py`, using `Base.metadata.create_all`. There is no Alembic, so schema changes to existing tables need manual SQL or a script like `create_subscription_tables.py`. ORM models are split across `models*.py` and `payment_models.py`. They must be imported before `init_db()` so they register.
 - **Async itinerary pipeline**: WS `trips:create` (or `POST /api/trips`) → `task_queue.enqueue_itinerary_generation` (Redis LPUSH on `voyageai:tasks:itinerary`) → `worker.py` (BRPOP) → `itinerary_service.process_async_itinerary_generation` → `publish_trip_event` (Pub/Sub `voyageai:events:trip`) → `events_listener` (started in the FastAPI lifespan, reconnects on Redis loss) → `connection_registry.push_to_user` sends `ITINERARY_READY` (status `READY` or `FAILED`) only to the trip owner's `/ws/app` sockets. If the worker is not running, itineraries never complete. Generated itineraries are cached in Redis for 7 days keyed by destination/days/styles/budget level (`itinerary_cache_service.py`) and copied into each trip; mock output is never cached.
@@ -67,7 +73,7 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
   - Call sites with their own prompt use `ai_provider.complete_json(prompt)`. Never call Gemini or Groq HTTP directly elsewhere.
   - `GROQ_API_KEY` and `GROQ_MODEL` (default `openai/gpt-oss-120b`) are in `backend/.env`. With no Groq key, calls quietly go to Gemini.
   - The cost guard follows the same order (`COST_GUARD_BACKEND=groq`: `GroqClassifier`, then `GeminiClassifier`) and still fails closed. Gemini errors are raised, never replaced with mock data: mock output (a Goa/Bihar dataset or a generic "{dest} Zone N" template) looks real to users and must only appear with `AI_PROVIDER=mock`. Add new AI capabilities to the interface and to both implementations. The tour-guide chat (`tour_guide_service.py`) calls Gemini through its own SDK/REST tiers, not through `ai_provider.py`.
-- **Cost guard** (`cost_guard.py`, see `backend/COST_GUARD.md`): a fail-closed intent classifier (`travel/emergency/off_topic/unknown`) runs before any paid concierge answer. Keep the `(allowed, gate, reply)` return contract and the `PASSED_ESSENTIAL_NEED` emergency path. Never make it fail open. It guards `tour_guide:chat`/`/api/chat` and the free-chat path of `/api/ai/concierge`.
+- **Cost guard** (`cost_guard.py`, see `docs/COST_GUARD.md`): a fail-closed intent classifier (`travel/emergency/off_topic/unknown`) runs before any paid concierge answer. Keep the `(allowed, gate, reply)` return contract and the `PASSED_ESSENTIAL_NEED` emergency path. Never make it fail open. It guards `tour_guide:chat`/`/api/chat` and the free-chat path of `/api/ai/concierge`.
 - **Rate limiting** (`rate_limiter.py`): Redis ZSET sliding window. `NetworkRateLimiter` keys on the client IP, normalized to /64 for IPv6. The IP comes from `client_ip_from`, which ignores `X-Forwarded-For` unless `TRUSTED_PROXY_HOPS` > 0 (default 0, because the API is reached directly). Behind a proxy, set it to the number of proxies, and only the entry that proxy appended is trusted. Login, register and paid-AI limiters use `fail_closed=True` (503 when Redis is down); the rest fail open. Tokens are never read from URL query strings on HTTP routes. `UserRateLimiter` keys on the session user and uses a cache-aside session lookup (`session_cache:{token}`), which is warmed on login and invalidated on logout. Routes attach the named limiter instances (`general_limiter`, `ai_limiter`, `ai_chat_limiter`, `places_limiter`, …) via `dependencies=[Depends(...)]`.
 - Google Maps calls live in `services/google_maps_service.py`; the tour guide in top-level `tour_guide_service.py`.
 
@@ -77,7 +83,7 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
 
 ## Frontend architecture
 
-- `src/config/apiConfig.ts` resolves the backend URL: `VITE_API_URL`/`VITE_API_BASE_URL` (and `VITE_WS_URL` for WebSockets) from `.env`, else `DEFAULT_BACKEND_URL`. Send requests with `getDefaultFetchOptions()` (credentials: 'include' + auth headers). `getWsBaseUrl()` derives WebSocket URLs.
+- `frontend/src/config/apiConfig.ts` resolves the backend URL: `VITE_API_URL`/`VITE_API_BASE_URL` (and `VITE_WS_URL` for WebSockets) from `frontend/.env`, else `DEFAULT_BACKEND_URL`. Send requests with `getDefaultFetchOptions()` (credentials: 'include' + auth headers). `getWsBaseUrl()` derives WebSocket URLs.
 - **Trip wizard** (`features/trip/screens/TripCreationWizard.tsx`): Where (with optional starting city) → When → Who (adults/children) → Style → Budget amount → Review.
   - Review is step 6, where every field is editable on one page with a Proceed button.
   - `navigate('/trips/new', { state: { prefill: TripDraft } })` opens it pre-filled at Review. This is the voice "jump" target.
@@ -88,7 +94,7 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
 - **`ITINERARY_READY`** for any of the user's trips sets `TripContext.readyNotice`. `components/trip/ItineraryReadyNotice.tsx` then offers to open the itinerary or download page.
 - Data access is mostly WS-first with a REST fallback (see `features/trip/TripContext.tsx`). When both fail, throw an error for the UI to show; don't fabricate local stand-in records or sessions.
 - The auth token is kept **in memory only** (`setAuthToken`). `main.tsx` clears localStorage and sessionStorage on every load, keeping only `cruiser_theme`. Do not add browser-storage persistence, since it is wiped on boot. Persist state server-side instead.
-- State is split between React contexts (`AuthContext`, `AppContext`, `TripContext` in `features/trip/`, `NavigationContext`, `ThemeContext`) and a Redux Toolkit store (`src/store/reducers/`: `tourGuide`, `nearby`, `mapPlaces`, `trips` slices).
+- State is split between React contexts (`AuthContext`, `AppContext`, `TripContext` in `features/trip/`, `NavigationContext`, `ThemeContext`) and a Redux Toolkit store (`frontend/src/store/reducers/`: `tourGuide`, `nearby`, `mapPlaces`, `trips` slices).
 - Routing (`App.tsx`, react-router v7) is a mobile-first shell: bottom nav with Home `/`, Trip `/trip/*`, Explore and More, plus global sheets and modals. `AuthGuard` sends logged-out users to `/login` and users who haven't finished onboarding to `/onboarding`. `MapView` (Leaflet) is lazy-loaded.
 - Styling: Tailwind v4 via `@tailwindcss/vite`, with many hard-coded hex colors (for example `#355F58`, `#1F2522`).
 
@@ -96,7 +102,7 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
 
 Mistakes made in earlier sessions, and what to do instead:
 
-- **Check how the frontend calls a feature before describing or changing its flow.** An early architecture write-up assumed REST was the main path (`POST /api/trips`, `/api/chat`). In fact the app sends almost everything over the `/ws/app` WebSocket first. Grep `wsClient.sendRequest(` and `fetch(` in `src/` first. Then fix both the WS branch and the REST route, or neither.
+- **Check how the frontend calls a feature before describing or changing its flow.** An early architecture write-up assumed REST was the main path (`POST /api/trips`, `/api/chat`). In fact the app sends almost everything over the `/ws/app` WebSocket first. Grep `wsClient.sendRequest(` and `fetch(` in `frontend/src/` first. Then fix both the WS branch and the REST route, or neither.
 - **Don't trust names or comments.** `verify_trip_ownership` didn't verify ownership. `from fastapi import requests` looked like the HTTP library but wasn't, so `/api/trips/itinerary/swap-options` always returned mock data. A function was also defined twice in `main.py`, and the later copy silently won. After editing `main.py`, check for duplicates: `grep -oE "^(class|def|async def) [A-Za-z_]+" backend/main.py | sort | uniq -d`.
 - **Silent fallbacks hide bugs.** The code used to swallow errors and return fake data: mock itineraries, `usr_local` sessions, local-only trips. Before assuming a feature works, check whether it is quietly returning a fallback.
 - **Fallback queries can leak data.** `/api/trips/itinerary/add` accepted guests and fell back to "the latest trip overall", which meant another user's trip. Find these with `grep -n "db.query(TripModel)" backend/main.py | grep -v user_id`. Every hit must be inside an owner-checked path (`WS_TRIP_ACTIONS`, `verify_trip_ownership`, `require_owned_trip`).
@@ -138,16 +144,16 @@ Mistakes made in earlier sessions, and what to do instead:
 - `log_pipeline_5_steps` / `log_frontend_payload` print user requests and prompts to the server log.
 - Accounts created by the old password-less login path can't log in. There is no password reset flow.
 - Subscription tables (`payment_models.py`) aren't used by any route yet.
-- `backend/COST_GUARD.md` refers to test files that aren't in the repo.
+- `docs/COST_GUARD.md` refers to test files that aren't in the repo.
 - The worker sometimes logs `Job failed: Timeout reading from socket` while idle. It looks like a Redis idle timeout, logged as if a job had failed.
 - `FoodSheet.tsx` fills in made-up details when a place has none: rating 4.5, opening hours, "Vegetarian Friendly". As a result, the Pure Veg filter matches every place.
 
 ## Voice pipeline (built in step 1)
 
-- **Separate from `/ws/app`.** Voice has its own socket, `/ws/voice` (`backend/voice/ws.py`), mounted in `main.py` with `mount_voice(app, origin_allowed=is_allowed_origin)`. The frontend is in `src/voice/` and doesn't use `wsClient`.
+- **Separate from `/ws/app`.** Voice has its own socket, `/ws/voice` (`backend/voice/ws.py`), mounted in `main.py` with `mount_voice(app, origin_allowed=is_allowed_origin)`. The frontend is in `frontend/src/voice/` and doesn't use `wsClient`.
 - **Protocol** (`backend/voice/messages.py`):
   - Text frames are control messages: `auth`, `start`, `stop`, `end_session` → `ready`, `recording`, `transcript`, `error`.
-  - Binary frames are raw PCM: 16 kHz, 16-bit, mono, about 100 ms each, made by `public/pcm-worklet.js`.
+  - Binary frames are raw PCM: 16 kHz, 16-bit, mono, about 100 ms each, made by `frontend/public/pcm-worklet.js`.
   - Login is the cookie, or a first `auth` message. Never a URL token.
   - A foreign `Origin` is refused.
   - Limits: 30 s / 960 KB per recording (cut, then transcribed), one recording at a time per connection, 15 a minute and 100 a day per user (fails closed).
@@ -183,4 +189,4 @@ Goal: the user can do everything by speaking as well as by tapping. Summary of `
 
 ## Specs in progress
 
-`VoyageAI_Subscription_Architecture_v3.3_FINAL.md` is the authoritative spec for the in-progress Razorpay subscription system (FREE/ULTRA quotas, two-phase gateway calls with no external HTTP inside DB transactions, a global lock ordering, fail-closed entitlement). Follow it when you work on `payment_models.py`, `create_subscription_tables.py` or billing routes.
+`docs/VoyageAI_Subscription_Architecture_v3.3_FINAL.md` is the authoritative spec for the in-progress Razorpay subscription system (FREE/ULTRA quotas, two-phase gateway calls with no external HTTP inside DB transactions, a global lock ordering, fail-closed entitlement). Follow it when you work on `payment_models.py`, `scripts/create_subscription_tables.py` or billing routes.

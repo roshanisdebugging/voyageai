@@ -41,8 +41,8 @@ Updated 12 Nov 2026 after Step 0. The table first described the 6 Nov code; rows
 | Piece | Where | State | Use for voice |
 | --- | --- | --- | --- |
 | Text-to-speech, Sarvam `bulbul:v3`, Redis cache, default voice `ritu` | `backend/tts_service.py` | Exists | Speak every reply |
-| Play base64 audio | `src/hooks/useAudioGuide.ts` | Exists | Play replies |
-| One WebSocket, ~40 actions | `src/services/wsClient.ts`, `process_ws_action` in `backend/main.py` | Exists | Carry voice turns |
+| Play base64 audio | `frontend/src/hooks/useAudioGuide.ts` | Exists | Play replies |
+| One WebSocket, ~40 actions | `frontend/src/services/wsClient.ts`, `process_ws_action` in `backend/main.py` | Exists | Carry voice turns |
 | Trip creation | `backend/trip_lifecycle.py` `create_trip_for_user`, used by WebSocket and REST | Exists *(Step 0)* | The agent's `create_trip` calls it |
 | Ownership check | `backend/ownership.py`; every WebSocket trip action checked before it runs | Exists *(Step 0)* | Every agent tool goes through it |
 | Rate limits | `rate_limiter.py`; `WS_RATE_LIMITS` in `main.py` for WebSocket actions | Exists *(Step 0)* | Add a `voice` bucket |
@@ -57,8 +57,8 @@ Updated 12 Nov 2026 after Step 0. The table first described the 6 Nov code; rows
 | Place search, geocoding | `places.py`, `services/google_maps_service.py` | Exists | "Jaipur" to a real place |
 | Starting city | `cities` table (`models_place.py`), `trips.origin_city_id`; looked up, created if missing | Exists *(Step 0)* | Agent fills `origin` |
 | Trip review page | Step 6 of `TripCreationWizard.tsx`; opens pre-filled from `navigate('/trips/new', { state: { prefill } })` | Exists *(Step 0)* | The voice "jump" target |
-| Undo toast | `src/components/common/UndoToast.tsx` (`useToast().showToast({ message, undo })`) | Exists *(Step 0)* | Small voice actions use it |
-| Itinerary-ready notice | `src/components/trip/ItineraryReadyNotice.tsx` | Exists *(Step 0)* | Spoken version in voice |
+| Undo toast | `frontend/src/components/common/UndoToast.tsx` (`useToast().showToast({ message, undo })`) | Exists *(Step 0)* | Small voice actions use it |
+| Itinerary-ready notice | `frontend/src/components/trip/ItineraryReadyNotice.tsx` | Exists *(Step 0)* | Spoken version in voice |
 | Weather | `backend/weather_service.py` (Open-Meteo, real forecast, 16 days ahead) | Exists *(Step 0)* | `weather_replan` tool |
 
 Missing for voice: speech-to-text, mic recording, the agent, and a way for the server to tell the app which page to open.
@@ -405,15 +405,15 @@ Each step works and can be tested on its own. We review after every step before 
 | `voice/pipeline.py` | `run_turn(pcm, ctx)`: runs the stages of one turn in order. Step 1 has a single stage, STT. | Agent, tools and TTS are added as stages |
 | `voice/messages.py` | Message shapes (`start`, `stop`, `transcript`, `error`) in one place | Extended |
 
-**Frontend: a dedicated `src/voice/` folder**, separate from `wsClient`
+**Frontend: a dedicated `frontend/src/voice/` folder**, separate from `wsClient`
 
 | File | Job | Later steps |
 | --- | --- | --- |
-| `public/pcm-worklet.js` | Converts 44.1/48 kHz float audio to 16 kHz Int16; posts a chunk every 1,600 samples | Unchanged |
-| `src/voice/voiceSocket.ts` | Opens `/ws/voice` with the login token; sends `start`, binary chunks and `stop`; receives replies; reconnects on drop | Unchanged |
-| `src/voice/useVoiceRecorder.ts` | Mic permission (echo cancellation and noise suppression on), AudioContext created inside the tap, 30 s countdown, stops tracks on stop | Unchanged |
-| `src/voice/MicButton.tsx` | Floating button on every page after login; idle, recording (red + countdown) and waiting states | Gains the speaking animation |
-| `src/voice/TestTranscriptPanel.tsx` | **Temporary, test phase only.** Small panel listing each transcript with language, clip length and Groq latency. Shown only when `VITE_VOICE_TEST_TRANSCRIPT=true`. Kept in React state only: gone on reload, never saved. | Removed (or flag off) when testing ends |
+| `frontend/public/pcm-worklet.js` | Converts 44.1/48 kHz float audio to 16 kHz Int16; posts a chunk every 1,600 samples | Unchanged |
+| `frontend/src/voice/voiceSocket.ts` | Opens `/ws/voice` with the login token; sends `start`, binary chunks and `stop`; receives replies; reconnects on drop | Unchanged |
+| `frontend/src/voice/useVoiceRecorder.ts` | Mic permission (echo cancellation and noise suppression on), AudioContext created inside the tap, 30 s countdown, stops tracks on stop | Unchanged |
+| `frontend/src/voice/MicButton.tsx` | Floating button on every page after login; idle, recording (red + countdown) and waiting states | Gains the speaking animation |
+| `frontend/src/voice/TestTranscriptPanel.tsx` | **Temporary, test phase only.** Small panel listing each transcript with language, clip length and Groq latency. Shown only when `VITE_VOICE_TEST_TRANSCRIPT=true`. Kept in React state only: gone on reload, never saved. | Removed (or flag off) when testing ends |
 
 **Not stored anywhere**
 
@@ -430,7 +430,7 @@ GROQ_API_KEY=...
 VOICE_STT_PROVIDER=groq
 VOICE_STT_MODEL=whisper-large-v3-turbo
 
-# frontend .env
+# frontend/.env
 VITE_VOICE_TEST_TRANSCRIPT=true
 ```
 
@@ -463,11 +463,11 @@ VITE_VOICE_TEST_TRANSCRIPT=true
   - `debug_store.py`: from `testing.md`.
   - `ws.py`: `/ws/voice`, mounted in `main.py` with `mount_voice(app, origin_allowed=is_allowed_origin)`.
 - **Frontend:**
-  - `public/pcm-worklet.js`
-  - `src/voice/voiceSocket.ts`
-  - `src/voice/useVoiceRecorder.ts`
-  - `src/voice/MicButton.tsx`: mounted in `App.tsx`; logged-in users only; stacked above the AI button.
-  - `src/voice/TestTranscriptPanel.tsx`: also shows the clip length, Groq time and the round trip from stop to transcript.
+  - `frontend/public/pcm-worklet.js`
+  - `frontend/src/voice/voiceSocket.ts`
+  - `frontend/src/voice/useVoiceRecorder.ts`
+  - `frontend/src/voice/MicButton.tsx`: mounted in `App.tsx`; logged-in users only; stacked above the AI button.
+  - `frontend/src/voice/TestTranscriptPanel.tsx`: also shows the clip length, Groq time and the round trip from stop to transcript.
 
 **Small additions to the plan**
 - **Login on `/ws/voice`:** the session cookie, or a first message `{"type":"auth","token":"…"}` within 5 s (the app always sends it). Tokens are never put in the URL.
@@ -496,7 +496,7 @@ VITE_VOICE_TEST_TRANSCRIPT=true
 
 **Settings now in the owner's local `.env` files**
 - `backend/.env`: `VOICE_STT_PROVIDER=groq`, `VOICE_STT_MODEL=whisper-large-v3-turbo`, and `VOICE_DEBUG_STORE=true` with the local `voice_test` URL.
-- Root `.env`: `VITE_VOICE_TEST_TRANSCRIPT=true`.
+- `frontend/.env` (was the root `.env` before the frontend/ move): `VITE_VOICE_TEST_TRANSCRIPT=true`.
 - Restart `npm run dev` so Vite picks up the new variable.
 
 **Phones need HTTPS** for the mic. `localhost` works on the laptop, but a phone on the LAN needs an HTTPS URL. That is the same "change the backend URL" checklist as before.

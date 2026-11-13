@@ -1,6 +1,6 @@
 node_modules
 dist
-backend
 .git
 .env
-.env.local
+.env.*
+!.env.example

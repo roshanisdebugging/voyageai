@@ -1,7 +1,7 @@
 # Voice Testing — testing.md
 
 > **Test-only saving for Step 1 of `voicefirst.md`.**
-> Step 1 builds the real voice pipeline (`/ws/voice`, `backend/voice/`, `src/voice/`). This file adds **one optional stage** to it: saving each recording and its transcript on the developer's machine.
+> Step 1 builds the real voice pipeline (`/ws/voice`, `backend/voice/`, `frontend/src/voice/`). This file adds **one optional stage** to it: saving each recording and its transcript on the developer's machine.
 > Saving uses **local Postgres only**, never the cloud database, and is **off by default** (`VOICE_DEBUG_STORE=false`). With it off, Step 1 stores nothing, as `voicefirst.md` says.
 
 ## Goal
