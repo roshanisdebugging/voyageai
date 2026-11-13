@@ -25,6 +25,7 @@ os.environ["SARVAM_API_KEY"] = "test-key-not-real"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 os.environ.pop("VOICE_TTS_ENABLED", None)
 os.environ.pop("VOICE_TTS_SPEAKER", None)
+os.environ["GROQ_API_KEY"] = ""  # the step 2 agent is replaced by an echo stub below
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
@@ -65,6 +66,12 @@ from redis_client import redis_conn  # noqa: E402
 from voice import debug_store, pipeline  # noqa: E402
 from voice import tts as voice_tts  # noqa: E402
 from voice.stt import STTResult  # noqa: E402
+from voice.agent import AgentResult  # noqa: E402
+
+
+def echo_agent(text, language, **kw):
+    """Step 1b behaviour: echo what was heard. Step 2 (the real agent) is tested in test_voice_step2."""
+    return AgentResult(f"Aapne kaha: {text}", action="reply")
 
 main.SessionLocal = database.SessionLocal
 database.Base.metadata.create_all(bind=database.engine)
@@ -128,8 +135,7 @@ check("lang hi -> hi-IN", voice_tts.sarvam_language("hi") == "hi-IN")
 check("lang ur -> hi-IN", voice_tts.sarvam_language("ur") == "hi-IN")
 check("lang en -> en-IN", voice_tts.sarvam_language("en") == "en-IN")
 check("lang ta / None -> hi-IN", voice_tts.sarvam_language("ta") == "hi-IN" and voice_tts.sarvam_language(None) == "hi-IN")
-check("echo reply text", pipeline.build_reply_text("mujhe jaipur jaana hai") == "Aapne kaha: mujhe jaipur jaana hai")
-check("empty transcript reply", pipeline.build_reply_text("  ") == "Mujhe kuch sunai nahi diya, phir se boliye.")
+check("empty transcript reply text", pipeline.EMPTY_TRANSCRIPT_REPLY == "Mujhe kuch sunai nahi diya, phir se boliye.")
 
 # ---------------- over the socket
 client = TestClient(main.app)
@@ -177,14 +183,15 @@ def audio_text_keys():
 
 
 keys_before = audio_text_keys()
-with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.object(tts_service.requests, "post", FakeSarvam()):
+with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.object(tts_service.requests, "post", FakeSarvam()), \
+        mock.patch.object(pipeline, "run_agent", echo_agent):
     ws = connect()
 
     frames = turn(ws, pcm(1.5))
     kinds = [f["type"] for f in frames]
     check("transcript first, then reply", kinds[:2] == ["transcript", "reply"], kinds)
     rep = frames[1] if len(frames) > 1 else {}
-    check("reply message shape", set(rep) == {"type", "turn_id", "reply_text", "reply_audio_base64", "mime", "tts_ms"}
+    check("reply message shape", set(rep) == {"type", "turn_id", "reply_text", "reply_audio_base64", "mime", "tts_ms", "ui_actions", "action", "llm_ms"}
           and rep["turn_id"] == frames[0]["turn_id"] and rep["mime"] == "audio/wav" and isinstance(rep["tts_ms"], int), rep.keys())
     check("reply text is the echo", rep.get("reply_text") == "Aapne kaha: mujhe jaipur jaana hai", rep.get("reply_text"))
     check("reply audio is Sarvam's WAV", rep.get("reply_audio_base64") == WAV_B64)

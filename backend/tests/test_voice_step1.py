@@ -21,6 +21,7 @@ os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 os.environ["VOICE_TTS_ENABLED"] = "false"  # step 1 behaviour only; step 1b is tests/test_voice_step1b.py
+os.environ["GROQ_API_KEY"] = ""  # the step 2 agent fails fast (no network); tests/test_voice_step2.py covers it
 from pathlib import Path
 import tempfile
 
@@ -139,7 +140,10 @@ def turn(ws, audio, chunk=3200):
     for i in range(0, len(audio), chunk):
         ws.send_bytes(audio[i:i + chunk])
     ws.send_json({"type": "stop"})
-    return recv_until(ws, {"transcript", "error"})
+    msg = recv_until(ws, {"transcript", "error"})
+    if msg["type"] == "transcript":
+        recv_until(ws, {"reply"})  # the turn ends with the reply (steps 1b/2); the next start would be "busy" before it
+    return msg
 
 
 with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()):
@@ -217,6 +221,7 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()):
     check("/ws/app answers during a voice turn", took < 1.0, f"{took:.2f}s")
     msg = recv_until(ws, {"transcript", "error"})
     check("slow turn still completes", msg.get("type") == "transcript")
+    recv_until(ws, {"reply"})
     FakeSTT.delay = 0.0
 
     # ---- Groq failure
