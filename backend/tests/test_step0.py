@@ -41,6 +41,10 @@ from redis_client import redis_conn  # noqa: E402
 from task_queue import TASK_QUEUE_KEY  # noqa: E402
 
 main.SessionLocal = database.SessionLocal
+import itinerary_service  # noqa: E402
+# Never read the developer's local itinerary cache: a real (Groq) itinerary cached by a live run would
+# replace the mock one this test expects.
+itinerary_service.get_cached_itinerary = lambda key: None
 database.Base.metadata.create_all(bind=database.engine)
 for key in redis_conn.scan_iter("rl:*"):
     redis_conn.delete(key)
