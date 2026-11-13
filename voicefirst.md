@@ -374,7 +374,7 @@ Each step works and can be tested on its own. We review after every step before 
 | 0d. AI switch | Groq everywhere except tour guide chat; Gemini as backup | Itinerary, swap and optimize work on Groq |
 | 0e. Fixes | Past trips closed automatically, /trip empty state, Past trips section; map search (India only) with straight-line distance | Ended trips never open by themselves; "Hawa Mahal" search pins it with distance |
 | 1. Voice pipeline (test phase) | Dedicated `/ws/voice` pipeline: tap mic, PCM streamed to the backend, Groq Whisper transcribes, transcript shown in a temporary test panel. Nothing stored. See "Step 1 in detail" | Hindi, English and Hinglish transcripts appear on screen; nothing saved anywhere |
-| 1b. Spoken reply | Sarvam speaks a short reply on top of the step 1 pipeline | Reply audio plays after each turn |
+| 1b. Spoken reply | Sarvam speaks a short reply on top of the step 1 pipeline. **Built 13 Nov 2026**, see "Step 1b notes" | Reply audio plays after each turn |
 | 2. Navigation | "Open my itinerary", "food dikhao" | Every page reachable by voice |
 | 3. Questions | "Amber Fort kab jaana best hai?" | Short spoken answer |
 | 4. Create trip | Collect, confirm date, review page, Proceed | Nothing created without Proceed or "haan" |
@@ -500,6 +500,78 @@ VITE_VOICE_TEST_TRANSCRIPT=true
 - Restart `npm run dev` so Vite picks up the new variable.
 
 **Phones need HTTPS** for the mic. `localhost` works on the laptop, but a phone on the LAN needs an HTTPS URL. That is the same "change the backend URL" checklist as before.
+
+#### Step 1b notes (13 Nov 2026, branch `voice-step1b`)
+
+**Status: DONE on desktop Chrome (13 Nov 2026).** Built and tested by script, live with real Groq and Sarvam, and in Chrome with a recorded clip fed in as the microphone. Not yet tried on a phone (Android Chrome, iPhone Safari over HTTPS) or listened to by a person.
+
+**What it does:** after each recording the app speaks an echo: `"Aapne kaha: " + transcript`. If nothing was heard, it says "Mujhe kuch sunai nahi diya, phir se boliye." Step 2 replaces the echo with the agent's answer.
+
+**How it's built**
+- **Backend:**
+  - `voice/tts.py` calls Sarvam bulbul:v3 through `tts_service.synthesize_speech_sarvam` and returns WAV at 22,050 Hz.
+  - Language: `hi`/`ur` → `hi-IN`, `en` → `en-IN`, anything else → `hi-IN`.
+  - Settings: `VOICE_TTS_SPEAKER` (default `ritu`) and `VOICE_TTS_ENABLED` (default true).
+- **Message order:**
+  - The `transcript` message still goes out as soon as speech-to-text finishes.
+  - Then `{"type":"reply", turn_id, reply_text, reply_audio_base64 | null, mime, tts_ms}`.
+  - If TTS fails: a `reply` with no audio, then the error `tts_failed` ("Couldn't play the reply."). The socket stays open.
+- **Privacy:**
+  - `synthesize_speech_sarvam` got `use_cache=False`, which voice uses. Otherwise the user's words would be cached in Redis under `audio:text:*`.
+  - Its error log no longer prints Sarvam's response body, which can echo the text.
+  - The voice logs record `tts_ms` and status only.
+- **Test-only store:** `voice_speeches` gets `reply_text` and `tts_time_ms`, added to existing tables with `ALTER TABLE … ADD COLUMN IF NOT EXISTS` at startup. The reply audio is never saved.
+- **Frontend:**
+  - `frontend/src/voice/replyPlayer.ts` uses one playback AudioContext. It's created and resumed inside the mic tap, before any `await`, and unlocked with a silent buffer, so iPhone Safari lets the reply play seconds later.
+  - Replies are played with `decodeAudioData` and an `AudioBufferSourceNode`.
+  - The mic has a new `speaking` state: green with a sound wave, labelled "Speaking. Tap to interrupt."
+  - **Barge-in:** tapping while it speaks stops the reply and starts recording. Starting a recording always stops playback, and so do logout and unmount.
+  - The reply timer now covers speech-to-text plus TTS: 30 s with no `reply` means an error.
+  - The test panel shows the reply text, "TTS … ms" and "total … ms" (second tap → sound starts).
+
+**Tested**
+- `backend/tests/test_voice_step1b.py`, **23/23**, with Groq and Sarvam simulated:
+  - language mapping, the echo and the empty-transcript reply
+  - message order and shape
+  - the Sarvam request: `hi-IN`/`en-IN`, `ritu`, `bulbul:v3`
+  - TTS failure: a reply with no audio plus `tts_failed`, and the next turn still works
+  - `VOICE_TTS_ENABLED=false` and `VOICE_TTS_SPEAKER`
+  - **no `audio:text:*` keys written**, while other callers still cache
+  - the test-only store adds the new columns to an old table and saves `reply_text`/`tts_time_ms`
+- All other backend tests still pass:
+  - the rate limiter
+  - `test_step0` 27/27
+  - `test_ownership` 21/21
+  - `test_step0e` 13/13
+  - `test_voice_step1` 31/31, now run with `VOICE_TTS_ENABLED=false`
+
+  `test_step0` now ignores the local itinerary cache, because a real cached itinerary had replaced the mock one it expects.
+- **Live through the running server** (real Groq + Sarvam, 8 clips made with Windows' English voices, 4 English and 4 romanized Hinglish):
+  - Every clip got reply audio: 22,050 Hz WAV, 2.8–3.9 s long.
+  - **Average Groq speech-to-text 745 ms, Sarvam TTS 1,310 ms, second tap → reply received 2,081 ms.**
+  - **No new `audio:text:*` keys in Redis.**
+  - The test-only store saved `reply_text` and `tts_time_ms` on all 8 rows.
+- **Chrome** (desktop 1440 px and 393 px, a clip fed in as the mic): **14/14**.
+  - The reply plays: the mic shows the speaking state and the wave, then goes back to idle.
+  - The panel shows the reply, TTS ms and total.
+  - Barge-in stops the reply and starts recording.
+  - **Second tap → sound started: 2.3–3.3 s** (TTS 1.7–2.3 s in those runs).
+- Frontend build passes and lint has no errors.
+
+**Problems found**
+- **Romanized Hinglish is detected as English.** Groq Whisper labelled all four Hinglish clips `en`, so the reply was spoken with the `en-IN` voice. That includes the Hindi words and the "Aapne kaha" prefix, which likely sounds anglicised.
+  - Real Hindi speech should come back as `hi` (Devanagari), but this wasn't tested: Windows has no Hindi voice.
+  - To decide before step 2:
+    - always reply in `hi-IN` for Hinglish, or
+    - have the agent (step 2) write its reply in Devanagari, which Sarvam's `hi-IN` voice pronounces natively.
+- **Speed:** Sarvam takes about 1.3 s per short reply, so second tap → sound is about 2.1–3.3 s, at the edge of the ~3 s target. Step 2 adds the agent call on top. Options to look at: a shorter echo, Sarvam streaming, or starting TTS while the agent is still answering.
+- **The test clips aren't real speech.** The Windows voices mangle Hinglish, for example "Kanakahan Acha Milaga" for "Khana kahan acha milega". Real accuracy and how natural the voice sounds need the owner's own voice and ears.
+
+**Still needs the owner**
+- Phones over HTTPS: Android Chrome and iPhone Safari. The iPhone autoplay unlock is built but not tested on a real iPhone.
+- Hindi, Hinglish and English said by a person: does the ritu voice sound natural?
+- Remove `SARVAM_API_KEY` and restart the backend. The transcript should still show, the panel should say "Couldn't play the reply.", and the next recording should still work. This is covered by the test with a simulated failure, not tried live.
+- About 10 of your own clips for the timing table.
 
 ## 9. Cost, speed and safety
 
