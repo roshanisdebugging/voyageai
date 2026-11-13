@@ -43,5 +43,13 @@ brain/
 scratch/
 Agent.md
 
+# Local AI coding instructions and configuration
+AGENTS.md
+AGENTS.override.md
+/.agents/
+/.codex/
+/CLAUDE.md
+/setup-voyageai-codex.sh
+
 # Voice test recordings (testing.md), local only
 test_audio_folder/
