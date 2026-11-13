@@ -16,7 +16,7 @@ export const FloatingAIButton: React.FC = () => {
   return (
     <button
       onClick={() => openAiAssistant()}
-      className="fixed z-30 right-4 press-scale animate-scaleIn"
+      className="fixed z-[var(--z-floating)] right-4 press-scale animate-scaleIn"
       style={{ bottom: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 12px)' }}
       aria-label={`Ask Cruiser: ${aiContextLabel}`}
     >

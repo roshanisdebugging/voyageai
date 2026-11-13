@@ -184,7 +184,7 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
         title={label}
         aria-pressed={phase === 'recording'}
         disabled={phase === 'waiting' || phase === 'starting'}
-        className={`fixed z-30 right-4 w-14 h-14 rounded-full shadow-lg flex flex-col items-center justify-center press-scale transition-colors disabled:cursor-wait ${
+        className={`fixed z-[var(--z-floating)] right-4 w-14 h-14 rounded-full shadow-lg flex flex-col items-center justify-center press-scale transition-colors disabled:cursor-wait ${
           phase === 'recording'
             ? 'bg-rose-600 text-white ring-4 ring-rose-300/60 animate-pulse'
             : 'bg-white dark:bg-zinc-900 text-[#355F58] dark:text-emerald-400 border border-[#D9DEDA] dark:border-zinc-700'

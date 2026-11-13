@@ -20,7 +20,7 @@ export interface PanelEntry {
 const seconds = (ms?: number) => (ms == null ? '–' : `${(ms / 1000).toFixed(1)} s`);
 
 export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () => void }> = ({ entries, onClear }) => {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false); // collapsed by default: just the header pill
   const transcripts = entries.filter((e) => e.kind === 'transcript' && e.groqMs != null);
   const avgGroq = transcripts.length
     ? Math.round(transcripts.reduce((sum, e) => sum + (e.groqMs || 0), 0) / transcripts.length)
@@ -29,8 +29,9 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
   return (
     <section
       aria-label="Voice test transcripts"
-      className="fixed z-30 left-3 w-[min(22rem,calc(100vw-6.5rem))] rounded-2xl bg-white/95 dark:bg-zinc-900/95 backdrop-blur border border-amber-300 dark:border-amber-700 shadow-lg text-[#1F2522] dark:text-zinc-100"
-      style={{ bottom: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 12px)' }}
+      className="fixed z-[var(--z-floating)] left-3 w-[min(22rem,calc(100vw-24px))] lg:left-auto lg:right-4 lg:w-[22rem] rounded-2xl bg-white/95 dark:bg-zinc-900/95 backdrop-blur border border-amber-300 dark:border-amber-700 shadow-lg text-[#1F2522] dark:text-zinc-100"
+      // At the top, under the header: away from the mic, Concierge and bottom nav, and (lg: right side) the sidebar.
+      style={{ top: 'calc(var(--header-h) + var(--safe-top) + 8px)' }}
     >
       <header className="flex items-center justify-between gap-2 px-3 py-2 border-b border-amber-200 dark:border-amber-800">
         <button
