@@ -55,6 +55,7 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
   - queueing the itinerary job
 
   Both REST and WS call it, and so will the voice agent. Don't re-implement it in a handler. `serialize_trip(trip, db)` is the shared response shape.
+- **Past trips close themselves on read:** `trip_lifecycle.close_finished_trips(db, trips)` sets open trips whose `end_date` is before today to `COMPLETED`. "Today" is `today_ist()`, the India date. It's called from `trips:list`, `GET /api/trips` and `GET /api/trips/{id}`, so there is no scheduled job. Call it from any new endpoint that lists or returns trips.
 - **Itinerary generation** asks the AI for `transportSuggestions` when the trip has a starting city. They're saved as `trip_transports` rows with status `RECOMMENDED`, replaced on regenerate. The itinerary cache key includes the origin.
 - **Schema additions without migrations:** new columns on existing tables must also be added as `ALTER TABLE … ADD COLUMN IF NOT EXISTS` in `database.init_db()`. `create_all` won't add them. Examples: `trips.origin_city_id`, `itinerary_activities.is_done`.
 - **Weather** comes from `weather_service.get_trip_forecast` (Open-Meteo, no key, up to 16 days ahead). It raises `ForecastUnavailable` instead of inventing weather.
@@ -82,6 +83,8 @@ Restart `npm run dev` after editing `.env`; Vite reads it only at startup.
   - `navigate('/trips/new', { state: { prefill: TripDraft } })` opens it pre-filled at Review. This is the voice "jump" target.
   - India-only place search is `features/trip/components/PlaceSearchField.tsx`.
 - **Small actions with Undo:** `useToast().showToast({ message, undo })` from `components/common/UndoToast.tsx`. `ToastProvider` is mounted in `App.tsx`. Used for mark done (`TripContext.setActivityDone` → WS `trips:set_activity_done`), save/unsave place, and Explore/Food filters.
+- **Which trip opens by itself:** `tripRepository.selectCurrentTripId()`. Order: the last-viewed trip if still current, then an ongoing trip, then the nearest upcoming one, otherwise none. It never picks a past trip; `isPastTrip()` means COMPLETED, or an end date before `todayInIndia()`. With no current trip, `/trip` (`ItineraryView`) shows an empty state with Plan a trip and Past trips. Past trips open only from the Past trips tab in My trips. Don't add other "fall back to the first trip" logic.
+- **Map search** (`components/map/MapView.tsx`): a debounced `places:search`, India-only via `isInIndia()` from `PlaceSearchField.tsx`. It shows a pin and the straight-line distance from the GPS location only. The map always renders, starting over India when there is no location.
 - **`ITINERARY_READY`** for any of the user's trips sets `TripContext.readyNotice`. `components/trip/ItineraryReadyNotice.tsx` then offers to open the itinerary or download page.
 - Data access is mostly WS-first with a REST fallback (see `features/trip/TripContext.tsx`). When both fail, throw an error for the UI to show; don't fabricate local stand-in records or sessions.
 - The auth token is kept **in memory only** (`setAuthToken`). `main.tsx` clears localStorage and sessionStorage on every load, keeping only `cruiser_theme`. Do not add browser-storage persistence, since it is wiped on boot. Persist state server-side instead.
@@ -96,6 +99,9 @@ Mistakes made in earlier sessions, and what to do instead:
 - **Check how the frontend calls a feature before describing or changing its flow.** An early architecture write-up assumed REST was the main path (`POST /api/trips`, `/api/chat`). In fact the app sends almost everything over the `/ws/app` WebSocket first. Grep `wsClient.sendRequest(` and `fetch(` in `src/` first. Then fix both the WS branch and the REST route, or neither.
 - **Don't trust names or comments.** `verify_trip_ownership` didn't verify ownership. `from fastapi import requests` looked like the HTTP library but wasn't, so `/api/trips/itinerary/swap-options` always returned mock data. A function was also defined twice in `main.py`, and the later copy silently won. After editing `main.py`, check for duplicates: `grep -oE "^(class|def|async def) [A-Za-z_]+" backend/main.py | sort | uniq -d`.
 - **Silent fallbacks hide bugs.** The code used to swallow errors and return fake data: mock itineraries, `usr_local` sessions, local-only trips. Before assuming a feature works, check whether it is quietly returning a fallback.
+- **Fallback queries can leak data.** `/api/trips/itinerary/add` accepted guests and fell back to "the latest trip overall", which meant another user's trip. Find these with `grep -n "db.query(TripModel)" backend/main.py | grep -v user_id`. Every hit must be inside an owner-checked path (`WS_TRIP_ACTIONS`, `verify_trip_ownership`, `require_owned_trip`).
+- **Testing frontend logic without a test runner:** esbuild isn't installed (Vite here doesn't ship it). Transpile one `.ts` file with `require('typescript').transpileModule` and import the output from a scratchpad `.mjs`. This only works for files with type-only imports, such as `tripRepository.ts`.
+- **Live end-to-end checks** against the user's running server are fine when needed. Use throwaway `step0check-*@example.com` accounts and delete them afterwards: remove rows with that `user_id` from every table, then from `auth_users`. Stop any worker you started.
 - **Unused-file detection has false positives.** Files imported as `./App.tsx`, or by directory (`./store`, `../types`), look unused to a basename grep. Confirm before deleting, then rerun the check, because deleting one file can orphan another (for example `PackageInclusions.tsx`).
 - **Never import `main.py` against the real database.** `database.py` calls `load_dotenv(override=True)`, and importing `main` runs `init_db()`. To test the backend locally, use the pattern in the next bullet.
 - **Backend smoke-test pattern** (no real DB):
@@ -111,6 +117,13 @@ Mistakes made in earlier sessions, and what to do instead:
   - Don't use `git stash` to compare before/after: it turned staged `git rm` deletions into unstaged ones.
 - **Local Redis is old** (no `HELLO` command). Redis clients need `protocol=2`.
 - **Security findings stay out of shared pages.** The architecture artifact is shared by link, so vulnerability details go only in chat or private notes.
+- **The user edits `voicefirst.md` / `testing.md` in the IDE at the same time.** Once, their editor saved an older buffer over my changes: ticks and notes vanished and a status line went back. Re-read a plan file right before editing it, check the edit landed, and never assume an earlier edit is still there.
+- **The plan can change between sessions.** For example, voice moved from a `voice:turn` action on `/ws/app` to its own `/ws/voice`. Read the current step's section in `voicefirst.md` before building, not the summary in this file.
+- **Only tick boxes that a test actually proved.** Leave browser- and phone-dependent boxes for the owner, and say so next to them.
+- **The user's backend runs with `--reload`** on :80, so new backend code is live as soon as it's saved. Live checks hit it directly. The voice debug store is on there, so live voice checks write into `voice_test`; delete those rows and the `test_audio_folder/<session>` folder afterwards.
+- **Test clips without a microphone:** Windows SAPI (`System.Speech`, voices David/Zira/Hazel, English only) can write 16 kHz mono WAVs for live STT checks. Real Hindi or Hinglish accuracy still needs a human speaker.
+- **WebSocket tests:** `TestClient.websocket_connect(path, headers={"origin": ...})` covers `/ws/voice`. Patch `voice.pipeline.get_stt` to simulate Groq. For test-only saving, create and drop a throwaway local Postgres DB (`voice_test_ci`), never the owner's `voice_test`.
+- **Secrets the user gives in chat** (like the local Postgres password) go only into gitignored `.env` files, never into CLAUDE.md, plan files or memory.
 - **The user's preferred workflow:**
   - Explain the plan in plain words.
   - Fix bugs and clean up before adding features.
@@ -126,13 +139,36 @@ Mistakes made in earlier sessions, and what to do instead:
 - Accounts created by the old password-less login path can't log in. There is no password reset flow.
 - Subscription tables (`payment_models.py`) aren't used by any route yet.
 - `backend/COST_GUARD.md` refers to test files that aren't in the repo.
+- The worker sometimes logs `Job failed: Timeout reading from socket` while idle. It looks like a Redis idle timeout, logged as if a job had failed.
+- `FoodSheet.tsx` fills in made-up details when a place has none: rating 4.5, opening hours, "Vegetarian Friendly". As a result, the Pure Veg filter matches every place.
+
+## Voice pipeline (built in step 1)
+
+- **Separate from `/ws/app`.** Voice has its own socket, `/ws/voice` (`backend/voice/ws.py`), mounted in `main.py` with `mount_voice(app, origin_allowed=is_allowed_origin)`. The frontend is in `src/voice/` and doesn't use `wsClient`.
+- **Protocol** (`backend/voice/messages.py`):
+  - Text frames are control messages: `auth`, `start`, `stop`, `end_session` → `ready`, `recording`, `transcript`, `error`.
+  - Binary frames are raw PCM: 16 kHz, 16-bit, mono, about 100 ms each, made by `public/pcm-worklet.js`.
+  - Login is the cookie, or a first `auth` message. Never a URL token.
+  - A foreign `Origin` is refused.
+  - Limits: 30 s / 960 KB per recording (cut, then transcribed), one recording at a time per connection, 15 a minute and 100 a day per user (fails closed).
+- **Adding a stage** (agent, tools, TTS) means adding to `voice/pipeline.run_turn`. `after_turn` runs once the app has its reply.
+  - Pipeline functions are blocking; `ws.py` runs them with `run_in_threadpool`, so `/ws/app` never waits.
+  - Logs carry the turn ID, lengths, timings and status. Never words or audio.
+- **STT provider:** `voice/stt.get_stt()` chooses it from `VOICE_STT_PROVIDER`. Default: Groq `whisper-large-v3-turbo`, about 0.8 s for a 7 s clip.
+- **Test-only saving** (`testing.md`, `voice/debug_store.py`):
+  - Turns on only with `VOICE_DEBUG_STORE=true` plus `VOICE_DEBUG_DATABASE_URL`.
+  - It has its own SQLAlchemy `MetaData`, never the app's `Base`, and refuses a non-local host.
+  - WAVs go to `backend/test_audio_folder/` (gitignored).
+  - The owner's local Postgres 17 (user `postgres`) has a `voice_test` DB. Its password is only in `backend/.env`; never write it into tracked files, docs or memory.
+- **The `voice` logger** gets its own handler in `mount_voice`, because uvicorn doesn't configure app loggers. INFO lines from other app loggers don't show.
+- **The test transcript panel** shows only with `VITE_VOICE_TEST_TRANSCRIPT=true`. Without it, voice errors go to the Undo toast.
 
 ## Roadmap: voice-first mode (next major feature)
 
 Goal: the user can do everything by speaking as well as by tapping. Summary of `voicefirst.md` v2:
 - **Mic and voice turn:**
   - One floating mic button after login. There's no Voice/Normal toggle. Tap to start, tap to stop, up to 30 seconds.
-  - A voice turn is a `voice:turn` action on `/ws/app`.
+  - A voice turn runs over the dedicated `/ws/voice` socket (see "Voice pipeline" above). The older plan's `voice:turn` action on `/ws/app` was replaced.
   - Speech-to-text is Groq Whisper (swappable). The agent is a Groq function-calling model. Replies are spoken by Sarvam TTS with the `ritu` voice.
   - The server keeps a draft trip in Redis and finally jumps the app to the pre-filled review page (wizard step 6).
 - **Tool rules:**
@@ -140,7 +176,10 @@ Goal: the user can do everything by speaking as well as by tapping. Summary of `
   - Big actions (create trip, add expense, swap, regenerate, optimize, weather replan) become a server-side pending action. It runs only after "haan" or a Proceed/Confirm tap.
   - Voice never deletes trips.
   - Agent tools must call the shared services (`trip_lifecycle.create_trip_for_user`, `ownership.py`) and never re-implement logic.
-- **The plan of record is `voicefirst.md`** (decisions closed 12 Nov 2026). Step 0 is done on branch `step0`. Start voice step 1 only when the user says "start on voice".
+- **The plan of record is `voicefirst.md`** (decisions closed 12 Nov 2026), plus `testing.md` for test-only saving.
+  - Step 0 (0a–0e) was done on 13 Nov 2026 and tested live.
+  - Step 1 (voice pipeline) was built on 13 Nov 2026 and tested by script and live with Groq. It still needs the owner's browser and phone tests.
+  - Each step is reviewed by the user before the next one starts. Don't start step 1b (spoken reply) until asked.
 
 ## Specs in progress
 
