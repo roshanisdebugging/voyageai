@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useRef, useState } from 'react';
+import React, { useEffect, useCallback, useRef, useState, useId } from 'react';
 import { X } from 'lucide-react';
 
 interface BottomSheetProps {
@@ -27,6 +27,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   className = '',
   title,
 }) => {
+  const titleId = useId();
   const sheetRef = useRef<HTMLDivElement>(null);
   const [dragY, setDragY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -104,6 +105,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
         }}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
       >
         {/* Handle bar with Touch Listener */}
         {showHandle && (
@@ -119,16 +121,16 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
 
         {/* Optional Title Header */}
         {title && (
-          <div className="px-5 py-3 border-b border-[#D9DEDA] flex items-center justify-between shrink-0 bg-white">
-            <h3 className="text-base font-extrabold text-[#1F2522]">{title}</h3>
+          <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center justify-between gap-3 shrink-0">
+            <h3 id={titleId} className="min-w-0 wrap-anywhere text-base font-extrabold text-[var(--color-text-primary)]">{title}</h3>
             <button
               type="button"
               onClick={onClose}
-              className="w-8 h-8 rounded-full bg-[#F0F2EF] hover:bg-[#E4E8E4] border border-[#D9DEDA] flex items-center justify-center text-[#1F2522] transition-colors press-scale shrink-0"
+              className="w-11 h-11 rounded-full hover:bg-[var(--color-surface-elevated)] flex items-center justify-center text-[var(--color-text-primary)] focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] transition-colors press-scale shrink-0"
               aria-label="Close sheet"
               title="Close"
             >
-              <X className="w-4 h-4 text-[#1F2522]" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
         )}

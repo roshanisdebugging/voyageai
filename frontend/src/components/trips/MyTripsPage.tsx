@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTrip } from '../../features/trip/TripContext';
 import { isPastTrip } from '../../features/trip/tripRepository';
@@ -29,6 +29,15 @@ export const MyTripsPage: React.FC = () => {
     tripTitle: '',
     actionType: 'DELETE',
   });
+  const confirmationDialog = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = confirmationDialog.current;
+    if (!dialog) return;
+
+    if (confirmActionModal.isOpen) dialog.showModal();
+    else dialog.close();
+  }, [confirmActionModal.isOpen]);
 
   const filteredTrips = trips.filter(trip => {
     const status = (trip.status || '').toUpperCase();
@@ -44,22 +53,35 @@ export const MyTripsPage: React.FC = () => {
     filteredTrips.sort((a, b) => (b.endDate || '').localeCompare(a.endDate || ''));
   }
 
+  const closeConfirmation = () => {
+    setConfirmActionModal({ isOpen: false, tripId: '', tripTitle: '', actionType: 'DELETE' });
+  };
+
   const handleConfirmAction = async () => {
     const { tripId, actionType } = confirmActionModal;
     if (actionType === 'DELETE') await deleteTrip(tripId);
     else if (actionType === 'CANCEL') await cancelTrip(tripId);
     else if (actionType === 'ARCHIVE') await archiveTrip(tripId);
 
-    setConfirmActionModal({ isOpen: false, tripId: '', tripTitle: '', actionType: 'DELETE' });
+    closeConfirmation();
   };
 
   return (
-    <div className="space-y-6 pb-24 max-w-xl mx-auto animate-fadeIn">
+    <div className="mx-auto w-full min-w-0 max-w-xl space-y-6 pb-44 lg:pb-24 animate-fadeIn">
 
       {/* Confirmation Bottom Sheet */}
-      {confirmActionModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#1F2522]/40 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="w-full max-w-md bg-white border border-[#D9DEDA] rounded-3xl p-6 space-y-4 text-center shadow-xl">
+      <dialog
+        ref={confirmationDialog}
+        aria-labelledby="my-trips-confirmation-title"
+        aria-describedby="my-trips-confirmation-description"
+        onCancel={event => {
+          event.preventDefault();
+          closeConfirmation();
+        }}
+        className="fixed inset-x-0 top-auto bottom-4 mx-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-3xl border border-[#D9DEDA] bg-white p-6 text-center shadow-xl backdrop:bg-[#1F2522]/40 backdrop:backdrop-blur-xs"
+      >
+        {confirmActionModal.isOpen && (
+          <div className="space-y-4">
             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mx-auto ${
               confirmActionModal.actionType === 'DELETE'
                 ? 'bg-rose-100 text-rose-600'
@@ -69,10 +91,10 @@ export const MyTripsPage: React.FC = () => {
             </div>
 
             <div className="space-y-1">
-              <h3 className="text-lg font-bold text-[#1F2522]">
+              <h3 id="my-trips-confirmation-title" className="text-lg font-bold text-[#1F2522]">
                 {confirmActionModal.actionType === 'DELETE' ? 'Delete Trip?' : confirmActionModal.actionType === 'CANCEL' ? 'Cancel Trip?' : 'Archive Trip?'}
               </h3>
-              <p className="text-xs text-[#5F6863]">
+              <p id="my-trips-confirmation-description" className="text-xs text-[#5F6863] [overflow-wrap:anywhere]">
                 Are you sure you want to {confirmActionModal.actionType.toLowerCase()} <span className="text-[#1F2522] font-semibold">{confirmActionModal.tripTitle}</span>?
               </p>
             </div>
@@ -91,26 +113,27 @@ export const MyTripsPage: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmActionModal({ isOpen: false, tripId: '', tripTitle: '', actionType: 'DELETE' })}
-                className="w-full py-2 text-xs text-[#5F6863] hover:text-[#1F2522]"
+                onClick={closeConfirmation}
+                autoFocus
+                className="min-h-11 w-full py-2 text-xs text-[#5F6863] hover:text-[#1F2522]"
               >
                 Keep Trip
               </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </dialog>
 
       {/* Header */}
-      <div className="flex items-center justify-between pt-1">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 pt-1">
+        <div className="min-w-0">
           <h1 className="text-2xl font-extrabold text-[#1F2522]">My Trips</h1>
           <p className="text-xs text-[#5F6863]">Manage, switch & plan your adventures</p>
         </div>
 
         <button
           onClick={() => navigate('/trips/new')}
-          className="px-3.5 py-2 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white font-bold text-xs flex items-center gap-1.5 shadow-xs press-scale"
+          className="min-h-11 px-3.5 py-2 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white font-bold text-xs flex items-center gap-1.5 shadow-xs press-scale"
         >
           <Plus className="w-4 h-4 text-white" />
           <span>New Trip</span>
@@ -118,7 +141,7 @@ export const MyTripsPage: React.FC = () => {
       </div>
 
       {/* Tab Controls */}
-      <div className="flex gap-1.5 p-1.5 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-xs font-bold overflow-x-auto no-scrollbar">
+      <div role="group" aria-label="Trip status" className="grid grid-cols-2 gap-1.5 p-1.5 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-xs font-bold sm:grid-cols-4">
         {[
           { id: 'ACTIVE', label: 'Active / Planning' },
           { id: 'UPCOMING', label: 'Upcoming' },
@@ -128,7 +151,8 @@ export const MyTripsPage: React.FC = () => {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as TabId)}
-            className={`flex-1 py-2.5 px-3 rounded-xl transition-all whitespace-nowrap text-center ${
+            aria-pressed={activeTab === tab.id}
+            className={`min-h-11 min-w-0 py-2.5 px-2 rounded-xl transition-all text-center ${
               activeTab === tab.id
                 ? 'bg-[#355F58] text-white font-extrabold shadow-xs'
                 : 'text-[#5F6863] hover:text-[#1F2522]'
@@ -152,7 +176,7 @@ export const MyTripsPage: React.FC = () => {
             </p>
             <button
               onClick={() => navigate('/trips/new')}
-              className="py-3 px-5 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs inline-flex items-center gap-1.5 shadow-xs press-scale"
+              className="min-h-11 py-3 px-5 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs inline-flex items-center gap-1.5 shadow-xs press-scale"
             >
               <Plus className="w-4 h-4 text-white" />
               <span>Plan a Trip</span>
@@ -200,26 +224,25 @@ export const MyTripsPage: React.FC = () => {
 
                 {/* Content */}
                 <div className="p-4 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h3 className="font-extrabold text-lg text-[#1F2522]">{trip.title}</h3>
-                      <div className="flex items-center gap-1.5 text-xs text-[#5F6863] mt-0.5 font-medium">
+                  <div>
+                    <h3 className="font-extrabold text-lg text-[#1F2522] [overflow-wrap:anywhere]">{trip.title}</h3>
+                    <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs font-medium text-[#5F6863] [overflow-wrap:anywhere]">
+                      <div className="flex min-w-0 items-start gap-1.5">
                         <MapPin className="w-3.5 h-3.5 text-[#355F58] shrink-0" />
                         <span>{trip.destination.name}</span>
-                        <span>·</span>
-                        <span>{trip.startDate} to {trip.endDate}</span>
                       </div>
+                      <span>{trip.startDate} to {trip.endDate}</span>
                     </div>
                   </div>
 
                   {/* Actions */}
-                  <div className="flex items-center justify-between pt-2 border-t border-[#D9DEDA]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#D9DEDA]">
                     <button
                       onClick={() => {
                         setCurrentTripId(trip.id);
                         navigate('/trip/itinerary');
                       }}
-                      className={`px-4 py-2.5 rounded-2xl font-extrabold text-xs flex items-center gap-1.5 press-scale shadow-xs ${
+                      className={`min-h-11 px-4 py-2.5 rounded-2xl font-extrabold text-xs flex items-center gap-1.5 press-scale shadow-xs ${
                         isCurrent
                           ? 'bg-[#355F58] text-white hover:bg-[#2C504A]'
                           : 'bg-[#F0F2EF] border border-[#D9DEDA] text-[#355F58] hover:border-[#355F58]/40'
@@ -238,8 +261,9 @@ export const MyTripsPage: React.FC = () => {
                             tripTitle: trip.title,
                             actionType: 'ARCHIVE'
                           })}
+                          aria-label="Archive Trip"
                           title="Archive Trip"
-                          className="p-2.5 rounded-xl text-[#5F6863] hover:text-amber-700 hover:bg-[#F0F2EF] transition-colors"
+                          className="grid size-11 place-items-center rounded-xl text-[#5F6863] hover:text-amber-700 hover:bg-[#F0F2EF] transition-colors"
                         >
                           <Archive className="w-4.5 h-4.5" />
                         </button>
@@ -252,8 +276,9 @@ export const MyTripsPage: React.FC = () => {
                           tripTitle: trip.title,
                           actionType: 'DELETE'
                         })}
+                        aria-label="Delete Trip"
                         title="Delete Trip"
-                        className="p-2.5 rounded-xl text-[#5F6863] hover:text-rose-600 hover:bg-[#F0F2EF] transition-colors"
+                        className="grid size-11 place-items-center rounded-xl text-[#5F6863] hover:text-rose-600 hover:bg-[#F0F2EF] transition-colors"
                       >
                         <Trash2 className="w-4.5 h-4.5" />
                       </button>
