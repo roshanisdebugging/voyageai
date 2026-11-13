@@ -104,6 +104,11 @@ Mistakes made in earlier sessions, and what to do instead:
 
 - **Check how the frontend calls a feature before describing or changing its flow.** An early architecture write-up assumed REST was the main path (`POST /api/trips`, `/api/chat`). In fact the app sends almost everything over the `/ws/app` WebSocket first. Grep `wsClient.sendRequest(` and `fetch(` in `frontend/src/` first. Then fix both the WS branch and the REST route, or neither.
 - **Don't trust names or comments.** `verify_trip_ownership` didn't verify ownership. `from fastapi import requests` looked like the HTTP library but wasn't, so `/api/trips/itinerary/swap-options` always returned mock data. A function was also defined twice in `main.py`, and the later copy silently won. After editing `main.py`, check for duplicates: `grep -oE "^(class|def|async def) [A-Za-z_]+" backend/main.py | sort | uniq -d`.
+- **No invented data, ever** (removed 13 Nov 2026): no mock lists (`mockData.ts` is gone), no default ratings, prices, hours, distances, descriptions, traveller counts or cities, and no MOCK payloads from the backend.
+  - An unknown value shows "—" or is hidden. "Free" appears only when the cost is known to be 0.
+  - When live data fails, the backend returns 503 and the screen says it couldn't load.
+  - The app doesn't book cabs. `CabBookingModal` and `RidesPage` hand off to Uber (universal link) or Google Maps directions via `frontend/src/utils/rideLinks.ts`, and never write a transport or expense.
+  - `places:nearby` needs coordinates and returns `[]` without them.
 - **Silent fallbacks hide bugs.** The code used to swallow errors and return fake data: mock itineraries, `usr_local` sessions, local-only trips. Before assuming a feature works, check whether it is quietly returning a fallback.
 - **Fallback queries can leak data.** `/api/trips/itinerary/add` accepted guests and fell back to "the latest trip overall", which meant another user's trip. Find these with `grep -n "db.query(TripModel)" backend/main.py | grep -v user_id`. Every hit must be inside an owner-checked path (`WS_TRIP_ACTIONS`, `verify_trip_ownership`, `require_owned_trip`).
 - **Testing frontend logic without a test runner:** esbuild isn't installed (Vite here doesn't ship it). Transpile one `.ts` file with `require('typescript').transpileModule` and import the output from a scratchpad `.mjs`. This only works for files with type-only imports, such as `tripRepository.ts`.
@@ -146,7 +151,6 @@ Mistakes made in earlier sessions, and what to do instead:
 - Subscription tables (`payment_models.py`) aren't used by any route yet.
 - `docs/COST_GUARD.md` refers to test files that aren't in the repo.
 - The worker sometimes logs `Job failed: Timeout reading from socket` while idle. It looks like a Redis idle timeout, logged as if a job had failed.
-- `FoodSheet.tsx` fills in made-up details when a place has none: rating 4.5, opening hours, "Vegetarian Friendly". As a result, the Pure Veg filter matches every place.
 
 ## Voice pipeline (built in step 1)
 
