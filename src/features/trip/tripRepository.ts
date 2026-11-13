@@ -1,5 +1,21 @@
 import type { Trip, TripDraft, TripStatus } from './types';
 
+/** Today's date in India as YYYY-MM-DD (the backend closes trips by the same date). */
+export const todayInIndia = (): string =>
+  new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+const dateOnly = (value?: string | null): string => (value || '').slice(0, 10);
+
+const CLOSED_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'ARCHIVED']);
+
+/** A past trip: closed by the server, or its end date has already gone by. */
+export const isPastTrip = (trip: Trip, today: string = todayInIndia()): boolean =>
+  (trip.status || '').toUpperCase() === 'COMPLETED' ||
+  (!CLOSED_STATUSES.has((trip.status || '').toUpperCase()) && !!trip.endDate && dateOnly(trip.endDate) < today);
+
+const isCurrentOrUpcoming = (trip: Trip, today: string): boolean =>
+  !CLOSED_STATUSES.has((trip.status || '').toUpperCase()) && !isPastTrip(trip, today);
+
 const inMemoryTrips: Record<string, Trip[]> = {};
 const inMemoryCurrentTripId: Record<string, string | null> = {};
 const inMemoryDrafts: Record<string, TripDraft | null> = {};
@@ -40,25 +56,22 @@ export const tripRepository = {
     delete inMemoryDrafts[key];
   },
 
+  /**
+   * Picks the trip to open automatically. Never picks a past trip (COMPLETED, or an end date
+   * before today), even if it was the last one viewed; past trips open only when the user taps them.
+   * Order: the last-viewed trip if it's still current, then an ongoing trip, then the nearest upcoming one.
+   */
   selectCurrentTripId(trips: Trip[], preferredId?: string | null): string | null {
-    if (trips.length === 0) return null;
+    const today = todayInIndia();
+    const current = trips.filter(t => isCurrentOrUpcoming(t, today));
+    if (current.length === 0) return null;
 
-    // Rule 1: Restores preferredId if valid in trips array
-    if (preferredId && trips.some(t => t.id === preferredId)) {
-      return preferredId;
-    }
+    if (preferredId && current.some(t => t.id === preferredId)) return preferredId;
 
-    // Rule 2: Select first ACTIVE trip
-    const activeTrip = trips.find(t => t.status === 'ACTIVE' || t.status === 'PLANNING');
-    if (activeTrip) return activeTrip.id;
-
-    // Rule 3: Select nearest UPCOMING trip
-    const upcomingTrip = trips.find(t => t.status === 'UPCOMING' || (t.status as any) === 'CONFIRMED');
-    if (upcomingTrip) return upcomingTrip.id;
-
-    // Rule 4: Select first non-archived trip or null
-    const validTrip = trips.find(t => t.status !== 'ARCHIVED' && t.status !== 'CANCELLED');
-    return validTrip ? validTrip.id : null;
+    const byStart = [...current].sort((a, b) => dateOnly(a.startDate).localeCompare(dateOnly(b.startDate)));
+    const ongoing = byStart.find(t => dateOnly(t.startDate) <= today);
+    if (ongoing) return ongoing.id;
+    return byStart[0].id;
   },
 
   validateStatusTransition(currentStatus: TripStatus, nextStatus: TripStatus): boolean {

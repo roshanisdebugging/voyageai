@@ -1,21 +1,87 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { BottomSheet } from '../common/BottomSheet';
+import { useToast } from '../common/UndoToast';
 import type { RestaurantPlace } from '../../utils/destinationData';
 import { Star, MapPin, Navigation, Car, Heart, RefreshCw } from 'lucide-react';
 import { getApiBaseUrl, DEFAULT_HEADERS } from '../../config/apiConfig';
+import { getSavedPlaces, savePlace, removeSavedPlace } from '../../services/savedPlacesApi';
 
 export const FoodSheet: React.FC = () => {
-  const { isFoodSheetOpen, setIsFoodSheetOpen, openCabModal, openInAppNavigation, toggleSavePlace, userProfile, activeTrip, userLocation, userLocationName } = useApp();
+  const { isFoodSheetOpen, setIsFoodSheetOpen, openCabModal, openInAppNavigation, activeTrip, userLocation, userLocationName } = useApp();
   const { currentTrip } = useTrip();
+  const { showToast } = useToast();
 
   const activeDestName = currentTrip?.destination?.name || (typeof activeTrip?.destination === 'string' ? activeTrip.destination : userLocationName || 'Nearby');
-  const activeDestCoords: [number, number] | null = userLocation || (
-    currentTrip?.destination?.latitude && currentTrip?.destination?.longitude
-      ? [currentTrip.destination.latitude, currentTrip.destination.longitude]
-      : null
+  // Memoised on the numbers, so the fetch effect below doesn't re-run on every render.
+  const lat = userLocation?.[0] ?? currentTrip?.destination?.latitude;
+  const lng = userLocation?.[1] ?? currentTrip?.destination?.longitude;
+  const activeDestCoords = useMemo<[number, number] | null>(
+    () => (lat && lng ? [lat, lng] : null),
+    [lat, lng]
   );
+
+  // Saved state comes from the server (same store as Explore and Saved Places).
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const toggleSaveRef = useRef<(r: RestaurantPlace, fromUndo?: boolean) => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    if (!isFoodSheetOpen) return;
+    let active = true;
+    getSavedPlaces()
+      .then(list => {
+        if (active) setSavedIds(new Set(list.map(p => p.place_id)));
+      })
+      .catch(() => { /* not logged in or offline: hearts start empty */ });
+    return () => { active = false; };
+  }, [isFoodSheetOpen]);
+
+  const handleToggleSave = async (r: RestaurantPlace, fromUndo = false) => {
+    if (savingId) return;
+    const wasSaved = savedIds.has(r.id);
+    const flip = (on: boolean) =>
+      setSavedIds(prev => {
+        const next = new Set(prev);
+        if (on) next.add(r.id);
+        else next.delete(r.id);
+        return next;
+      });
+    setSavingId(r.id);
+    flip(!wasSaved);
+    try {
+      if (wasSaved) {
+        await removeSavedPlace(r.id);
+      } else {
+        await savePlace({
+          place_id: r.id,
+          title: r.name,
+          category: 'food',
+          rating: r.rating,
+          location_name: r.location,
+          coordinates: r.coordinates,
+          distance_text: `${r.distanceKm} km`,
+          cost_text: r.priceRange,
+        });
+      }
+      if (!fromUndo) {
+        showToast({
+          message: wasSaved ? `Removed ${r.name} from saved places` : `Saved ${r.name}`,
+          undo: () => toggleSaveRef.current(r, true),
+        });
+      }
+    } catch {
+      flip(wasSaved);
+      showToast({ message: "Couldn't update saved places. Please try again.", tone: 'error' });
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  useEffect(() => {
+    toggleSaveRef.current = handleToggleSave;
+  });
 
   const [dynamicRestaurants, setDynamicRestaurants] = useState<RestaurantPlace[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -104,7 +170,7 @@ export const FoodSheet: React.FC = () => {
         {/* Restaurant Cards List */}
         <div className="space-y-3">
           {displayRestaurants.map(r => {
-            const isSaved = userProfile.savedPlaces.includes(r.name);
+            const isSaved = savedIds.has(r.id);
             return (
               <div key={r.id} className="surface-card p-4 space-y-3">
                 <div className="flex gap-3">
@@ -119,9 +185,11 @@ export const FoodSheet: React.FC = () => {
                     <div className="flex items-start justify-between">
                       <h4 className="font-bold text-base text-white truncate">{r.name}</h4>
                       <button
-                        onClick={() => toggleSavePlace(r.name)}
-                        className="p-1 rounded-lg hover:bg-white/10 text-slate-400"
-                        aria-label="Save restaurant"
+                        onClick={() => handleToggleSave(r)}
+                        disabled={savingId === r.id}
+                        className="p-1 rounded-lg hover:bg-white/10 text-slate-400 disabled:opacity-50"
+                        aria-label={isSaved ? `Remove ${r.name} from saved places` : `Save ${r.name}`}
+                        aria-pressed={isSaved}
                       >
                         <Heart className={`w-4 h-4 ${isSaved ? 'fill-rose-500 text-rose-500' : ''}`} />
                       </button>

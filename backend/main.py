@@ -17,7 +17,7 @@ from models_package import TripStayModel, TripTransportModel, TripExpenseModel
 from media_service import media_service
 from places import search_places, search_nearby_restaurants, validate_destination_payload
 import auth
-from trip_lifecycle import create_trip_for_user, serialize_trip, TripValidationError
+from trip_lifecycle import create_trip_for_user, serialize_trip, close_finished_trips, TripValidationError
 from ownership import (
     trip_id_candidates,
     find_owned_trip,
@@ -1137,6 +1137,7 @@ async def process_ws_action(
     # 4. Trip Domain Actions
     elif reqname == "trips:list":
         db_trips = db.query(TripModel).filter(TripModel.user_id == user.id).all()
+        close_finished_trips(db, db_trips)
         return [serialize_trip(t, db) for t in db_trips]
 
     elif reqname == "trips:create":
@@ -2154,6 +2155,8 @@ def add_to_itinerary(
     from models_itinerary import ItineraryModel, ItineraryDayModel, ItineraryActivityModel
 
     current_user, user_profile, user_prefs, is_authenticated = user_data
+    if not is_authenticated or not current_user or current_user.id.startswith("guest_"):
+        raise HTTPException(status_code=401, detail="Please log in to add places to a trip.")
 
     req_trip_id = (req.trip_id or "active_trip").strip()
     target_trip = None
@@ -2169,10 +2172,6 @@ def add_to_itinerary(
         target_trip = db.query(TripModel).filter(
             TripModel.user_id == current_user.id
         ).order_by(TripModel.created_at.desc()).first()
-
-    if not target_trip:
-        # Fallback to the latest trip overall
-        target_trip = db.query(TripModel).order_by(TripModel.created_at.desc()).first()
 
     if not target_trip:
         raise HTTPException(status_code=404, detail="No active trip found. Please create a trip first.")
@@ -2544,6 +2543,7 @@ def get_trips(current_user: AuthUser = Depends(get_user_or_guest), db: Session =
     if not current_user or current_user.id.startswith("guest_"):
         return []
     db_trips = db.query(TripModel).filter(TripModel.user_id == current_user.id).order_by(TripModel.created_at.desc()).all()
+    close_finished_trips(db, db_trips)
     result = []
     for t in db_trips:
         result.append({
@@ -2710,7 +2710,7 @@ def get_trip_by_id(
     db: Session = Depends(get_db)
 ):
     trip = require_owned_trip(db, trip_id, current_user.id)
-
+    close_finished_trips(db, [trip])
 
     # Aggregate linked resources
     stays = db.query(TripStayModel).filter(TripStayModel.trip_id == trip.id).order_by(TripStayModel.created_at.desc()).all()

@@ -4,7 +4,7 @@ import { useTrip } from '../../features/trip/TripContext';
 import { useNavigation } from '../../context/NavigationContext';
 import {
   Crosshair, ExternalLink, Volume2, VolumeX, Loader2,
-  Plus, Check, ArrowLeft
+  Plus, Check, ArrowLeft, Search, X, MapPin
 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -16,6 +16,20 @@ import { sanitizeLocationName } from '../../utils/locationSanitizer';
 import { getCanonicalCategory, type CanonicalCategoryKey } from './mapCategoryConfig';
 import { useTheme } from '../../context/ThemeContext';
 import { GOOGLE_MAP_DARK_STYLES } from '../../utils/googleMapStyles';
+import { wsClient } from '../../services/wsClient';
+import { isInIndia, placeSubtitle } from '../../features/trip/components/PlaceSearchField';
+import type { DestinationReference } from '../../features/trip/types';
+
+// Shown when there is no location and no trip yet, so search still works.
+const INDIA_CENTER: [number, number] = [22.9734, 78.6569];
+const SEARCH_DEBOUNCE_MS = 300;
+
+/** "850 m" / "4.2 km" / "240 km" */
+const formatSearchDistance = (meters: number): string => {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const km = meters / 1000;
+  return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
+};
 
 export interface PlaceItem {
   id: string;
@@ -104,6 +118,15 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
   const [selectedPlaceForModal, setSelectedPlaceForModal] = useState<any | null>(null);
   const [addedPlaceDays, setAddedPlaceDays] = useState<Map<string, number>>(new Map());
   const [isAddingToItinerary, setIsAddingToItinerary] = useState<boolean>(false);
+
+  // Map search (India only, straight-line distance from the current location)
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchSuggestions, setSearchSuggestions] = useState<DestinationReference[]>([]);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [searchMessage, setSearchMessage] = useState<string | null>(null);
+  const [searchResult, setSearchResult] = useState<DestinationReference | null>(null);
+  const searchMarkerRef = useRef<L.Marker | null>(null);
+  const searchSeqRef = useRef(0);
 
   const modalDays: ItineraryDayOption[] = useMemo(() => {
     if (currentItinerary?.days && currentItinerary.days.length > 0) {
@@ -292,14 +315,15 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
 
   // ── MAP INITIALIZATION & CLEANUP ──
   useEffect(() => {
-    if (!mapContainerRef.current || !activeCoords) return;
+    if (!mapContainerRef.current) return;
     if (mapInstanceRef.current) return; // Initialize once
 
-    const [initialLat, initialLng] = activeCoords;
+    // Starts at the current location (or trip destination); otherwise all of India, so search still works.
+    const [initialLat, initialLng] = activeCoords || INDIA_CENTER;
 
     const map = L.map(mapContainerRef.current, {
       center: [initialLat, initialLng],
-      zoom: 15,
+      zoom: activeCoords ? 15 : 5,
       zoomControl: false,
       attributionControl: false,
     });
@@ -330,6 +354,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     return () => {
       map.off('dragstart', handleDragStart);
       markersLayer.clearLayers();
+      searchMarkerRef.current = null;
       if (userMarkerRef.current) {
         userMarkerRef.current.remove();
         userMarkerRef.current = null;
@@ -366,6 +391,99 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       setTimeout(() => { isProgrammaticMoveRef.current = false; }, 850);
     }
   }, [userLocation, activeCoords, isFollowMode]);
+
+  // The map may start before GPS answers: move to the location the first time it arrives.
+  const hadCoordsRef = useRef<boolean>(!!activeCoords);
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !activeCoords || hadCoordsRef.current) return;
+    hadCoordsRef.current = true;
+    if (searchResult) return; // don't pull the map away from a place the user searched for
+    isProgrammaticMoveRef.current = true;
+    map.flyTo(activeCoords, 15, { animate: true, duration: 1.2 });
+    setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1300);
+  }, [activeCoords, searchResult]);
+
+  // Suggestions while typing (debounced), India only, using the backend place search.
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (searchResult && q === searchResult.name) return; // the box shows the chosen place
+    if (q.length < 2) {
+      setSearchSuggestions([]);
+      setSearchMessage(null);
+      setIsSearching(false);
+      return;
+    }
+    const seq = ++searchSeqRef.current;
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const data: DestinationReference[] = await wsClient.sendRequest('places:search', { query: q });
+        if (seq !== searchSeqRef.current) return;
+        const india = Array.isArray(data) ? data.filter(isInIndia) : [];
+        setSearchSuggestions(india);
+        setSearchMessage(india.length === 0 ? 'No places found in India.' : null);
+      } catch {
+        if (seq !== searchSeqRef.current) return;
+        setSearchSuggestions([]);
+        setSearchMessage("Search isn't available right now. Please try again.");
+      } finally {
+        if (seq === searchSeqRef.current) setIsSearching(false);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [searchQuery, searchResult]);
+
+  const selectSearchResult = useCallback((place: DestinationReference) => {
+    const map = mapInstanceRef.current;
+    if (!map || place.latitude == null || place.longitude == null) return;
+    searchSeqRef.current++; // ignore any search still in flight
+    setSearchResult(place);
+    setSearchQuery(place.name);
+    setSearchSuggestions([]);
+    setSearchMessage(null);
+    setIsSearching(false);
+    setSelectedPlace(null);
+    setIsFollowMode(false);
+
+    const coords: [number, number] = [place.latitude, place.longitude];
+    if (searchMarkerRef.current) {
+      searchMarkerRef.current.setLatLng(coords);
+    } else {
+      searchMarkerRef.current = L.marker(coords, { icon: createPoiIcon('sights', true), zIndexOffset: 2500 }).addTo(map);
+    }
+    isProgrammaticMoveRef.current = true;
+    map.flyTo(coords, 14, { animate: true, duration: 1.5 });
+    setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1600);
+  }, [setIsFollowMode]);
+
+  const clearSearch = useCallback(() => {
+    searchSeqRef.current++;
+    setSearchQuery('');
+    setSearchSuggestions([]);
+    setSearchMessage(null);
+    setIsSearching(false);
+    setSearchResult(null);
+    searchMarkerRef.current?.remove();
+    searchMarkerRef.current = null;
+
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const home = userLocation || activeCoords;
+    hasUserPannedRef.current = false;
+    isProgrammaticMoveRef.current = true;
+    if (home) {
+      setIsFollowMode(true);
+      map.flyTo(home, 15, { animate: true, duration: 1.2 });
+    } else {
+      map.flyTo(INDIA_CENTER, 5, { animate: true, duration: 1.2 });
+    }
+    setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1300);
+  }, [userLocation, activeCoords, setIsFollowMode]);
+
+  const searchDistanceMeters = searchResult && userLocation && searchResult.latitude != null && searchResult.longitude != null
+    ? calculateDistance(userLocation[0], userLocation[1], searchResult.latitude, searchResult.longitude)
+    : null;
 
   // Count of places in each category
   const categoryCounts = useMemo(() => {
@@ -487,31 +605,6 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     }
   };
 
-  if (!activeCoords) {
-    return (
-      <div
-        className="relative w-full bg-[#EFF1ED] flex flex-col items-center justify-center p-6 text-center select-none"
-        style={{ height: `calc(100dvh - ${HEADER_HEIGHT}px - ${BOTTOM_NAV_HEIGHT}px)` }}
-      >
-        <div className="w-16 h-16 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center mb-4 text-[#1F5A3F] animate-pulse">
-          <Crosshair className="w-8 h-8" />
-        </div>
-        <h2 className="text-lg font-bold text-gray-900">Locating Exploration Area...</h2>
-        <p className="text-xs text-gray-500 max-w-xs mt-1 mb-6 leading-relaxed">
-          Enable location access or set an active trip destination to explore Google Maps landmarks, dining, and stays.
-        </p>
-        <button
-          type="button"
-          onClick={() => navigateToExplore()}
-          className="min-h-[44px] px-5 rounded-2xl bg-[#1F5A3F] hover:bg-[#194B34] text-white font-semibold text-xs flex items-center gap-2 shadow-sm transition-colors press-scale"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Explore Destinations</span>
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div
       className="relative w-full overflow-hidden bg-[#EFF1ED] dark:bg-zinc-950 select-none transition-colors"
@@ -528,8 +621,65 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
           className="pointer-events-auto min-h-[40px] px-3.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800 text-[#1F2522] dark:text-zinc-100 border border-gray-200 dark:border-zinc-800 shadow-sm font-semibold text-xs flex items-center gap-1.5 press-scale transition-colors"
         >
           <ArrowLeft className="w-4 h-4 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
-          <span>Explore</span>
+          <span className="hidden sm:inline">Explore</span>
         </button>
+
+        <div className="pointer-events-auto relative flex-1 min-w-0 mx-2">
+          <div className="min-h-[40px] flex items-center gap-2 px-3 rounded-full bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-sm">
+            {isSearching
+              ? <Loader2 className="w-4 h-4 shrink-0 animate-spin text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
+              : <Search className="w-4 h-4 shrink-0 text-gray-500 dark:text-zinc-400" aria-hidden="true" />}
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (searchResult) setSearchResult(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && searchSuggestions[0]) selectSearchResult(searchSuggestions[0]);
+                if (e.key === 'Escape') clearSearch();
+              }}
+              placeholder="Search a place in India"
+              aria-label="Search a place on the map"
+              className="flex-1 min-w-0 bg-transparent text-sm text-[#1F2522] dark:text-zinc-100 placeholder:text-gray-400 outline-none [&::-webkit-search-cancel-button]:hidden"
+            />
+            {(searchQuery || searchResult) && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                aria-label="Clear search"
+                className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-gray-500 hover:text-gray-900 dark:hover:text-zinc-100"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+
+          {(searchSuggestions.length > 0 || searchMessage) && !searchResult && (
+            <div className="absolute top-full left-0 right-0 mt-1.5 rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-lg overflow-hidden" role="listbox" aria-label="Search suggestions">
+              {searchSuggestions.map((s) => (
+                <button
+                  key={s.id || `${s.name}-${s.latitude}-${s.longitude}`}
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  onClick={() => selectSearchResult(s)}
+                  className="w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b last:border-b-0 border-gray-100 dark:border-zinc-800"
+                >
+                  <MapPin className="w-4 h-4 mt-0.5 shrink-0 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-[#1F2522] dark:text-zinc-100 truncate">{s.name}</span>
+                    <span className="block text-[11px] text-gray-500 dark:text-zinc-400 truncate">{(s as any).displayName || placeSubtitle(s)}</span>
+                  </span>
+                </button>
+              ))}
+              {searchMessage && (
+                <div className="px-3.5 py-3 text-xs text-gray-500 dark:text-zinc-400">{searchMessage}</div>
+              )}
+            </div>
+          )}
+        </div>
 
         <button
           type="button"
@@ -545,7 +695,33 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
         </button>
       </div>
 
+      {searchResult && (
+        <div className="absolute top-[60px] left-3 right-3 z-[500] pointer-events-auto rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-md p-3.5 flex items-start gap-3 animate-fadeIn" role="status">
+          <div className="w-9 h-9 rounded-xl bg-[#E8F0EE] dark:bg-emerald-950 text-[#1F5A3F] dark:text-emerald-400 flex items-center justify-center shrink-0">
+            <MapPin className="w-4.5 h-4.5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold text-[#1F2522] dark:text-zinc-100 truncate">{searchResult.name}</div>
+            <div className="text-[11px] text-gray-500 dark:text-zinc-400 truncate">{(searchResult as any).displayName || placeSubtitle(searchResult)}</div>
+            {searchDistanceMeters != null ? (
+              <div className="text-xs font-bold text-[#1F5A3F] dark:text-emerald-400 mt-1">{formatSearchDistance(searchDistanceMeters)} from you <span className="font-normal text-gray-500 dark:text-zinc-400">(straight line)</span></div>
+            ) : (
+              <div className="text-xs text-gray-500 dark:text-zinc-400 mt-1">Turn on location to see distance</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!activeCoords && !searchResult && (
+        <div className="absolute top-[60px] left-3 right-3 z-[500] pointer-events-none flex justify-center">
+          <span className="px-3 py-1.5 rounded-full bg-white/95 dark:bg-zinc-900/95 border border-gray-200 dark:border-zinc-800 text-[11px] font-medium text-gray-600 dark:text-zinc-300 shadow-sm">
+            Turn on location to see places near you, or search above
+          </span>
+        </div>
+      )}
+
       {/* Category filter row */}
+      {!searchResult && activeCoords && (
       <div
         role="group"
         aria-label="Filter places by category"
@@ -579,6 +755,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
           );
         })}
       </div>
+      )}
 
       {/* Bottom sheet: scrollable row of place cards, nearest first */}
       {sortedPlaces.length > 0 ? (

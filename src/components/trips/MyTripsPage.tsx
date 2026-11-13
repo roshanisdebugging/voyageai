@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useTrip } from '../../features/trip/TripContext';
+import { isPastTrip } from '../../features/trip/tripRepository';
 import { getTripCoverImage } from '../../utils/imageUtils';
 import { SafeImage } from '../common/SafeImage';
 import {
@@ -11,7 +12,10 @@ export const MyTripsPage: React.FC = () => {
   const navigate = useNavigate();
   const { trips, currentTrip, setCurrentTripId, deleteTrip, cancelTrip, archiveTrip } = useTrip();
 
-  const [activeTab, setActiveTab] = useState<'ACTIVE' | 'UPCOMING' | 'COMPLETED' | 'ARCHIVED'>('ACTIVE');
+  type TabId = 'ACTIVE' | 'UPCOMING' | 'PAST' | 'ARCHIVED';
+  const location = useLocation();
+  const requestedTab = (location.state as { tab?: TabId } | null)?.tab;
+  const [activeTab, setActiveTab] = useState<TabId>(requestedTab || 'ACTIVE');
 
   // Deletion / Cancellation Bottom Sheet Confirmation
   const [confirmActionModal, setConfirmActionModal] = useState<{
@@ -28,12 +32,17 @@ export const MyTripsPage: React.FC = () => {
 
   const filteredTrips = trips.filter(trip => {
     const status = (trip.status || '').toUpperCase();
-    if (activeTab === 'ACTIVE') return status === 'ACTIVE' || status === 'PLANNING';
-    if (activeTab === 'UPCOMING') return status === 'UPCOMING' || status === 'CONFIRMED';
-    if (activeTab === 'COMPLETED') return status === 'COMPLETED';
+    const past = isPastTrip(trip);
+    if (activeTab === 'ACTIVE') return !past && (status === 'ACTIVE' || status === 'PLANNING');
+    if (activeTab === 'UPCOMING') return !past && (status === 'UPCOMING' || status === 'CONFIRMED');
+    if (activeTab === 'PAST') return past;
     if (activeTab === 'ARCHIVED') return status === 'ARCHIVED' || status === 'CANCELLED';
     return true;
   });
+  // Past trips: newest first (latest end date at the top).
+  if (activeTab === 'PAST') {
+    filteredTrips.sort((a, b) => (b.endDate || '').localeCompare(a.endDate || ''));
+  }
 
   const handleConfirmAction = async () => {
     const { tripId, actionType } = confirmActionModal;
@@ -113,12 +122,12 @@ export const MyTripsPage: React.FC = () => {
         {[
           { id: 'ACTIVE', label: 'Active / Planning' },
           { id: 'UPCOMING', label: 'Upcoming' },
-          { id: 'COMPLETED', label: 'Completed' },
+          { id: 'PAST', label: 'Past trips' },
           { id: 'ARCHIVED', label: 'Archived' },
         ].map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
+            onClick={() => setActiveTab(tab.id as TabId)}
             className={`flex-1 py-2.5 px-3 rounded-xl transition-all whitespace-nowrap text-center ${
               activeTab === tab.id
                 ? 'bg-[#355F58] text-white font-extrabold shadow-xs'
@@ -137,7 +146,7 @@ export const MyTripsPage: React.FC = () => {
             <div className="w-12 h-12 rounded-2xl bg-[#F0F2EF] text-[#5F6863] flex items-center justify-center mx-auto">
               <Calendar className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-bold text-[#1F2522]">No {activeTab.toLowerCase()} trips found</h3>
+            <h3 className="text-base font-bold text-[#1F2522]">{activeTab === 'PAST' ? 'No past trips yet' : `No ${activeTab.toLowerCase()} trips found`}</h3>
             <p className="text-xs text-[#5F6863] max-w-xs mx-auto font-medium">
               You don't have any trips in this tab right now. Ready to start planning?
             </p>

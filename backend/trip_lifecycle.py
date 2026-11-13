@@ -7,8 +7,8 @@ The voice agent's create_trip tool must call it too.
 """
 import json
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,39 @@ BUDGET_LEVEL_THRESHOLDS = [
     (6000, "MODERATE"),
     (12000, "PREMIUM"),
 ]
+
+
+# "Today" for trip dates is the India date (IST has no daylight saving, so a fixed offset is exact).
+IST = timezone(timedelta(hours=5, minutes=30))
+# Trips in these states are closed (set to COMPLETED) once their end date has passed.
+OPEN_TRIP_STATUSES = {"PLANNING", "UPCOMING", "ACTIVE", "CONFIRMED"}
+
+
+def today_ist() -> date:
+    return datetime.now(IST).date()
+
+
+def close_finished_trips(db: Session, trips: Iterable[TripModel]) -> int:
+    """
+    Marks open trips whose end date is before today (IST) as COMPLETED and saves it.
+    Called whenever trips are read, so no scheduled job is needed.
+    Cancelled and archived trips are left alone. Returns how many were closed.
+    """
+    today = today_ist()
+    closed = 0
+    for trip in trips:
+        if (trip.status or "PLANNING").upper() not in OPEN_TRIP_STATUSES:
+            continue
+        try:
+            end = date.fromisoformat(str(trip.end_date)[:10])
+        except ValueError:
+            continue
+        if end < today:
+            trip.status = "COMPLETED"
+            closed += 1
+    if closed:
+        db.commit()
+    return closed
 
 
 class TripValidationError(ValueError):
@@ -100,7 +133,7 @@ def _parse_travelers(trip_data: Dict[str, Any]) -> tuple[int, int]:
 
 
 def _parse_dates(trip_data: Dict[str, Any]) -> tuple[str, str, int]:
-    today = datetime.now().date()
+    today = today_ist()
     start_raw = trip_data.get("startDate") or today.isoformat()
     end_raw = trip_data.get("endDate") or start_raw
     try:

@@ -5,7 +5,7 @@ import { wsClient } from '../../../services/wsClient';
 
 /** India-only place search used for the destination and the starting city. */
 
-const isInIndia = (item: DestinationReference) => {
+export const isInIndia = (item: DestinationReference) => {
   const country = (item.country || '').toLowerCase();
   const lat = item.latitude;
   const lon = item.longitude;

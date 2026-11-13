@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
+import { isPastTrip } from '../../features/trip/tripRepository';
 import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders } from '../../config/apiConfig';
 import {
   MapPin, Navigation, Plus, ArrowUp,
@@ -75,7 +76,7 @@ export const TourGuidePage: React.FC = () => {
 
   const activeTrip = selectedTripId
     ? trips.find(t => t.id === selectedTripId) || currentTrip
-    : currentTrip || (trips.length > 0 ? trips[0] : null);
+    : currentTrip || trips.find(t => !isPastTrip(t)) || null;
 
   const destinationName = mode === 'trip'
     ? (activeTrip?.destination?.name || activeTrip?.title || 'Trip Destination')

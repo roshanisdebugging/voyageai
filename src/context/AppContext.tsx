@@ -5,7 +5,7 @@ import type {
   SwapActivityPayload, NavigationTarget
 } from '../types';
 import {
-  mockGoaTrip, mockHotels, mockRestaurants, mockExperiences,
+  mockHotels, mockRestaurants, mockExperiences,
   mockBookings, mockExpenses, mockUserProfile, mockNotifications
 } from '../data/mockData';
 
@@ -107,7 +107,6 @@ interface AppContextType {
   openCabModal: (destinationName?: string) => void;
   openAiAssistant: (query?: string) => void;
   markNotificationAsRead: (id: string) => void;
-  toggleSavePlace: (placeName: string) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -125,7 +124,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeTrip = useMemo(() => {
     if (currentTrip) {
       return {
-        ...mockGoaTrip,
         ...currentTrip,
         id: currentTrip.id,
         title: currentTrip.title,
@@ -147,7 +145,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [bookings, setBookings] = useState<Booking[]>(mockBookings);
   const [expenses, setExpenses] = useState<Expense[]>(mockExpenses);
   const [notifications, setNotifications] = useState<NotificationItem[]>(mockNotifications);
-  const [userProfile, setUserProfile] = useState<UserProfile>(mockUserProfile);
+  const [userProfile] = useState<UserProfile>(mockUserProfile);
 
   // Catalogs
   const [hotels] = useState<Hotel[]>(mockHotels);
@@ -406,16 +404,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     console.log('[AppContext] Activity addition delegated to TripContext.');
   }, []);
 
-  const toggleSavePlace = useCallback((placeName: string) => {
-    setUserProfile(prev => {
-      const exists = prev.savedPlaces.includes(placeName);
-      return {
-        ...prev,
-        savedPlaces: exists ? prev.savedPlaces.filter(p => p !== placeName) : [...prev.savedPlaces, placeName]
-      };
-    });
-  }, [setUserProfile]);
-
   const openHotelDetail = useCallback((hotel: Hotel) => setSelectedHotel(hotel), []);
   const openCabModal = useCallback((destName?: string) => {
     if (destName) setCabDestination(destName);
@@ -452,8 +440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isEmergencyOpen, setIsEmergencyOpen,
       addBooking, cancelBooking, addExpense,
       optimizeDayItinerary, removeActivity, addActivityToItinerary,
-      openHotelDetail, openCabModal, openAiAssistant, markNotificationAsRead,
-      toggleSavePlace
+      openHotelDetail, openCabModal, openAiAssistant, markNotificationAsRead
     }}>
       {children}
       <ManualLocationModal />

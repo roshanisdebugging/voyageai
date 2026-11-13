@@ -5,11 +5,12 @@ import { MapPin, Sparkles, Wallet, CloudRain, RefreshCw, Navigation, Car, Calend
 import { useNavigate } from 'react-router-dom';
 import { getApiBaseUrl, getAuthHeaders } from '../../config/apiConfig';
 import { useToast } from '../common/UndoToast';
+import { isPastTrip } from '../../features/trip/tripRepository';
 
 export const ItineraryView: React.FC = () => {
   const navigate = useNavigate();
   const { openCabModal, openInAppNavigation, openSwapAssistant } = useApp();
-  const { currentTrip, currentItinerary, optimizeDayItinerary, optimizeBudget, weatherReplan, setActivityDone, transports } = useTrip();
+  const { currentTrip, currentItinerary, optimizeDayItinerary, optimizeBudget, weatherReplan, setActivityDone, transports, trips, isLoading: isTripsLoading } = useTrip();
   const { showToast } = useToast();
   const [doneBusyId, setDoneBusyId] = useState<string | null>(null);
 
@@ -200,6 +201,48 @@ export const ItineraryView: React.FC = () => {
       setIsExportingJson(false);
     }
   };
+
+  // No ongoing or upcoming trip: past trips never open by themselves.
+  if (!currentTrip) {
+    if (isTripsLoading) {
+      return (
+        <div className="max-w-xl mx-auto py-16 flex items-center justify-center text-[#5F6863] text-sm font-medium gap-2">
+          <RefreshCw className="w-4 h-4 animate-spin text-[#355F58]" />
+          <span>Loading your trips…</span>
+        </div>
+      );
+    }
+    const pastCount = trips.filter(t => isPastTrip(t)).length;
+    return (
+      <div className="max-w-xl mx-auto pt-10 pb-28 animate-fadeIn">
+        <div className="bg-white border border-[#D9DEDA] rounded-3xl p-8 text-center space-y-4 shadow-xs">
+          <div className="w-14 h-14 rounded-2xl bg-[#E8F0EE] text-[#355F58] flex items-center justify-center mx-auto">
+            <Calendar className="w-7 h-7" />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-lg font-extrabold text-[#1F2522]">No current trip</h1>
+            <p className="text-xs text-[#5F6863] font-medium max-w-xs mx-auto">
+              You have no ongoing or upcoming trips. Plan your next one and we'll build the itinerary for you.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/trips/new')}
+            className="w-full py-3.5 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-sm press-scale shadow-xs min-h-[48px]"
+          >
+            Plan a trip
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/trips', { state: { tab: 'PAST' } })}
+            className="text-xs font-bold text-[#355F58] hover:underline"
+          >
+            Past trips{pastCount > 0 ? ` (${pastCount})` : ''}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5 pb-28 max-w-xl mx-auto animate-fadeIn">
