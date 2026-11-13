@@ -33,10 +33,9 @@ export function cleanAiMessageText(input: any): string {
 interface FormattedTextProps {
   content: any;
   className?: string;
-  isUserMessage?: boolean;
 }
 
-export const FormattedText: React.FC<FormattedTextProps> = ({ content, className = '', isUserMessage = false }) => {
+export const FormattedText: React.FC<FormattedTextProps> = ({ content, className = '' }) => {
   const text = cleanAiMessageText(content);
   if (!text) return null;
 
@@ -44,7 +43,7 @@ export const FormattedText: React.FC<FormattedTextProps> = ({ content, className
   const paragraphs = text.split(/\n\n+/);
 
   return (
-    <div className={`space-y-2.5 leading-relaxed text-sm ${className}`}>
+    <div className={`space-y-2.5 wrap-anywhere leading-relaxed text-sm ${className}`}>
       {paragraphs.map((paragraph, pIdx) => {
         const lines = paragraph.split('\n').filter(line => line.trim().length > 0);
 
@@ -63,20 +62,14 @@ export const FormattedText: React.FC<FormattedTextProps> = ({ content, className
                 return (
                   <li key={lIdx} className="flex items-start gap-2 text-sm">
                     {isNumber ? (
-                      <span className={`font-extrabold text-[11px] px-1.5 py-0.5 rounded-md shrink-0 mt-0.5 ${
-                        isUserMessage
-                          ? 'bg-[#355F58]/20 text-[#355F58] border border-[#355F58]/30'
-                          : 'bg-[#355F58]/10 text-[#355F58] border border-[#355F58]/20'
-                      }`}>
+                      <span className="font-extrabold text-[11px] px-1.5 py-0.5 rounded-md shrink-0 mt-0.5 border border-current">
                         {prefix}
                       </span>
                     ) : (
-                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-2 ${
-                        isUserMessage ? 'bg-[#355F58]' : 'bg-[#487C74]'
-                      }`} />
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-2 bg-current" />
                     )}
                     <span className="flex-1 min-w-0">
-                      {renderInlineFormatting(body, isUserMessage)}
+                      {renderInlineFormatting(body)}
                     </span>
                   </li>
                 );
@@ -97,20 +90,14 @@ export const FormattedText: React.FC<FormattedTextProps> = ({ content, className
                 return (
                   <span key={lIdx} className="flex items-start gap-2 text-sm my-1">
                     {isNumber ? (
-                      <span className={`font-extrabold text-[11px] px-1.5 py-0.5 rounded-md shrink-0 mt-0.5 ${
-                        isUserMessage
-                          ? 'bg-[#355F58]/20 text-[#355F58] border border-[#355F58]/30'
-                          : 'bg-[#355F58]/10 text-[#355F58] border border-[#355F58]/20'
-                      }`}>
+                      <span className="font-extrabold text-[11px] px-1.5 py-0.5 rounded-md shrink-0 mt-0.5 border border-current">
                         {prefix}
                       </span>
                     ) : (
-                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-2 ${
-                        isUserMessage ? 'bg-[#355F58]' : 'bg-[#487C74]'
-                      }`} />
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-2 bg-current" />
                     )}
                     <span className="flex-1 min-w-0">
-                      {renderInlineFormatting(body, isUserMessage)}
+                      {renderInlineFormatting(body)}
                     </span>
                   </span>
                 );
@@ -119,7 +106,7 @@ export const FormattedText: React.FC<FormattedTextProps> = ({ content, className
               return (
                 <React.Fragment key={lIdx}>
                   {lIdx > 0 && <br />}
-                  {renderInlineFormatting(line, isUserMessage)}
+                  {renderInlineFormatting(line)}
                 </React.Fragment>
               );
             })}
@@ -130,28 +117,28 @@ export const FormattedText: React.FC<FormattedTextProps> = ({ content, className
   );
 };
 
-function renderInlineFormatting(text: string, isUserMessage: boolean): React.ReactNode {
+function renderInlineFormatting(text: string): React.ReactNode {
   // Regex to split by bold **text**, *italic*, or `code`
   const parts = text.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g);
 
   return parts.map((part, idx) => {
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
       return (
-        <strong key={idx} className={`font-extrabold ${isUserMessage ? 'text-[#2A4D47]' : 'text-[#1F2522]'}`}>
+        <strong key={idx} className="font-extrabold">
           {part.slice(2, -2)}
         </strong>
       );
     }
     if (part.startsWith('*') && part.endsWith('*') && part.length > 2) {
       return (
-        <em key={idx} className="italic text-[#5F6863]">
+        <em key={idx} className="italic">
           {part.slice(1, -1)}
         </em>
       );
     }
     if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
       return (
-        <code key={idx} className="px-1.5 py-0.5 rounded bg-slate-100 font-mono text-xs text-[#355F58] border border-[#D9DEDA]">
+        <code key={idx} className="px-1.5 py-0.5 rounded font-mono text-xs border border-current">
           {part.slice(1, -1)}
         </code>
       );

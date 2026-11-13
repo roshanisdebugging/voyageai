@@ -119,7 +119,7 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
 
   return (
     <div className="fixed inset-0 z-[99999] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-[#1F2522]/40 backdrop-blur-xs animate-fadeIn">
-      <div className="w-full max-w-lg max-h-[85vh] sm:max-h-[90vh] overflow-y-auto bg-white border border-[#D9DEDA] rounded-t-3xl sm:rounded-3xl p-6 pb-20 sm:pb-6 mb-16 sm:mb-0 space-y-5 shadow-2xl animate-slideUp text-[#1F2522] relative">
+      <div className="w-full max-w-lg max-h-[85vh] sm:max-h-[90vh] overflow-y-auto bg-[var(--color-surface)] border border-[var(--color-border)] rounded-t-3xl sm:rounded-3xl p-6 pb-20 sm:pb-6 mb-16 sm:mb-0 space-y-5 shadow-2xl animate-slideUp text-[var(--color-text-primary)] relative">
         
         {/* Floating Toast Notification */}
         {toastMessage && (
@@ -130,23 +130,23 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
         )}
 
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 border-b border-[#D9DEDA] pb-4">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--color-border)] pb-4">
           <div className="space-y-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="px-2.5 py-0.5 rounded-md bg-[#E8F0EE] text-[#355F58] font-bold text-[11px] uppercase tracking-wider border border-[#D9DEDA]">
+              <span className="px-2.5 py-0.5 rounded-md bg-[var(--color-surface-elevated)] text-[var(--color-primary)] font-bold text-[11px] uppercase tracking-wider border border-[var(--color-border)]">
                 {item.category || 'Attraction'}
               </span>
               {item.rating && (
-                <div className="flex items-center gap-1 text-xs font-bold text-amber-700">
+                <div className="flex items-center gap-1 text-xs font-bold text-amber-700 dark:text-amber-300">
                   <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
                   <span>{item.rating}</span>
                 </div>
               )}
             </div>
-            <h2 className="text-xl sm:text-2xl font-extrabold text-[#1F2522] truncate leading-tight">{item.name}</h2>
+            <h2 className="text-xl sm:text-2xl font-extrabold text-[var(--color-text-primary)] truncate leading-tight">{item.name}</h2>
             {item.address && (
-              <p className="text-xs text-[#5F6863] flex items-center gap-1 font-medium">
-                <MapPin className="w-3.5 h-3.5 text-[#355F58] shrink-0" />
+              <p className="text-xs text-[var(--color-text-secondary)] flex items-center gap-1 font-medium">
+                <MapPin className="w-3.5 h-3.5 text-[var(--color-primary)] shrink-0" />
                 <span className="truncate">{item.address}</span>
               </p>
             )}
@@ -159,8 +159,8 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
               disabled={isSaving}
               className={`w-10 h-10 rounded-full flex items-center justify-center transition-all press-scale border ${
                 isSaved
-                  ? 'bg-rose-50 border-rose-200 text-rose-600'
-                  : 'bg-[#F0F2EF] border-[#D9DEDA] text-[#5F6863] hover:text-rose-600'
+                  ? 'bg-rose-50 border-rose-200 text-rose-600 dark:bg-rose-950 dark:border-rose-800 dark:text-rose-300'
+                  : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-rose-600'
               }`}
               aria-label={isSaved ? 'Remove from saved places' : 'Save this spot'}
               title={isSaved ? 'Saved to Favorites' : 'Save Spot'}
@@ -175,7 +175,7 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
             <button
               type="button"
               onClick={onClose}
-              className="w-10 h-10 rounded-full bg-[#F0F2EF] border border-[#D9DEDA] flex items-center justify-center text-[#5F6863] hover:text-[#1F2522]"
+              className="w-10 h-10 rounded-full bg-[var(--color-surface-elevated)] border border-[var(--color-border)] flex items-center justify-center text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
               aria-label="Close details"
             >
               <X className="w-5 h-5" />
@@ -185,19 +185,19 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
 
         {/* Info Blocks */}
         <div className="grid grid-cols-3 gap-2">
-          <div className="p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-center">
-            <span className="text-[10px] font-bold text-[#5F6863] uppercase block">Distance</span>
-            <span className="text-sm font-extrabold text-[#1F2522]">{item.distanceText || '—'}</span>
+          <div className="p-3 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-center">
+            <span className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase block">Distance</span>
+            <span className="text-sm font-extrabold text-[var(--color-text-primary)]">{item.distanceText || '—'}</span>
           </div>
 
-          <div className="p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-center">
-            <span className="text-[10px] font-bold text-[#5F6863] uppercase block">Duration</span>
-            <span className="text-sm font-extrabold text-[#1F2522]">{item.durationText || '—'}</span>
+          <div className="p-3 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-center">
+            <span className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase block">Duration</span>
+            <span className="text-sm font-extrabold text-[var(--color-text-primary)]">{item.durationText || '—'}</span>
           </div>
 
-          <div className="p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-center">
-            <span className="text-[10px] font-bold text-[#5F6863] uppercase block">Est. Cost</span>
-            <span className="text-sm font-extrabold text-[#355F58]">
+          <div className="p-3 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-center">
+            <span className="text-[10px] font-bold text-[var(--color-text-secondary)] uppercase block">Est. Cost</span>
+            <span className="text-sm font-extrabold text-[var(--color-primary)]">
               {item.estimatedCost == null ? '—' : item.estimatedCost > 0 ? `₹${item.estimatedCost}` : 'Free'}
             </span>
           </div>
@@ -205,8 +205,8 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
 
         {/* Description */}
         <div className="space-y-1">
-          <h4 className="text-xs font-bold text-[#5F6863] uppercase tracking-wider">About This Place</h4>
-          <p className="text-sm text-[#1F2522] leading-relaxed font-medium">
+          <h4 className="text-xs font-bold text-[var(--color-text-secondary)] uppercase tracking-wider">About This Place</h4>
+          <p className="text-sm text-[var(--color-text-primary)] leading-relaxed font-medium">
             {item.description || 'No description available yet.'}
           </p>
         </div>
@@ -218,9 +218,9 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
             type="button"
             onClick={handleNavigate}
             disabled={!hasCoordinates}
-            className="w-full py-4 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold text-base flex items-center justify-center gap-2 shadow-xs press-scale min-h-[54px]"
+            className="w-full py-4 rounded-2xl bg-[#355F58] dark:bg-[var(--color-primary)] hover:bg-[#2C504A] dark:hover:bg-[var(--color-primary-light)] disabled:opacity-50 disabled:cursor-not-allowed text-white dark:text-zinc-950 font-extrabold text-base flex items-center justify-center gap-2 shadow-xs press-scale min-h-[54px]"
           >
-            <Navigation className="w-5 h-5 text-white" />
+            <Navigation className="w-5 h-5" />
             <span>{hasCoordinates ? 'Navigate / Get Directions' : 'Directions Unavailable'}</span>
           </button>
 
@@ -228,18 +228,18 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
             <button
               type="button"
               onClick={handleBookCab}
-              className="py-3.5 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-[#1F2522] font-bold text-xs flex items-center justify-center gap-1.5 hover:border-[#355F58]/40 min-h-[48px]"
+              className="py-3.5 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] font-bold text-xs flex items-center justify-center gap-1.5 hover:border-[var(--color-primary)] min-h-[48px]"
             >
-              <Car className="w-4 h-4 text-[#355F58]" />
+              <Car className="w-4 h-4 text-[var(--color-primary)]" />
               <span>Book Ride</span>
             </button>
 
             <button
               type="button"
               onClick={handleAskAI}
-              className="py-3.5 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-[#355F58] font-bold text-xs flex items-center justify-center gap-1.5 hover:border-[#355F58]/40 min-h-[48px]"
+              className="py-3.5 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-primary)] font-bold text-xs flex items-center justify-center gap-1.5 hover:border-[var(--color-primary)] min-h-[48px]"
             >
-              <Sparkles className="w-4 h-4 text-[#355F58]" />
+              <Sparkles className="w-4 h-4 text-[var(--color-primary)]" />
               <span>Ask AI Guide</span>
             </button>
           </div>

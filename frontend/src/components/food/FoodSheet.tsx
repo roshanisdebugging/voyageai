@@ -140,13 +140,13 @@ export const FoodSheet: React.FC = () => {
     >
       <div className="p-4 space-y-4">
         {isLoading && (
-          <div className="p-2.5 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs font-semibold flex items-center gap-2">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-400" />
+          <div className="p-2.5 rounded-xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-primary)] text-xs font-semibold flex items-center gap-2">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
             <span>Fetching live nearby dining spots for {activeDestName}...</span>
           </div>
         )}
         {!isLoading && displayRestaurants.length === 0 && (
-          <p className="py-6 text-center text-xs text-slate-400">
+          <p className="py-6 text-center text-xs text-[var(--color-text-secondary)]">
             {activeDestCoords ? 'No restaurants found nearby.' : 'Turn on location or open a trip to see restaurants nearby.'}
           </p>
         )}
@@ -162,52 +162,52 @@ export const FoodSheet: React.FC = () => {
                     <img
                       src={r.photos[0]}
                       alt={r.name}
-                      className="w-20 h-20 rounded-xl object-cover shrink-0 bg-slate-800"
+                      className="w-20 h-20 rounded-xl object-cover shrink-0 bg-[var(--color-surface-elevated)]"
                       loading="lazy"
                       decoding="async"
                     />
                   )}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between">
-                      <h4 className="font-bold text-base text-white truncate">{r.name}</h4>
+                    <div className="flex items-start justify-between gap-2">
+                      <h4 className="font-bold text-base text-[var(--color-text-primary)] min-w-0 wrap-anywhere">{r.name}</h4>
                       <button
                         onClick={() => handleToggleSave(r)}
                         disabled={savingId === r.id}
-                        className="p-1 rounded-lg hover:bg-white/10 text-slate-400 disabled:opacity-50"
+                        className="size-11 shrink-0 grid place-items-center rounded-lg hover:bg-[var(--color-surface-elevated)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] text-[var(--color-text-secondary)] disabled:opacity-50"
                         aria-label={isSaved ? `Remove ${r.name} from saved places` : `Save ${r.name}`}
                         aria-pressed={isSaved}
                       >
-                        <Heart className={`w-4 h-4 ${isSaved ? 'fill-rose-500 text-rose-500' : ''}`} />
+                        <Heart className={`w-4 h-4 ${isSaved ? 'fill-current text-rose-700 dark:text-rose-300' : ''}`} />
                       </button>
                     </div>
 
-                    <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-                      <MapPin className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                      {r.location}{r.distanceKm != null && <> · <span className="font-mono text-teal-300">{r.distanceKm} km</span></>}
+                    <p className="text-xs text-[var(--color-text-secondary)] flex items-center gap-1 mt-0.5">
+                      <MapPin className="w-3.5 h-3.5 text-[var(--color-primary)] shrink-0" />
+                      <span className="min-w-0 wrap-anywhere">{r.location}{r.distanceKm != null && <> · <span className="font-mono text-[var(--color-primary)]">{r.distanceKm} km</span></>}</span>
                     </p>
 
                     {(r.rating != null || r.cuisine.length > 0) && (
-                      <div className="flex items-center gap-2 mt-1.5">
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5">
                         {r.rating != null && (
-                          <span className="text-xs font-bold text-amber-400 flex items-center gap-1">
-                            <Star className="w-3.5 h-3.5 fill-amber-400" /> {r.rating}
+                          <span className="text-xs font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1">
+                            <Star className="w-3.5 h-3.5 fill-current" /> {r.rating}
                           </span>
                         )}
-                        {r.rating != null && r.cuisine.length > 0 && <span className="text-xs text-slate-400">•</span>}
-                        {r.cuisine.length > 0 && <span className="text-xs text-slate-300 truncate">{r.cuisine.join(', ')}</span>}
+                        {r.rating != null && r.cuisine.length > 0 && <span className="text-xs text-[var(--color-text-secondary)]">•</span>}
+                        {r.cuisine.length > 0 && <span className="text-xs text-[var(--color-text-secondary)] wrap-anywhere">{r.cuisine.join(', ')}</span>}
                       </div>
                     )}
                   </div>
                 </div>
 
                 {/* 1-Tap Action Buttons */}
-                <div className="flex gap-2 pt-1 border-t border-white/5">
+                <div className="flex flex-wrap gap-2 pt-1 border-t border-[var(--color-border)]">
                   <button
                     onClick={() => {
                       setIsFoodSheetOpen(false);
                       openCabModal(r.name);
                     }}
-                    className="flex-1 touch-target press-scale py-2.5 rounded-xl bg-teal-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-teal-500/15"
+                    className="flex-1 touch-target press-scale py-2.5 rounded-xl bg-[var(--color-primary)] text-white dark:text-zinc-950 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] font-bold text-xs flex items-center justify-center gap-1.5"
                   >
                     <Car className="w-4 h-4" /> Book Cab Ride
                   </button>
@@ -222,20 +222,15 @@ export const FoodSheet: React.FC = () => {
                         setIsFoodSheetOpen(false);
                       }
                     }}
-                    className="flex-1 touch-target press-scale py-2.5 rounded-xl bg-white/5 border border-white/10 text-slate-200 font-semibold text-xs flex items-center justify-center gap-1.5"
+                    className="flex-1 touch-target press-scale py-2.5 rounded-xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] font-semibold text-xs flex items-center justify-center gap-1.5"
                   >
-                    <Navigation className="w-4 h-4 text-teal-400" /> Directions
+                    <Navigation className="w-4 h-4 text-[var(--color-primary)]" /> Directions
                   </button>
                 </div>
               </div>
             );
           })}
 
-          {displayRestaurants.length === 0 && !isLoading && (
-            <div className="p-8 text-center text-slate-400 text-xs">
-              No dining spots found around this location.
-            </div>
-          )}
         </div>
       </div>
     </BottomSheet>

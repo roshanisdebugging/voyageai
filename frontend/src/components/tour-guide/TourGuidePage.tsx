@@ -388,12 +388,12 @@ export const TourGuidePage: React.FC = () => {
               <div key={m.id || i} className={isUser ? 'flex justify-end' : ''}>
                 {isUser ? (
                   <div className="max-w-[85%] sm:max-w-[75%] rounded-xl rounded-br-sm bg-[#16232B] text-white px-4 py-2.5 text-sm leading-relaxed">
-                    <FormattedText content={textContent} isUserMessage />
+                    <FormattedText content={textContent} />
                   </div>
                 ) : (
                   <div className="max-w-[94%] sm:max-w-[85%]">
                     <div className="text-sm leading-relaxed text-[#16232B]">
-                      <FormattedText content={textContent} isUserMessage={false} />
+                      <FormattedText content={textContent} />
                     </div>
 
                     {/* Place card */}

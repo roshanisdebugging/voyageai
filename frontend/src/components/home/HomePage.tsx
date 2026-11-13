@@ -78,10 +78,10 @@ export const HomePage: React.FC = () => {
     <div className="w-full max-w-xl mx-auto space-y-6 pb-28 animate-fadeIn overflow-x-hidden">
       {/* Greeting */}
       <div className="space-y-1 pt-1">
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-[#1F2522] tracking-tight">
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-[var(--color-text-primary)] tracking-tight">
           {getGreeting()}, {firstName}
         </h1>
-        <p className="text-sm font-medium text-[#5F6863]">Where would you like to explore today?</p>
+        <p className="text-sm font-medium text-[var(--color-text-secondary)]">Where would you like to explore today?</p>
       </div>
 
       {/* Destination and highlights */}
@@ -100,147 +100,150 @@ export const HomePage: React.FC = () => {
 
       {/* Near you */}
 
-      <div className="relative">
-        <div
-          className="flex gap-4 overflow-x-auto overflow-y-hidden pb-4
-               snap-x snap-mandatory scroll-smooth
-               [scrollbar-width:thin]
-               [scrollbar-color:#A8C4BB_transparent]
-               motion-reduce:scroll-auto"
-        >
-          {nearbyPlaces.map((poi) => {
-            const isMock = isMockPayload(poi);
+      {nearbyPlaces.length > 0 && (
+        <div className="relative">
+          <div
+            className="flex gap-4 overflow-x-auto overflow-y-hidden pb-4
+                 snap-x snap-mandatory scroll-smooth
+                 [scrollbar-width:thin]
+                 [scrollbar-color:var(--color-text-tertiary)_transparent]
+                 motion-reduce:scroll-auto"
+          >
+            {nearbyPlaces.map((poi) => {
+              const isMock = isMockPayload(poi);
 
-            return (
-              <article
-                key={poi.id}
-                className="group relative flex w-[82%] min-w-[280px] max-w-[340px]
-                     shrink-0 snap-start flex-col overflow-hidden
-                     rounded-3xl border border-[#D9DEDA]
-                     bg-gradient-to-br from-white via-white to-[#EAF3EF]
-                     p-4 shadow-sm transition-all duration-300
-                     hover:-translate-y-1 hover:border-[#A8C4BB]
-                     hover:shadow-lg sm:w-[320px]"
-              >
-                {/* Decorative accent */}
-                <div className="absolute right-0 top-0 h-24 w-24 rounded-bl-full
-                          bg-gradient-to-bl from-[#C7E5D9]/60 to-transparent
-                          pointer-events-none" />
+              return (
+                <article
+                  key={poi.id}
+                  className="group relative flex w-[82%] min-w-[min(280px,100%)] max-w-[340px]
+                       shrink-0 snap-start flex-col overflow-hidden
+                       rounded-3xl border border-[var(--color-border)]
+                       bg-[var(--color-surface)]
+                       p-4 shadow-sm transition-all duration-300
+                       hover:-translate-y-1 hover:border-[var(--color-primary)]
+                       hover:shadow-lg sm:w-[320px]"
+                >
+                  {/* Decorative accent */}
+                  <div className="absolute right-0 top-0 h-24 w-24 rounded-bl-full
+                            bg-gradient-to-bl from-[#C7E5D9]/60 to-transparent dark:hidden
+                            pointer-events-none" />
 
-                <div className="relative flex flex-1 flex-col">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-2 flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-[#E8F0EE] px-2.5 py-1
-                                   text-[11px] font-bold uppercase tracking-wide
-                                   text-[#355F58]">
-                          {sentenceCase(poi.category || "Attraction")}
-                        </span>
-
-                        {isMock && (
-                          <span className="rounded-full border border-amber-200
-                                     bg-amber-50 px-2 py-1 text-[10px]
-                                     font-bold text-amber-700">
-                            Demo Spot
+                  <div className="relative flex flex-1 flex-col">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-[var(--color-surface-elevated)] px-2.5 py-1
+                                     text-[11px] font-bold uppercase tracking-wide
+                                     text-[var(--color-primary)]">
+                            {sentenceCase(poi.category || "Attraction")}
                           </span>
-                        )}
+
+                          {isMock && (
+                            <span className="rounded-full border border-amber-200
+                                       bg-amber-50 px-2 py-1 text-[10px]
+                                       font-bold text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                              Demo Spot
+                            </span>
+                          )}
+                        </div>
+
+                        <h3 className="truncate text-lg font-extrabold text-[var(--color-text-primary)]">
+                          {poi.name}
+                        </h3>
+
+                        <p className="mt-1 line-clamp-2 min-h-9 text-xs leading-5
+                                text-[var(--color-text-secondary)]">
+                          {poi.address || "Address unavailable"}
+                        </p>
                       </div>
 
-                      <h3 className="truncate text-lg font-extrabold text-[#1F2522]">
-                        {poi.name}
-                      </h3>
-
-                      <p className="mt-1 line-clamp-2 min-h-9 text-xs leading-5
-                              text-[#5F6863]">
-                        {poi.address || "Address unavailable"}
-                      </p>
-                    </div>
-
-                    <div className="shrink-0 rounded-2xl bg-white/90 px-3 py-2
-                              text-right shadow-sm ring-1 ring-[#D9DEDA]">
-                      <p className="text-sm font-extrabold text-[#355F58]">
-                        {poi.distanceText}
-                      </p>
-
-                      {poi.rating ? (
-                        <p className="mt-1 flex items-center justify-end gap-1
-                                text-xs font-bold text-[#8A5A00]">
-                          <Star
-                            className="h-3.5 w-3.5 fill-amber-500 text-amber-500"
-                            aria-hidden="true"
-                          />
-                          {Number(poi.rating).toFixed(1)}
+                      <div className="shrink-0 rounded-2xl bg-[var(--color-surface-elevated)] px-3 py-2
+                                text-right shadow-sm ring-1 ring-[var(--color-border)]">
+                        <p className="text-sm font-extrabold text-[var(--color-primary)]">
+                          {poi.distanceText}
                         </p>
-                      ) : null}
+
+                        {poi.rating ? (
+                          <p className="mt-1 flex items-center justify-end gap-1
+                                  text-xs font-bold text-[#8A5A00] dark:text-amber-300">
+                            <Star
+                              className="h-3.5 w-3.5 fill-amber-500 text-amber-500"
+                              aria-hidden="true"
+                            />
+                            {Number(poi.rating).toFixed(1)}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="mt-5 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={typeof poi.latitude !== 'number' || typeof poi.longitude !== 'number'}
+                        onClick={() => {
+                          if (typeof poi.latitude === 'number' && typeof poi.longitude === 'number') {
+                            openInAppNavigation({
+                              title: poi.name,
+                              locationName: poi.address || poi.name,
+                              coordinates: [poi.latitude, poi.longitude],
+                            });
+                          }
+                        }}
+                        className="flex min-h-12 items-center justify-center gap-2
+                             rounded-xl bg-[#355F58] dark:bg-[var(--color-primary)] px-3 text-sm font-bold
+                             text-white dark:text-zinc-950 shadow-sm transition-all
+                             hover:bg-[#264A44] dark:hover:bg-[var(--color-primary-light)] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
+                             focus-visible:outline focus-visible:outline-2
+                             focus-visible:outline-offset-2
+                             focus-visible:outline-[var(--color-primary)]"
+                      >
+                        <Navigation className="h-4 w-4" aria-hidden="true" />
+                        Directions
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPlace(poi)}
+                        className="min-h-12 rounded-xl border border-[var(--color-border)]
+                             bg-[var(--color-surface-elevated)] px-3 text-sm font-bold text-[var(--color-text-primary)]
+                             transition-all hover:border-[var(--color-primary)]
+                             active:scale-95 focus-visible:outline
+                             focus-visible:outline-2 focus-visible:outline-offset-2
+                             focus-visible:outline-[var(--color-primary)]"
+                      >
+                        Details
+                      </button>
                     </div>
                   </div>
+                </article>
+              );
+            })}
+          </div>
 
-                  <div className="mt-5 grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      disabled={typeof poi.latitude !== 'number' || typeof poi.longitude !== 'number'}
-                      onClick={() => {
-                        if (typeof poi.latitude === 'number' && typeof poi.longitude === 'number') {
-                          openInAppNavigation({
-                            title: poi.name,
-                            locationName: poi.address || poi.name,
-                            coordinates: [poi.latitude, poi.longitude],
-                          });
-                        }
-                      }}
-                      className="flex min-h-12 items-center justify-center gap-2
-                           rounded-xl bg-[#355F58] px-3 text-sm font-bold
-                           text-white shadow-sm transition-all
-                           hover:bg-[#264A44] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
-                           focus-visible:outline focus-visible:outline-2
-                           focus-visible:outline-offset-2
-                           focus-visible:outline-[#355F58]"
-                    >
-                      <Navigation className="h-4 w-4" aria-hidden="true" />
-                      Directions
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPlace(poi)}
-                      className="min-h-12 rounded-xl border border-[#C9D8D1]
-                           bg-white/80 px-3 text-sm font-bold text-[#1F2522]
-                           transition-all hover:bg-[#DCE9E5]
-                           active:scale-95 focus-visible:outline
-                           focus-visible:outline-2 focus-visible:outline-offset-2
-                           focus-visible:outline-[#355F58]"
-                    >
-                      Details
-                    </button>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
+          {nearbyPlaces.length > 1 && (
+            <p className="mt-1 flex items-center justify-center gap-2 text-xs
+                    font-medium text-[var(--color-text-secondary)] sm:hidden">
+              <span aria-hidden="true">←</span>
+              Swipe to explore more places
+              <span aria-hidden="true">→</span>
+            </p>
+          )}
         </div>
-
-        <p className="mt-1 flex items-center justify-center gap-2 text-xs
-                font-medium text-[#5F6863] sm:hidden">
-          <span aria-hidden="true">←</span>
-          Swipe to explore more places
-          <span aria-hidden="true">→</span>
-        </p>
-      </div>
-
+      )}
 
       {/* Current trip */}
       {currentTrip && (
-        <section className="rounded-3xl bg-white border border-[#D9DEDA] p-5">
-          <p className="text-sm font-semibold text-[#355F58]">{currentTrip.destination.name}</p>
-          <h3 className="mt-1 text-xl sm:text-2xl font-extrabold text-[#1F2522]">{currentTrip.title}</h3>
-          <p className="mt-1 text-sm text-[#5F6863]">
+        <section className="rounded-3xl bg-[var(--color-surface)] border border-[var(--color-border)] p-5">
+          <p className="text-sm font-semibold text-[var(--color-primary)]">{currentTrip.destination.name}</p>
+          <h3 className="mt-1 text-xl sm:text-2xl font-extrabold text-[var(--color-text-primary)]">{currentTrip.title}</h3>
+          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
             {tripRange ?? `${currentTrip.startDate} to ${currentTrip.endDate}`} ({currentTrip.totalDays} days)
           </p>
 
           <button
             type="button"
             onClick={() => navigate('/trip/itinerary')}
-            className="mt-4 w-full min-h-[52px] rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white text-base font-bold transition-colors press-scale focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#355F58]"
+            className="mt-4 w-full min-h-[52px] rounded-2xl bg-[#355F58] dark:bg-[var(--color-primary)] hover:bg-[#2C504A] dark:hover:bg-[var(--color-primary-light)] text-white dark:text-zinc-950 text-base font-bold transition-colors press-scale focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
           >
             View trip plan
           </button>

@@ -58,7 +58,7 @@ export const FoodPage: React.FC = () => {
   return (
     <div className="space-y-6 pb-28 max-w-xl mx-auto animate-fadeIn">
       {/* Header Bar */}
-      <div className="flex items-center justify-between pt-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
         <button
           type="button"
           onClick={() => {
@@ -66,56 +66,56 @@ export const FoodPage: React.FC = () => {
             setActiveTab('trips');
             navigate('/');
           }}
-          className="px-3 py-1.5 rounded-xl bg-white hover:bg-[#E8F0EE] text-[#355F58] text-xs font-black flex items-center gap-1.5 border border-[#D9DEDA] transition-all press-scale"
+          className="px-3 py-1.5 rounded-xl bg-[var(--color-surface)] hover:bg-[var(--color-surface-elevated)] text-[var(--color-primary)] text-xs font-black flex items-center gap-1.5 border border-[var(--color-border)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] transition-all press-scale"
         >
-          <ArrowLeft className="w-4 h-4 text-[#355F58]" />
+          <ArrowLeft className="w-4 h-4 text-[var(--color-primary)]" />
           <span>Back to Trip</span>
         </button>
 
-        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#E8F0EE] text-[#355F58] border border-[#D9DEDA] text-xs font-bold">
+        <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--color-surface-elevated)] text-[var(--color-primary)] border border-[var(--color-border)] text-xs font-bold">
           <UtensilsCrossed className="w-3.5 h-3.5" />
           <span>Food</span>
         </div>
       </div>
 
       {/* Hero */}
-      <div className="relative rounded-3xl p-6 bg-white border border-[#D9DEDA] shadow-xs space-y-3 overflow-hidden">
-        <h1 className="text-2xl font-black text-[#1F2522] tracking-tight">
+      <div className="relative rounded-3xl p-6 bg-[var(--color-surface)] border border-[var(--color-border)] shadow-xs space-y-3 overflow-hidden">
+        <h1 className="text-2xl font-black text-[var(--color-text-primary)] tracking-tight">
           Where to eat{placeName ? ` in ${placeName}` : ''}
         </h1>
-        <p className="text-xs text-[#5F6863] leading-relaxed">
+        <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
           Restaurants and cafes near {currentTrip ? 'your trip destination' : 'you'}, from Google Maps.
         </p>
         <button
           type="button"
           onClick={() => openAiAssistant(`Recommend must-try local dishes and good places to eat${placeName ? ` in ${placeName}` : ' near me'}`)}
-          className="px-3.5 py-1.5 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white font-black text-xs shadow-xs transition-all flex items-center gap-1.5 press-scale"
+          className="px-3.5 py-1.5 rounded-xl bg-[var(--color-primary)] text-white dark:text-zinc-950 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] font-black text-xs shadow-xs transition-all flex items-center gap-1.5 press-scale"
         >
-          <Sparkles className="w-3.5 h-3.5 text-white" />
+          <Sparkles className="w-3.5 h-3.5" />
           <span>Ask AI what to eat</span>
         </button>
       </div>
 
       {/* Nearby restaurants */}
       <div className="space-y-3">
-        <h2 className="text-sm font-black uppercase tracking-wider text-[#355F58] flex items-center gap-1.5">
+        <h2 className="text-sm font-black uppercase tracking-wider text-[var(--color-primary)] flex items-center gap-1.5">
           <Compass className="w-4 h-4" />
           Restaurants nearby
         </h2>
 
         {lat == null || lng == null ? (
-          <div className="p-6 text-center bg-white rounded-2xl border border-[#D9DEDA] text-xs text-[#5F6863]">
+          <div className="p-6 text-center bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)]">
             Turn on location or open a trip to see restaurants nearby.
           </div>
         ) : isLoading ? (
-          <div className="p-8 text-center bg-white rounded-2xl border border-[#D9DEDA] space-y-2">
-            <RefreshCw className="w-6 h-6 text-[#355F58] animate-spin mx-auto" />
-            <p className="text-xs text-[#5F6863] font-bold">Finding restaurants…</p>
+          <div className="p-8 text-center bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] space-y-2">
+            <RefreshCw className="w-6 h-6 text-[var(--color-primary)] animate-spin mx-auto" />
+            <p className="text-xs text-[var(--color-text-secondary)] font-bold">Finding restaurants…</p>
           </div>
         ) : loadError ? (
-          <div className="p-6 text-center bg-white rounded-2xl border border-rose-200 text-xs text-rose-700 font-semibold">{loadError}</div>
+          <div className="p-6 text-center bg-[var(--color-surface)] rounded-2xl border border-rose-200 text-xs text-rose-700 dark:text-rose-300 dark:border-rose-900 font-semibold">{loadError}</div>
         ) : restaurants.length === 0 ? (
-          <div className="p-6 text-center bg-white rounded-2xl border border-[#D9DEDA] text-xs text-[#5F6863]">No restaurants found nearby.</div>
+          <div className="p-6 text-center bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)]">No restaurants found nearby.</div>
         ) : (
           <div className="space-y-3">
             {restaurants.slice(0, 10).map((rst, idx) => {
@@ -125,56 +125,56 @@ export const FoodPage: React.FC = () => {
               return (
                 <div
                   key={rst.id || idx}
-                  className="p-4 rounded-2xl bg-white border border-[#D9DEDA] hover:border-[#355F58]/40 transition-all space-y-2.5 shadow-xs"
+                  className="p-4 rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] hover:border-[var(--color-primary)] transition-all space-y-2.5 shadow-xs"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <h3 className="font-extrabold text-sm text-[#1F2522]">{rst.name}</h3>
+                      <h3 className="font-extrabold text-sm wrap-anywhere text-[var(--color-text-primary)]">{rst.name}</h3>
                       {rst.address && (
-                        <p className="text-xs text-[#5F6863] flex items-center gap-1 mt-0.5">
-                          <MapPin className="w-3.5 h-3.5 text-[#355F58] shrink-0" />
-                          <span className="truncate">{rst.address}</span>
+                        <p className="text-xs text-[var(--color-text-secondary)] flex items-center gap-1 mt-0.5">
+                          <MapPin className="w-3.5 h-3.5 text-[var(--color-primary)] shrink-0" />
+                          <span className="min-w-0 wrap-anywhere">{rst.address}</span>
                         </p>
                       )}
                     </div>
 
                     {rst.rating != null && (
                       <span
-                        className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-xs font-black flex items-center gap-1 border border-amber-200 shrink-0"
+                        className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800 text-xs font-black flex items-center gap-1 border border-amber-200 shrink-0"
                         title={rst.userRatingCount ? `${rst.userRatingCount} Google ratings` : 'Google rating'}
                       >
-                        <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                        <Star className="w-3 h-3 fill-current" />
                         {rst.rating}
                       </span>
                     )}
                   </div>
 
                   {(rst.category || distance) && (
-                    <div className="flex flex-wrap gap-1.5 text-[10px] text-[#5F6863] font-semibold">
-                      {rst.category && <span className="px-2 py-0.5 rounded-md bg-[#F0F2EF] border border-[#D9DEDA]">{rst.category}</span>}
-                      {distance && <span className="px-2 py-0.5 rounded-md bg-[#F0F2EF] border border-[#D9DEDA]">{distance}</span>}
+                    <div className="flex flex-wrap gap-1.5 text-[10px] text-[var(--color-text-secondary)] font-semibold">
+                      {rst.category && <span className="px-2 py-0.5 rounded-md bg-[var(--color-surface-elevated)] border border-[var(--color-border)]">{rst.category}</span>}
+                      {distance && <span className="px-2 py-0.5 rounded-md bg-[var(--color-surface-elevated)] border border-[var(--color-border)]">{distance}</span>}
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between pt-1 border-t border-[#D9DEDA]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--color-border)]">
                     <button
                       type="button"
                       disabled={!coords}
                       onClick={() => {
                         if (coords) openInAppNavigation({ title: rst.name, locationName: rst.address || rst.name, coordinates: coords });
                       }}
-                      className="px-3 py-1.5 rounded-xl bg-[#F0F2EF] hover:bg-[#E8F0EE] disabled:opacity-50 disabled:cursor-not-allowed text-[#355F58] text-xs font-bold flex items-center gap-1 border border-[#D9DEDA] transition-all"
+                      className="px-3 py-1.5 rounded-xl bg-[var(--color-surface-elevated)] hover:bg-[var(--color-surface-elevated)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:opacity-50 disabled:cursor-not-allowed text-[var(--color-primary)] text-xs font-bold flex items-center gap-1 border border-[var(--color-border)] transition-all"
                     >
-                      <Navigation className="w-3.5 h-3.5 text-[#355F58]" />
+                      <Navigation className="w-3.5 h-3.5 text-[var(--color-primary)]" />
                       <span>Navigate</span>
                     </button>
 
                     <button
                       type="button"
                       onClick={() => openCabModal(rst.address ? `${rst.name}, ${rst.address}` : rst.name)}
-                      className="px-3.5 py-1.5 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white font-black text-xs shadow-xs transition-all flex items-center gap-1.5 press-scale"
+                      className="px-3.5 py-1.5 rounded-xl bg-[var(--color-primary)] text-white dark:text-zinc-950 hover:brightness-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] font-black text-xs shadow-xs transition-all flex items-center gap-1.5 press-scale"
                     >
-                      <Car className="w-3.5 h-3.5 text-white" />
+                      <Car className="w-3.5 h-3.5" />
                       <span>Get a ride</span>
                     </button>
                   </div>

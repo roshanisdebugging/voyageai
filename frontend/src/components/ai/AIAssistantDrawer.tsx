@@ -291,26 +291,26 @@ export const AIAssistantSheet: React.FC = () => {
           
           {/* Success Banner */}
           {swapSuccessMessage && (
-            <div className="mx-4 mt-2 p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-2 animate-fadeIn">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <div className="mx-4 mt-2 p-3 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-success)] text-xs font-bold flex items-center gap-2 animate-fadeIn">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
               <span>{swapSuccessMessage}</span>
             </div>
           )}
 
           {/* Messages Body */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5 bg-[#F6F7F5]">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5 bg-[var(--color-surface)]">
             {messages.length === 0 ? (
               <div className="space-y-4">
-                <p className="text-xs text-[#5F6863] font-bold uppercase tracking-wider">How can I assist your trip right now?</p>
+                <p className="text-xs text-[var(--color-text-secondary)] font-bold uppercase tracking-wider">How can I assist your trip right now?</p>
                 <div className="space-y-2">
                   {suggestions.map(s => (
                     <button
                       key={s.label}
                       onClick={() => handleSend(s.query)}
-                      className="w-full press-scale flex items-center gap-3 p-3.5 rounded-2xl bg-white border border-[#D9DEDA] text-left hover:border-[#355F58]/40 transition-colors shadow-xs"
+                      className="w-full press-scale flex items-center gap-3 p-3.5 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-left hover:border-[var(--color-primary)] transition-colors shadow-xs"
                     >
-                      <s.icon className="w-4 h-4 text-[#355F58] shrink-0" />
-                      <span className="text-xs font-bold text-[#1F2522]">{s.label}</span>
+                      <s.icon className="w-4 h-4 text-[var(--color-primary)] shrink-0" />
+                      <span className="text-xs font-bold text-[var(--color-text-primary)]">{s.label}</span>
                     </button>
                   ))}
                 </div>
@@ -318,12 +318,12 @@ export const AIAssistantSheet: React.FC = () => {
             ) : (
               messages.map(msg => (
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[92%] p-3.5 rounded-2xl text-xs leading-relaxed space-y-2.5 shadow-xs ${
+                  <div className={`max-w-[92%] wrap-anywhere p-3.5 rounded-2xl text-xs leading-relaxed space-y-2.5 shadow-xs ${
                     msg.role === 'user'
                       ? 'bg-[#355F58] text-white font-bold rounded-br-none'
-                      : 'bg-white border border-[#D9DEDA] text-[#1F2522] font-medium rounded-bl-none'
+                      : 'bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] font-medium rounded-bl-none'
                   }`}>
-                    <FormattedText content={msg.text} isUserMessage={msg.role === 'user'} />
+                    <FormattedText content={msg.text} />
 
                     {/* Structured Activity Swap Recommendation Cards */}
                     {msg.role === 'ai' && msg.recommendations && msg.recommendations.length > 0 && (
@@ -333,34 +333,34 @@ export const AIAssistantSheet: React.FC = () => {
                           return (
                             <div
                               key={rec.id}
-                              className={`p-3.5 rounded-2xl border transition-all space-y-2 text-[#1F2522] ${
+                              className={`p-3.5 rounded-2xl border transition-all space-y-2 text-[var(--color-text-primary)] ${
                                 isSelected
-                                  ? 'bg-[#E8F0EE] border-[#355F58] ring-2 ring-[#355F58]/20'
-                                  : 'bg-[#F0F2EF] border-[#D9DEDA]'
+                                  ? 'bg-[var(--color-surface-elevated)] border-[var(--color-primary)] ring-2 ring-[var(--color-primary-glow)]'
+                                  : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)]'
                               }`}
                             >
                               <div className="flex items-center justify-between">
-                                <h5 className="font-extrabold text-sm text-[#1F2522]">{rec.name}</h5>
-                                <span className="px-2 py-0.5 rounded-md bg-[#E8F0EE] text-[#355F58] text-[10px] font-extrabold border border-[#D9DEDA]">
+                                <h5 className="font-extrabold text-sm text-[var(--color-text-primary)]">{rec.name}</h5>
+                                <span className="px-2 py-0.5 rounded-md bg-[var(--color-surface-elevated)] text-[var(--color-primary)] text-[10px] font-extrabold border border-[var(--color-border)]">
                                   {rec.reason}
                                 </span>
                               </div>
 
-                              <p className="text-[11px] text-[#5F6863] font-medium">{rec.description}</p>
+                              <p className="text-[11px] text-[var(--color-text-secondary)] font-medium">{rec.description}</p>
 
-                              <div className="flex items-center justify-between text-[11px] text-[#1F2522] pt-1 border-t border-[#D9DEDA]">
-                                <span className="font-mono text-[#355F58] font-bold">
+                              <div className="flex items-center justify-between text-[11px] text-[var(--color-text-primary)] pt-1 border-t border-[var(--color-border)]">
+                                <span className="font-mono text-[var(--color-primary)] font-bold">
                                   {rec?.startTime ?? '10:00 AM'} • {rec?.durationMinutes ?? 60} mins
                                 </span>
-                                <span className="font-extrabold text-[#1F2522]">
+                                <span className="font-extrabold text-[var(--color-text-primary)]">
                                   {rec.estimatedCost ? `₹${rec.estimatedCost}` : 'Free'}
                                 </span>
                               </div>
 
                               {isSelected ? (
-                                <div className="p-3 mt-2 rounded-xl bg-white border border-[#355F58]/30 space-y-2.5 animate-fadeIn shadow-xs">
-                                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#355F58]">
-                                    <AlertCircle className="w-4 h-4 text-[#355F58] shrink-0" />
+                                <div className="p-3 mt-2 rounded-xl bg-[var(--color-surface)] border border-[var(--color-primary)] space-y-2.5 animate-fadeIn shadow-xs">
+                                  <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--color-primary)]">
+                                    <AlertCircle className="w-4 h-4 text-[var(--color-primary)] shrink-0" />
                                     <span>Swap with "{msg.currentActivityName || 'Current Activity'}"?</span>
                                   </div>
                                   <div className="flex items-center gap-2 pt-1">
@@ -368,7 +368,7 @@ export const AIAssistantSheet: React.FC = () => {
                                       type="button"
                                       onClick={() => setPendingSwap(null)}
                                       disabled={isSubmitting}
-                                      className="flex-1 py-2 rounded-xl bg-[#F0F2EF] hover:bg-[#E4E8E4] text-[#1F2522] font-bold text-xs border border-[#D9DEDA] transition-all"
+                                      className="flex-1 py-2 rounded-xl bg-[var(--color-surface-elevated)] hover:bg-[var(--color-surface)] text-[var(--color-text-primary)] font-bold text-xs border border-[var(--color-border)] transition-all"
                                     >
                                       Cancel
                                     </button>
@@ -376,7 +376,7 @@ export const AIAssistantSheet: React.FC = () => {
                                       type="button"
                                       onClick={handleConfirmSwap}
                                       disabled={isSubmitting}
-                                      className="flex-1 py-2 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs transition-all shadow-xs"
+                                      className="flex-1 py-2 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs transition-all shadow-xs"
                                     >
                                       {isSubmitting ? 'Updating...' : 'Confirm Swap'}
                                     </button>
@@ -386,9 +386,9 @@ export const AIAssistantSheet: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => setPendingSwap({ recommendation: rec, messageContext: msg })}
-                                  className="w-full py-2.5 bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 mt-1"
+                                  className="w-full py-2.5 bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 mt-1"
                                 >
-                                  <Sparkles className="w-3.5 h-3.5 text-white" />
+                                  <Sparkles className="w-3.5 h-3.5" />
                                   <span>Select Recommendation</span>
                                 </button>
                               )}
@@ -405,9 +405,9 @@ export const AIAssistantSheet: React.FC = () => {
                           type="button"
                           disabled={applyingRefinement}
                           onClick={() => handleApplyRefinement(msg.tripId || currentTrip?.id || '', msg.refinementActions || [])}
-                          className="w-full py-2.5 bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2"
+                          className="w-full py-2.5 bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2"
                         >
-                          <Sparkles className="w-4 h-4 text-white" />
+                          <Sparkles className="w-4 h-4" />
                           <span>{applyingRefinement ? 'Applying Refinements...' : 'Apply Refinements to Itinerary'}</span>
                         </button>
                       </div>
@@ -417,7 +417,7 @@ export const AIAssistantSheet: React.FC = () => {
                     {msg.role === 'ai' && msg.actionType && (
                       <button
                         onClick={() => handleExecuteAction(msg.actionType, msg.actionPayload)}
-                        className="cta-primary text-xs py-2 px-3 mt-1.5 w-full flex items-center justify-center gap-1.5 bg-[#355F58] text-white font-bold"
+                        className="min-h-14 text-xs py-2 px-3 mt-1.5 w-full flex items-center justify-center gap-1.5 rounded-2xl bg-[#355F58] text-white dark:bg-[var(--color-primary)] dark:text-zinc-950 font-bold"
                       >
                         {msg.actionType === 'food' && <Utensils className="w-3.5 h-3.5" />}
                         {msg.actionType === 'cab' && <Car className="w-3.5 h-3.5" />}
@@ -435,7 +435,7 @@ export const AIAssistantSheet: React.FC = () => {
           {/* Input Bar */}
           <form
             onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-            className="px-4 py-3 border-t border-[#D9DEDA] shrink-0 bg-white"
+            className="px-4 py-3 border-t border-[var(--color-border)] shrink-0 bg-[var(--color-surface)]"
             style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))' }}
           >
             <div className="flex items-center gap-2">
@@ -444,16 +444,16 @@ export const AIAssistantSheet: React.FC = () => {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 placeholder={swapContext ? `Refine options (e.g. 'something cheaper')...` : "Ask Copilot anything..."}
-                className="w-full bg-[#F0F2EF] border border-[#D9DEDA] focus:border-[#355F58] rounded-2xl px-3.5 py-3 text-xs font-semibold text-[#1F2522] outline-none flex-1"
+                className="w-full bg-[var(--color-surface-elevated)] border border-[var(--color-border)] focus:border-[var(--color-primary)] rounded-2xl px-3.5 py-3 text-xs font-semibold text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] min-w-0 flex-1"
                 disabled={isSubmitting}
               />
               <button
                 type="submit"
                 disabled={!input.trim() || isSubmitting}
-                className="touch-target press-scale p-3 rounded-2xl bg-[#355F58] text-white disabled:opacity-40 flex items-center justify-center"
+                className="touch-target press-scale p-3 rounded-2xl bg-[#355F58] text-white dark:bg-[var(--color-primary)] dark:text-zinc-950 disabled:bg-[var(--color-surface-elevated)] disabled:text-[var(--color-text-tertiary)] flex items-center justify-center"
                 aria-label="Send message"
               >
-                <Send className="w-4 h-4 text-white" />
+                <Send className="w-4 h-4" />
               </button>
             </div>
           </form>
@@ -463,38 +463,38 @@ export const AIAssistantSheet: React.FC = () => {
       {/* Confirmation Dialog Modal for Activity Swap */}
       {pendingSwap && (
         <div className="fixed inset-0 z-[100000] bg-[#1F2522]/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-[#D9DEDA] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-scaleIn text-[#1F2522]">
-            <div className="flex items-center gap-2 text-[#355F58] font-extrabold text-sm uppercase tracking-wider">
-              <AlertCircle className="w-4 h-4 text-[#355F58]" />
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-scaleIn text-[var(--color-text-primary)]">
+            <div className="flex items-center gap-2 text-[var(--color-primary)] font-extrabold text-sm uppercase tracking-wider">
+              <AlertCircle className="w-4 h-4 text-[var(--color-primary)]" />
               <span>Replace Activity?</span>
             </div>
 
-            <div className="space-y-3 py-2 border-y border-[#D9DEDA]">
-              <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-xs">
-                <span className="text-[10px] uppercase font-bold text-rose-700 tracking-wider">Replacing Current Activity</span>
-                <h5 className="font-bold text-[#1F2522] text-sm mt-0.5">{pendingSwap.messageContext.currentActivityName || 'Current Activity'}</h5>
+            <div className="space-y-3 py-2 border-y border-[var(--color-border)]">
+              <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 text-xs">
+                <span className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-300 tracking-wider">Replacing Current Activity</span>
+                <h5 className="font-bold text-[var(--color-text-primary)] text-sm mt-0.5">{pendingSwap.messageContext.currentActivityName || 'Current Activity'}</h5>
               </div>
 
               <div className="flex justify-center">
-                <ArrowRight className="w-5 h-5 text-[#355F58] rotate-90" />
+                <ArrowRight className="w-5 h-5 text-[var(--color-primary)] rotate-90" />
               </div>
 
-              <div className="p-3 rounded-2xl bg-[#E8F0EE] border border-[#D9DEDA] text-xs">
-                <span className="text-[10px] uppercase font-bold text-[#355F58] tracking-wider">With Selected Alternative</span>
-                <h5 className="font-bold text-[#1F2522] text-sm mt-0.5">{pendingSwap.recommendation.name}</h5>
-                <p className="text-[#5F6863] mt-1 font-medium">{pendingSwap?.recommendation?.startTime ?? '10:00 AM'} • {pendingSwap?.recommendation?.estimatedCost ? `₹${pendingSwap.recommendation.estimatedCost}` : 'Free'}</p>
-                <p className="text-[#5F6863] text-[11px] font-medium">{pendingSwap.recommendation.locationName}</p>
+              <div className="p-3 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-xs">
+                <span className="text-[10px] uppercase font-bold text-[var(--color-primary)] tracking-wider">With Selected Alternative</span>
+                <h5 className="font-bold text-[var(--color-text-primary)] text-sm mt-0.5">{pendingSwap.recommendation.name}</h5>
+                <p className="text-[var(--color-text-secondary)] mt-1 font-medium">{pendingSwap?.recommendation?.startTime ?? '10:00 AM'} • {pendingSwap?.recommendation?.estimatedCost ? `₹${pendingSwap.recommendation.estimatedCost}` : 'Free'}</p>
+                <p className="text-[var(--color-text-secondary)] text-[11px] font-medium">{pendingSwap.recommendation.locationName}</p>
               </div>
             </div>
 
-            <p className="text-xs text-[#5F6863] font-medium">This will update your persisted itinerary, schedule timing, and remaining trip budget.</p>
+            <p className="text-xs text-[var(--color-text-secondary)] font-medium">This will update your persisted itinerary, schedule timing, and remaining trip budget.</p>
 
             <div className="flex items-center gap-3 pt-1">
               <button
                 type="button"
                 onClick={() => setPendingSwap(null)}
                 disabled={isSubmitting}
-                className="flex-1 py-3 rounded-2xl bg-[#F0F2EF] hover:bg-[#E4E8E4] text-[#1F2522] font-bold text-xs border border-[#D9DEDA] transition-all"
+                className="flex-1 py-3 rounded-2xl bg-[var(--color-surface-elevated)] hover:bg-[var(--color-surface)] text-[var(--color-text-primary)] font-bold text-xs border border-[var(--color-border)] transition-all"
               >
                 Cancel
               </button>
@@ -503,7 +503,7 @@ export const AIAssistantSheet: React.FC = () => {
                 type="button"
                 onClick={handleConfirmSwap}
                 disabled={isSubmitting}
-                className="flex-1 py-3 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs transition-all shadow-xs"
+                className="flex-1 py-3 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs transition-all shadow-xs"
               >
                 {isSubmitting ? 'Updating...' : 'Confirm Swap'}
               </button>
