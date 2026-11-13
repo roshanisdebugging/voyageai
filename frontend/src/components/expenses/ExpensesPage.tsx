@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Portal } from '../common/Portal';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
@@ -243,7 +244,8 @@ export const ExpensesPage: React.FC = () => {
 
       {/* Log Expense Modal Overlay */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-[#1F2522]/40 backdrop-blur-xs p-4 animate-fadeIn">
+        <Portal>
+          <div className="fixed inset-0 z-[var(--z-modal)] flex items-end-safe sm:items-center-safe justify-center bg-[#1F2522]/40 backdrop-blur-xs p-4 animate-fadeIn overflow-y-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
           <form
             onSubmit={handleCreate}
             className="w-full max-w-md bg-white border border-[#D9DEDA] rounded-3xl p-6 space-y-4 shadow-xl animate-slideUp text-[#1F2522]"
@@ -330,6 +332,7 @@ export const ExpensesPage: React.FC = () => {
             </div>
           </form>
         </div>
+        </Portal>
       )}
     </div>
   );

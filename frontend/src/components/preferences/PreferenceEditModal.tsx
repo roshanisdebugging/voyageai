@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Portal } from '../common/Portal';
 import { useAuth } from '../../auth/AuthContext';
 import type {
   TravelStyle,
@@ -64,7 +65,8 @@ export const PreferenceEditModal: React.FC<PreferenceEditModalProps> = ({
   const presetBudgetChips = [15000, 30000, 50000, 100000, 150000];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 pb-[80px] lg:pb-6 bg-[#1F2522]/50 backdrop-blur-xs animate-fadeIn">
+    <Portal>
+      <div className="fixed inset-0 z-[var(--z-modal)] flex items-center-safe justify-center p-3 sm:p-6 pb-[80px] lg:pb-6 bg-[#1F2522]/50 backdrop-blur-xs animate-fadeIn overflow-y-auto">
       <div className="w-full max-w-lg bg-white border border-[#D9DEDA] rounded-3xl max-h-[calc(100dvh-100px)] lg:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden my-auto text-[#1F2522]">
         
         {/* Header */}
@@ -338,5 +340,6 @@ export const PreferenceEditModal: React.FC<PreferenceEditModalProps> = ({
 
       </div>
     </div>
+    </Portal>
   );
 };

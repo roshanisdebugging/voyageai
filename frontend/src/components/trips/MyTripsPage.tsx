@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Portal } from '../common/Portal';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTrip } from '../../features/trip/TripContext';
 import { isPastTrip } from '../../features/trip/tripRepository';
@@ -58,7 +59,8 @@ export const MyTripsPage: React.FC = () => {
 
       {/* Confirmation Bottom Sheet */}
       {confirmActionModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#1F2522]/40 backdrop-blur-xs p-4 animate-fadeIn">
+        <Portal>
+          <div className="fixed inset-0 z-[var(--z-modal)] flex items-end-safe justify-center bg-[#1F2522]/40 backdrop-blur-xs p-4 animate-fadeIn overflow-y-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
           <div className="w-full max-w-md bg-white border border-[#D9DEDA] rounded-3xl p-6 space-y-4 text-center shadow-xl">
             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mx-auto ${
               confirmActionModal.actionType === 'DELETE'
@@ -99,6 +101,7 @@ export const MyTripsPage: React.FC = () => {
             </div>
           </div>
         </div>
+        </Portal>
       )}
 
       {/* Header */}

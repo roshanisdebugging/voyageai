@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download, AlertTriangle, X } from 'lucide-react';
 import { useTrip } from '../../features/trip/TripContext';
+import { Portal } from '../common/Portal';
 
 /**
  * In-app notice when the server finishes an itinerary (ITINERARY_READY over the WebSocket).
@@ -21,10 +22,11 @@ export const ItineraryReadyNotice: React.FC = () => {
   };
 
   return (
+    <Portal>
     <div
       role="alertdialog"
       aria-labelledby="itinerary-ready-title"
-      className="fixed top-[calc(env(safe-area-inset-top,0px)+12px)] left-1/2 -translate-x-1/2 z-[65] w-[calc(100%-32px)] max-w-sm bg-white border border-[#D9DEDA] rounded-3xl shadow-2xl p-4 space-y-3 animate-fadeIn"
+      className="fixed top-[calc(var(--header-h)+var(--safe-top)+12px)] left-1/2 -translate-x-1/2 z-[var(--z-notice)] w-[calc(100%-32px)] max-w-sm bg-white border border-[#D9DEDA] rounded-3xl shadow-2xl p-4 space-y-3 animate-fadeIn"
     >
       <div className="flex items-start gap-3">
         <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${isReady ? 'bg-[#E8F0EE] text-[#355F58]' : 'bg-rose-50 text-rose-600'}`}>
@@ -64,5 +66,6 @@ export const ItineraryReadyNotice: React.FC = () => {
         </button>
       </div>
     </div>
+    </Portal>
   );
 };

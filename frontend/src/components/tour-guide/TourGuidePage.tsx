@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Portal } from '../common/Portal';
 import { useLocation } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
@@ -594,11 +595,12 @@ export const TourGuidePage: React.FC = () => {
 
       {/* Upgrade Plan Warning Popup (Mock Modal) */}
       {showUpgradeModal && (
-        <div
+        <Portal>
+          <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="upgrade-modal-title"
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[var(--z-modal)] flex items-center-safe justify-center p-4 animate-fadeIn overflow-y-auto"
           onClick={() => setShowUpgradeModal(false)}
         >
           <div
@@ -660,6 +662,7 @@ export const TourGuidePage: React.FC = () => {
             </div>
           </div>
         </div>
+        </Portal>
       )}
     </div>
   );

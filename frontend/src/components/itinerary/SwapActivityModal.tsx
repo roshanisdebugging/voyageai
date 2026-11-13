@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Portal } from '../common/Portal';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS } from '../../config/apiConfig';
@@ -125,7 +126,8 @@ export const SwapActivityModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn">
+    <Portal>
+      <div className="fixed inset-0 z-[var(--z-modal)] flex items-center-safe justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn overflow-y-auto">
       <div className="relative w-full max-w-lg rounded-3xl bg-slate-900 border border-white/10 p-5 shadow-2xl space-y-4 text-slate-100 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/10 pb-3">
@@ -248,5 +250,6 @@ export const SwapActivityModal: React.FC = () => {
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

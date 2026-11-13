@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Portal } from './Portal';
 import { useApp } from '../../context/AppContext';
 import { Search, MapPin, Navigation, AlertTriangle, CheckCircle2, X, Loader2, Crosshair } from 'lucide-react';
 import { wsClient } from '../../services/wsClient';
@@ -81,7 +82,8 @@ export const ManualLocationModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
+    <Portal>
+      <div className="fixed inset-0 z-[var(--z-modal)] flex items-center-safe justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn overflow-y-auto">
       <div className="w-full max-w-md bg-[#0D1117] border border-teal-500/40 rounded-3xl p-6 shadow-2xl space-y-5 text-white relative overflow-hidden">
         {/* Decorative Top Glow */}
         <div className="absolute -top-16 -left-16 w-32 h-32 bg-teal-500/20 rounded-full blur-3xl" />
@@ -220,5 +222,6 @@ export const ManualLocationModal: React.FC = () => {
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

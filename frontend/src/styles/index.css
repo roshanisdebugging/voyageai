@@ -30,6 +30,13 @@
 
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  /* Layers, lowest to highest. Use as z-[var(--z-modal)]; don't add new ad hoc z-index values. */
+  --z-floating: 30;   /* FAB, mic button, voice test panel */
+  --z-nav: 100;       /* mobile bottom nav */
+  --z-header: 2000;   /* sticky header */
+  --z-notice: 2100;   /* banners that must sit over the header */
+  --z-modal: 3000;    /* blocking dialogs (rendered through <Portal>) */
 }
 
 .dark {

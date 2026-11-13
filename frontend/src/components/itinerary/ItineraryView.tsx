@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Portal } from '../common/Portal';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { MapPin, Sparkles, Wallet, CloudRain, RefreshCw, Navigation, Car, Calendar, ArrowLeft, Download, Copy, Check, Printer, CheckCircle2, Circle, TrainFront, Plane, Bus } from 'lucide-react';
@@ -565,7 +566,8 @@ export const ItineraryView: React.FC = () => {
 
       {/* 1. STYLISH BUDGET AI ANALYSIS MODAL SHEET */}
       {budgetAnalysisModal.isOpen && budgetAnalysisModal.data && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1F2522]/50 backdrop-blur-xs animate-fadeIn">
+        <Portal>
+          <div className="fixed inset-0 z-[var(--z-modal)] flex items-center-safe justify-center p-4 bg-[#1F2522]/50 backdrop-blur-xs animate-fadeIn overflow-y-auto">
           <div className="bg-white border border-[#D9DEDA] rounded-3xl p-6 max-w-md w-full space-y-5 shadow-2xl animate-scaleUp">
             
             <div className="flex items-center justify-between border-b border-[#D9DEDA] pb-4">
@@ -636,11 +638,13 @@ export const ItineraryView: React.FC = () => {
             </button>
           </div>
         </div>
+        </Portal>
       )}
 
       {/* 2. STYLISH WEATHER AI REPLAN MODAL SHEET */}
       {weatherReplanModal.isOpen && weatherReplanModal.data && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1F2522]/50 backdrop-blur-xs animate-fadeIn">
+        <Portal>
+          <div className="fixed inset-0 z-[var(--z-modal)] flex items-center-safe justify-center p-4 bg-[#1F2522]/50 backdrop-blur-xs animate-fadeIn overflow-y-auto">
           <div className="bg-white border border-[#D9DEDA] rounded-3xl p-6 max-w-md w-full space-y-5 shadow-2xl animate-scaleUp">
             
             <div className="flex items-center justify-between border-b border-[#D9DEDA] pb-4">
@@ -704,6 +708,7 @@ export const ItineraryView: React.FC = () => {
             </button>
           </div>
         </div>
+        </Portal>
       )}
 
       {/* 3. ERROR TOAST BANNER */}

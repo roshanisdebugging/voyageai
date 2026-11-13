@@ -47,7 +47,7 @@ export const MobileHeader: React.FC = () => {
 
   return (
     <header
-      className="sticky top-0 z-[2000] bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-b border-[#D9DEDA] dark:border-zinc-800 transition-colors"
+      className="sticky top-0 z-[var(--z-header)] bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border-b border-[#D9DEDA] dark:border-zinc-800 transition-colors"
       style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
     >
       <div className="flex items-center justify-between h-14 px-4 max-w-xl mx-auto gap-2">
