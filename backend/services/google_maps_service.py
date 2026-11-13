@@ -284,17 +284,17 @@ async def search_nearby_places(
                     primary_type = place.get("primaryType") or "attraction"
                     category_name = primary_type.replace("_", " ").title()
 
-                    name = place.get("displayName", {}).get("text") or "Popular Destination"
+                    name = place.get("displayName", {}).get("text")
+                    if not name:
+                        continue  # never invent a name
                     address = place.get("formattedAddress", "")
+                    # Only Google's own summary; no invented description.
                     summary = place.get("editorialSummary", {}).get("text", "")
-                    if not summary:
-                        summary = f"Popular {category_name.lower()} located at {address}."
 
+                    # None when Google has no rating; the app then shows no stars.
                     rating = place.get("rating")
                     if rating is not None:
                         rating = round(float(rating), 1)
-                    else:
-                        rating = 4.5
 
                     transformed.append({
                         "id": place.get("id"),

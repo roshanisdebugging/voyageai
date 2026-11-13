@@ -1852,37 +1852,7 @@ def get_trip_highlights_query(
         return generate_live_destination_highlights(destination=destination, lat=lat, lng=lng)
     except Exception as e:
         print(f"[HIGHLIGHTS FETCH FAILED]: {e}", flush=True)
-        return {
-            "destination": f"MOCK {(destination or 'DESTINATION').upper()} • MOCK MOCK",
-            "region": "MOCK REGION",
-            "overview": "MOCK DATA: Live data failed to fetch from backend. Inspect backend logs.",
-            "is_mock": True,
-            "activities": [
-                {
-                    "id": "mock_1",
-                    "title": "MOCK SPOT 1 • MOCK MOCK",
-                    "category": "MOCK",
-                    "tag": "MOCK",
-                    "location": f"MOCK LOCATION • {destination or 'DESTINATION'}",
-                    "duration": "MOCK",
-                    "cost": 0,
-                    "is_mock": True,
-                    "heads_up": "MOCK: Live data failed to fetch from backend"
-                },
-                {
-                    "id": "mock_2",
-                    "title": "MOCK SPOT 2 • MOCK MOCK",
-                    "category": "MOCK",
-                    "tag": "MOCK",
-                    "location": f"MOCK LOCATION • {destination or 'DESTINATION'}",
-                    "duration": "MOCK",
-                    "cost": 0,
-                    "is_mock": True,
-                    "heads_up": "MOCK: LLM fallback triggered"
-                }
-            ],
-            "events": []
-        }
+        raise HTTPException(status_code=503, detail="Live highlights are unavailable right now. Please try again in a minute.")
 
 @app.get("/api/trips/{destination}/highlights")
 def get_trip_highlights_endpoint(
@@ -1895,37 +1865,7 @@ def get_trip_highlights_endpoint(
         return generate_live_destination_highlights(destination=destination, lat=lat, lng=lng)
     except Exception as e:
         print(f"[HIGHLIGHTS FETCH FAILED]: {e}", flush=True)
-        return {
-            "destination": f"MOCK {destination.upper()} • MOCK MOCK",
-            "region": "MOCK REGION",
-            "overview": "MOCK DATA: Live data failed to fetch from backend. Inspect backend logs.",
-            "is_mock": True,
-            "activities": [
-                {
-                    "id": "mock_1",
-                    "title": "MOCK SPOT 1 • MOCK MOCK",
-                    "category": "MOCK",
-                    "tag": "MOCK",
-                    "location": f"MOCK LOCATION • {destination}",
-                    "duration": "MOCK",
-                    "cost": 0,
-                    "is_mock": True,
-                    "heads_up": "MOCK: Live data failed to fetch from backend"
-                },
-                {
-                    "id": "mock_2",
-                    "title": "MOCK SPOT 2 • MOCK MOCK",
-                    "category": "MOCK",
-                    "tag": "MOCK",
-                    "location": f"MOCK LOCATION • {destination}",
-                    "duration": "MOCK",
-                    "cost": 0,
-                    "is_mock": True,
-                    "heads_up": "MOCK: LLM fallback triggered"
-                }
-            ],
-            "events": []
-        }
+        raise HTTPException(status_code=503, detail="Live highlights are unavailable right now. Please try again in a minute.")
 
 # ── SAVED PLACES (BOOKMARKS) SCHEMAS & ENDPOINTS ──
 
@@ -2410,34 +2350,8 @@ def get_swap_options(req: SwapRecommendationRequest):
     except Exception as e:
         print(f"[SWAP OPTIONS AI WARN] {e}", flush=True)
 
-    # Explicit loud mock fallback options if every AI provider is unavailable
-    return {
-        "is_mock": True,
-        "alternatives": [
-            {
-                "id": "mock_alt_1",
-                "title": "MOCK ALTERNATIVE 1 • MOCK MOCK",
-                "category": cat_clean,
-                "tag": "MOCK",
-                "duration": "MOCK",
-                "cost": 0,
-                "is_mock": True,
-                "location": f"MOCK LOCATION, {dest_clean}",
-                "description": "MOCK: Gemini swap-options service unavailable. Inspect backend logs."
-            },
-            {
-                "id": "mock_alt_2",
-                "title": "MOCK ALTERNATIVE 2 • MOCK MOCK",
-                "category": cat_clean,
-                "tag": "MOCK",
-                "duration": "MOCK",
-                "cost": 0,
-                "is_mock": True,
-                "location": f"MOCK LOCATION, {dest_clean}",
-                "description": "MOCK: Gemini swap-options service unavailable. Inspect backend logs."
-            }
-        ]
-    }
+    # No made-up alternatives when every AI provider is down.
+    raise HTTPException(status_code=503, detail="Alternatives are unavailable right now. Please try again in a minute.")
 
 
 class ExecuteSwapRequest(BaseModel):

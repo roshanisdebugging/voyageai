@@ -71,8 +71,10 @@ def search_nearby_restaurants(query: str, lat: float = None, lon: float = None) 
     Dynamically search for real restaurants & dining spots around query or (lat, lon) in India
     exclusively via Google Places API (New).
     """
-    eff_lat = lat if lat is not None else 28.6139
-    eff_lon = lon if lon is not None else 77.2090
+    # Without coordinates there is nothing honest to search around (it used to default to Delhi).
+    if lat is None or lon is None:
+        return []
+    eff_lat, eff_lon = float(lat), float(lon)
     try:
         from services.google_maps_service import search_nearby_places
         places = _run_sync(search_nearby_places(eff_lat, eff_lon, radius=5000, place_types=["restaurant", "cafe", "fast_food_restaurant"]))

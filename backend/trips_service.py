@@ -12,6 +12,10 @@ load_dotenv(override=True)
 SPOTLIGHT_CACHE_TTL = 172800  # 48 hours (172,800 seconds)
 GENERIC_LOCATION_NAMES = {"local area", "current area", "live gps", "nearby", "current location", "location", "active position", "undefined", "null"}
 
+class HighlightsUnavailable(RuntimeError):
+    """Live highlights could not be generated. Never replaced with made-up data."""
+
+
 def generate_live_destination_highlights(
     destination: Optional[str] = None,
     lat: Optional[float] = None,
@@ -164,49 +168,8 @@ Provide 5 diverse real activities and 2 real events. Replace [26.9124, 75.7873] 
 
     if not parsed_data or not isinstance(parsed_data, dict):
         print(f"[HIGHLIGHTS FETCH FAILED]: LLM generation failed or returned invalid payload for {clean_dest}", flush=True)
-        return {
-            "destination": f"MOCK {clean_dest.upper()} • MOCK MOCK",
-            "region": "MOCK REGION",
-            "overview": "MOCK DATA: Live data failed to fetch from backend. Inspect backend logs.",
-            "is_mock": True,
-            "activities": [
-                {
-                    "id": "mock_1",
-                    "title": "MOCK SPOT 1 • MOCK MOCK",
-                    "category": "MOCK",
-                    "tag": "MOCK",
-                    "location": f"MOCK LOCATION • {clean_dest}",
-                    "duration": "MOCK",
-                    "cost": 0,
-                    "is_mock": True,
-                    "heads_up": "MOCK: Live data failed to fetch from backend"
-                },
-                {
-                    "id": "mock_2",
-                    "title": "MOCK SPOT 2 • MOCK MOCK",
-                    "category": "MOCK",
-                    "tag": "MOCK",
-                    "location": f"MOCK LOCATION • {clean_dest}",
-                    "duration": "MOCK",
-                    "cost": 0,
-                    "is_mock": True,
-                    "heads_up": "MOCK: LLM fallback triggered"
-                }
-            ],
-            "events": [
-                {
-                    "id": "mock_evt_1",
-                    "title": "MOCK EVENT 1 • MOCK MOCK",
-                    "date": "MOCK DATE",
-                    "location": f"MOCK LOCATION • {clean_dest}",
-                    "price": 0,
-                    "category": "MOCK",
-                    "tag": "MOCK",
-                    "is_mock": True,
-                    "description": "MOCK: Live backend event fetch failed"
-                }
-            ]
-        }
+        # No made-up spots: the caller returns 503 and the app shows nothing for this section.
+        raise HighlightsUnavailable(f"No live highlights for {clean_dest}")
 
     # Standardize data keys
     parsed_data["destination"] = parsed_data.get("destination", clean_dest)
