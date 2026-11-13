@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import (Column, DateTime, Integer, MetaData, String, Table, Text, create_engine,
-                        func, select)
+                        func, select, text)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
@@ -53,6 +53,8 @@ voice_speeches = Table(
     Column("stt_model", Text),
     Column("stt_time_ms", Integer),
     Column("total_time_ms", Integer),
+    Column("reply_text", Text),          # step 1b; the reply AUDIO is never saved
+    Column("tts_time_ms", Integer),
     Column("status", String(16), nullable=False),
     Column("error", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -108,6 +110,10 @@ def _engine_or_create() -> Engine:
                     engine.dispose()
                     raise RuntimeError("VOICE_DEBUG_DATABASE_URL must point at a local database")
                 metadata.create_all(engine)
+                # create_all() never adds columns to an existing table: add the step 1b ones.
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS reply_text TEXT"))
+                    conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS tts_time_ms INTEGER"))
                 _engine = engine
     return _engine
 
@@ -162,6 +168,8 @@ def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: 
             stt_model=result.stt_model or os.getenv("VOICE_STT_MODEL") or DEFAULT_STT_MODEL,
             stt_time_ms=result.stt_ms if result.ok else None,
             total_time_ms=total_ms,
+            reply_text=result.reply_text,
+            tts_time_ms=result.tts_ms if result.reply_text is not None else None,
             status="ok" if result.ok else "failed",
             error=None if result.ok else f"{result.error_code}: {result.error_detail}",
             created_at=ctx.started_at,

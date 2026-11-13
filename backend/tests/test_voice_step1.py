@@ -20,6 +20,7 @@ dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
 os.environ.pop("VOICE_DEBUG_STORE", None)
+os.environ["VOICE_TTS_ENABLED"] = "false"  # step 1 behaviour only; step 1b is tests/test_voice_step1b.py
 from pathlib import Path
 import tempfile
 

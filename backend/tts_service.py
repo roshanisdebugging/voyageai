@@ -36,11 +36,14 @@ def synthesize_speech_sarvam(
     text: str, 
     target_language_code: str = "hi-IN", # 'hi-IN', 'en-IN', 'bn-IN', 'ta-IN', etc.
     speaker: str = "ritu",               # 'ritu', 'priya', 'rahul', 'aditya', etc.
-    poi_id: Optional[str] = None
+    poi_id: Optional[str] = None,
+    use_cache: bool = True,
 ) -> Optional[str]:
     """
-    Generates realistic speech via Sarvam AI (bulbul:v3) and returns Base64-encoded audio.
+    Generates realistic speech via Sarvam AI (bulbul:v3) and returns Base64-encoded WAV audio.
     Employs sub-3ms Redis caching for 0ms latency on repeated POI narratives.
+    use_cache=False skips the Redis cache entirely (no read, no write). Voice replies use it:
+    they can contain the user's own words, which must never be stored.
     """
     if not text or not text.strip():
         return None
@@ -61,7 +64,7 @@ def synthesize_speech_sarvam(
 
     # 1. Check Redis Cache
     try:
-        cached_audio = redis_conn.get(cache_key)
+        cached_audio = redis_conn.get(cache_key) if use_cache else None
         if cached_audio:
             if isinstance(cached_audio, bytes):
                 cached_audio = cached_audio.decode("utf-8")
@@ -98,16 +101,18 @@ def synthesize_speech_sarvam(
             if audios and isinstance(audios, list) and len(audios) > 0:
                 base64_audio = audios[0]
                 
-                # Cache in Redis with 7-day TTL
-                try:
-                    redis_conn.setex(cache_key, AUDIO_CACHE_TTL_SECONDS, base64_audio)
-                    print(f">>> [SARVAM TTS CACHED] Saved audio to Redis key: {cache_key}", flush=True)
-                except Exception as cache_err:
-                    print(f"[REDIS AUDIO WARN] Redis write failed: {cache_err}", flush=True)
+                # Cache in Redis with 7-day TTL (never for use_cache=False)
+                if use_cache:
+                    try:
+                        redis_conn.setex(cache_key, AUDIO_CACHE_TTL_SECONDS, base64_audio)
+                        print(f">>> [SARVAM TTS CACHED] Saved audio to Redis key: {cache_key}", flush=True)
+                    except Exception as cache_err:
+                        print(f"[REDIS AUDIO WARN] Redis write failed: {cache_err}", flush=True)
 
                 return base64_audio
         else:
-            print(f"[SARVAM TTS ERROR] {response.status_code}: {response.text}", flush=True)
+            # Status only: the response body can echo the input text.
+            print(f"[SARVAM TTS ERROR] HTTP {response.status_code}", flush=True)
     except Exception as e:
         print(f"[SARVAM TTS EXCEPTION]: {e}", flush=True)
 

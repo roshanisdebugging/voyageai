@@ -96,7 +96,15 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
         else:
             payload = m.error(result.error_code or m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id)
         await _send(ws, payload)
-        total_ms = int((time.perf_counter() - stop_at) * 1000)
+        total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop -> transcript sent
+
+        # Step 1b: the spoken reply follows the transcript. A TTS failure never breaks the turn.
+        if result.ok:
+            await run_in_threadpool(pipeline.make_reply, ctx, result)
+            await _send(ws, m.reply(ctx.turn_id, result.reply_text or "", result.reply_audio_b64,
+                                    result.reply_mime, result.tts_ms))
+            if result.tts_error and result.tts_error != "tts_disabled":
+                await _send(ws, m.error(m.ErrorCode.TTS_FAILED, turn_id=ctx.turn_id))
     except Exception as err:
         logger.warning("[VOICE] turn=%s crashed: %s", ctx.turn_id, type(err).__name__)
         await _send(ws, m.error(m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id))

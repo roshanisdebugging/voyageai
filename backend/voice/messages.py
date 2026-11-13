@@ -12,7 +12,12 @@ Server -> app (text frames, JSON):
   {"type": "ready"}                                       login accepted
   {"type": "recording", "turn_id": "..."}                 start accepted, send audio now
   {"type": "transcript", "turn_id", "text", "language", "duration_ms", "latency_ms", "truncated"}
+                                                          sent as soon as speech-to-text finishes
+  {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms"}
+                                                          the spoken reply (step 1b), after "transcript"
   {"type": "error", "code": "...", "message": "...", "turn_id"?}
+                                                          a failed reply sends "reply" (audio null), then
+                                                          an error with code "tts_failed"
 """
 from typing import Any, Dict, Optional
 
@@ -37,6 +42,7 @@ class ErrorCode:
     RATE_LIMITED = "rate_limited"        # our per-user limit or Groq's
     STT_FAILED = "stt_failed"
     UNAVAILABLE = "unavailable"          # limiter/Redis down: fail closed
+    TTS_FAILED = "tts_failed"            # the spoken reply couldn't be made (the turn still worked)
 
 
 # Messages the app can show as they are.
@@ -49,6 +55,7 @@ ERROR_MESSAGES = {
     ErrorCode.RATE_LIMITED: "Too many voice requests. Try again in a minute.",
     ErrorCode.STT_FAILED: "Couldn't understand the audio right now. Please try again.",
     ErrorCode.UNAVAILABLE: "Voice is unavailable right now. Please try again shortly.",
+    ErrorCode.TTS_FAILED: "Couldn't play the reply.",
 }
 
 
@@ -65,6 +72,17 @@ def ready() -> Dict[str, Any]:
 
 def recording(turn_id: str) -> Dict[str, Any]:
     return {"type": "recording", "turn_id": turn_id}
+
+
+def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str, tts_ms: int) -> Dict[str, Any]:
+    return {
+        "type": "reply",
+        "turn_id": turn_id,
+        "reply_text": reply_text,
+        "reply_audio_base64": audio_base64,
+        "mime": mime,
+        "tts_ms": tts_ms,
+    }
 
 
 def transcript(turn_id: str, text: str, language: Optional[str], duration_ms: int, latency_ms: int,
