@@ -4,10 +4,10 @@
  * TO CHANGE THE BACKEND URL:
  * Update VITE_API_URL, VITE_API_BASE_URL and VITE_WS_URL in `.env`, and
  * `DEFAULT_BACKEND_URL` below (used when the env vars are missing).
- * Test mode: everything runs on http://localhost:80.
+ * Test mode: everything runs on http://localhost:8000.
  */
 
-export const DEFAULT_BACKEND_URL = 'http://localhost:80';
+export const DEFAULT_BACKEND_URL = 'http://localhost:8000';
 
 /**
  * Returns the active HTTP/HTTPS API base URL.
