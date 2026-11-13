@@ -14,6 +14,10 @@ export interface PanelEntry {
   groqMs?: number;
   roundTripMs?: number;
   truncated?: boolean;
+  // Spoken reply (step 1b)
+  replyText?: string;
+  ttsMs?: number;
+  totalMs?: number; // second tap -> reply starts playing
   at: number;
 }
 
@@ -64,8 +68,16 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
                 <div key={e.id} className="space-y-0.5">
                   <p className="text-sm font-medium leading-snug break-words">{e.text || <em className="text-gray-400">(nothing heard)</em>}</p>
                   <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
-                    {e.language || '?'} · clip {seconds(e.durationMs)}{e.truncated ? ' (cut at 30 s)' : ''} · Groq {e.groqMs} ms · round trip {e.roundTripMs} ms
+                    {e.language || '?'} · clip {seconds(e.durationMs)}{e.truncated ? ' (cut at 30 s)' : ''} · Groq {e.groqMs} ms · transcript after {e.roundTripMs} ms
                   </p>
+                  {e.replyText != null && (
+                    <>
+                      <p className="text-xs text-[#355F58] dark:text-emerald-400 leading-snug break-words">↳ {e.replyText}</p>
+                      <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
+                        TTS {e.ttsMs} ms{e.totalMs != null ? ` · total ${e.totalMs} ms (tap → sound)` : ''}
+                      </p>
+                    </>
+                  )}
                 </div>
               )
             )

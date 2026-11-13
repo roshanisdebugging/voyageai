@@ -13,6 +13,14 @@ export type VoiceServerMessage =
       latency_ms: number;
       truncated: boolean;
     }
+  | {
+      type: 'reply';
+      turn_id: string;
+      reply_text: string;
+      reply_audio_base64: string | null;
+      mime: string;
+      tts_ms: number;
+    }
   | { type: 'error'; code: string; message: string; turn_id?: string }
   | { type: 'closed'; code: number };
 

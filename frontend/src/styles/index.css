@@ -502,3 +502,21 @@ h6 {
     print-color-adjust: exact !important;
   }
 }
+
+/* Voice reply (mic "speaking" state): sound-wave bars */
+@keyframes voice-wave {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+.voice-wave-bar {
+  display: inline-block;
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: currentColor;
+  transform-origin: center;
+  animation: voice-wave 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-wave-bar { animation: none; transform: scaleY(0.7); }
+}

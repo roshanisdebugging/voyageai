@@ -6,17 +6,19 @@ import { useToast } from '../components/common/UndoToast';
 import { voiceSocket, type VoiceServerMessage } from './voiceSocket';
 import { MAX_RECORDING_MS, useVoiceRecorder } from './useVoiceRecorder';
 import { TestTranscriptPanel, type PanelEntry } from './TestTranscriptPanel';
+import { replyPlayer } from './replyPlayer';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
-const REPLY_TIMEOUT_MS = 30_000;
+const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
 
-type Phase = 'idle' | 'starting' | 'recording' | 'waiting';
+type Phase = 'idle' | 'starting' | 'recording' | 'waiting' | 'speaking';
 
 const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
 /**
- * Floating mic (voicefirst.md step 1): tap to start, tap to stop, 30 s cap.
- * Streams 16 kHz PCM over /ws/voice and shows what Groq heard in the test panel.
+ * Floating mic (voicefirst.md steps 1 + 1b): tap to start, tap to stop, 30 s cap.
+ * Streams 16 kHz PCM over /ws/voice, shows what Groq heard in the test panel, then plays the
+ * spoken reply. Tapping while it speaks stops the reply and starts a new recording (barge-in).
  */
 const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   const location = useLocation();
@@ -82,7 +84,7 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   useEffect(() => {
     return voiceSocket.onMessage((msg: VoiceServerMessage) => {
       if (msg.type === 'transcript') {
-        clearReplyTimer();
+        // The turn continues: the reply (step 1b) follows. The reply timer keeps running.
         const roundTripMs = stopAtRef.current ? Math.round(performance.now() - stopAtRef.current) : undefined;
         setEntries((prev) => [{
           id: msg.turn_id,
@@ -95,8 +97,31 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
           truncated: msg.truncated,
           at: Date.now(),
         }, ...prev].slice(0, 50));
-        if (phaseRef.current === 'waiting') setPhaseBoth('idle');
+      } else if (msg.type === 'reply') {
+        clearReplyTimer();
+        const turnId = msg.turn_id;
+        const update = (patch: Partial<PanelEntry>) =>
+          setEntries((prev) => prev.map((e) => (e.id === turnId ? { ...e, ...patch } : e)));
+        update({ replyText: msg.reply_text, ttsMs: msg.tts_ms });
+        if (phaseRef.current !== 'waiting') return; // the user already moved on (e.g. started recording)
+        if (!msg.reply_audio_base64) {
+          setPhaseBoth('idle'); // the error ("Couldn't play the reply.") follows as its own message
+          return;
+        }
+        setPhaseBoth('speaking');
+        replyPlayer
+          .play(msg.reply_audio_base64, msg.mime, () => {
+            if (stopAtRef.current) update({ totalMs: Math.round(performance.now() - stopAtRef.current) });
+          })
+          .catch(() => report("Couldn't play the reply."))
+          .finally(() => {
+            if (phaseRef.current === 'speaking') setPhaseBoth('idle');
+          });
       } else if (msg.type === 'error') {
+        if (msg.code === 'tts_failed') {
+          report(msg.message); // the turn itself worked; the state was already handled by "reply"
+          return;
+        }
         clearReplyTimer();
         report(msg.message);
         if (phaseRef.current === 'recording') {
@@ -116,9 +141,10 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
     });
   }, [report, recorder]);
 
-  // Close the voice session when the button goes away (logout, leaving the app).
+  // Close the voice session and stop any reply when the button goes away (logout, leaving the app).
   useEffect(() => () => {
     clearReplyTimer();
+    replyPlayer.close();
     voiceSocket.close();
   }, []);
 
@@ -138,8 +164,16 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
       sendStop();
       return;
     }
+    // Barge-in: tapping while the reply plays stops it and starts a new recording.
+    if (phaseRef.current === 'speaking') {
+      replyPlayer.stop();
+      setPhaseBoth('idle');
+    }
     if (phaseRef.current !== 'idle') return;
 
+    // Inside the tap, before any await: unlock reply playback (iOS) and stop any playing reply.
+    replyPlayer.prime();
+    replyPlayer.stop();
     setPhaseBoth('starting');
     queuedRef.current = [];
     streamingRef.current = false;
@@ -170,7 +204,8 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
 
   const label =
     phase === 'recording' ? `Stop recording, ${remaining} seconds left`
-    : phase === 'waiting' ? 'Transcribing'
+    : phase === 'waiting' ? 'Working on it'
+    : phase === 'speaking' ? 'Speaking. Tap to interrupt.'
     : phase === 'starting' ? 'Starting microphone'
     : 'Start voice input';
 
@@ -187,6 +222,8 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
         className={`fixed z-[var(--z-floating)] right-4 w-14 h-14 rounded-full shadow-lg flex flex-col items-center justify-center press-scale transition-colors disabled:cursor-wait ${
           phase === 'recording'
             ? 'bg-rose-600 text-white ring-4 ring-rose-300/60 animate-pulse'
+            : phase === 'speaking'
+            ? 'bg-[#355F58] dark:bg-emerald-600 text-white ring-4 ring-[#355F58]/30 dark:ring-emerald-400/30'
             : 'bg-white dark:bg-zinc-900 text-[#355F58] dark:text-emerald-400 border border-[#D9DEDA] dark:border-zinc-700'
         }`}
         style={{ bottom: `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px)` }}
@@ -196,6 +233,12 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
             <Square className="w-4 h-4 fill-white" aria-hidden="true" />
             <span className="text-[10px] font-bold leading-none mt-0.5 tabular-nums">{remaining}s</span>
           </>
+        ) : phase === 'speaking' ? (
+          <span className="flex items-center gap-[3px]" aria-hidden="true">
+            {[0, 150, 300, 450].map((delay) => (
+              <span key={delay} className="voice-wave-bar" style={{ animationDelay: `${delay}ms` }} />
+            ))}
+          </span>
         ) : phase === 'idle' ? (
           <Mic className="w-6 h-6" aria-hidden="true" />
         ) : (
