@@ -42,3 +42,6 @@ build
 brain/
 scratch/
 Agent.md
+
+# Voice test recordings (testing.md), local only
+test_audio_folder/

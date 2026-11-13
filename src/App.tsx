@@ -26,6 +26,7 @@ import { EmergencyModal } from './components/common/EmergencyModal';
 import { SwapActivityModal } from './components/itinerary/SwapActivityModal';
 import { ItineraryReadyNotice } from './components/trip/ItineraryReadyNotice';
 import { ToastProvider } from './components/common/UndoToast';
+import { MicButton } from './voice/MicButton';
 
 import { HomePage } from './components/home/HomePage';
 import { MyTripsPage } from './components/trips/MyTripsPage';
@@ -202,6 +203,9 @@ const AppShell: React.FC = () => {
 
       {/* Floating Contextual AI Button (Omitted on Guide page) */}
       {!isGuideView && <FloatingAIButton />}
+
+      {/* Voice (step 1): floating mic, logged-in users only */}
+      <MicButton raised={!isGuideView} />
 
       {/* Bottom Sheets & Modals */}
       <NotificationDrawer />

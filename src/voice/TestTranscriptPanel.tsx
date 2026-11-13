@@ -1,0 +1,76 @@
+import React, { useState } from 'react';
+import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
+
+/**
+ * TEMPORARY, test phase only (voicefirst.md step 1). Shown when VITE_VOICE_TEST_TRANSCRIPT=true.
+ * Lists what Groq Whisper heard. Kept in React state only: gone on reload, never saved.
+ */
+export interface PanelEntry {
+  id: string;
+  kind: 'transcript' | 'error';
+  text: string;
+  language?: string | null;
+  durationMs?: number;
+  groqMs?: number;
+  roundTripMs?: number;
+  truncated?: boolean;
+  at: number;
+}
+
+const seconds = (ms?: number) => (ms == null ? '–' : `${(ms / 1000).toFixed(1)} s`);
+
+export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () => void }> = ({ entries, onClear }) => {
+  const [open, setOpen] = useState(true);
+  const transcripts = entries.filter((e) => e.kind === 'transcript' && e.groqMs != null);
+  const avgGroq = transcripts.length
+    ? Math.round(transcripts.reduce((sum, e) => sum + (e.groqMs || 0), 0) / transcripts.length)
+    : null;
+
+  return (
+    <section
+      aria-label="Voice test transcripts"
+      className="fixed z-30 left-3 w-[min(22rem,calc(100vw-6.5rem))] rounded-2xl bg-white/95 dark:bg-zinc-900/95 backdrop-blur border border-amber-300 dark:border-amber-700 shadow-lg text-[#1F2522] dark:text-zinc-100"
+      style={{ bottom: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 12px)' }}
+    >
+      <header className="flex items-center justify-between gap-2 px-3 py-2 border-b border-amber-200 dark:border-amber-800">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-amber-800 dark:text-amber-300"
+          aria-expanded={open}
+        >
+          {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+          Voice test · {transcripts.length} heard{avgGroq != null ? ` · Groq avg ${avgGroq} ms` : ''}
+        </button>
+        {entries.length > 0 && (
+          <button type="button" onClick={onClear} aria-label="Clear transcripts" className="p-1 rounded-lg text-gray-500 hover:text-rose-600">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </header>
+
+      {open && (
+        <div className="max-h-[38vh] overflow-y-auto px-3 py-2 space-y-2">
+          {entries.length === 0 ? (
+            <p className="text-xs text-gray-500 dark:text-zinc-400 py-1">
+              Tap the mic, speak, tap again. What Groq heard shows here. Nothing is saved by this panel.
+            </p>
+          ) : (
+            entries.map((e) =>
+              e.kind === 'error' ? (
+                <p key={e.id} className="text-xs font-semibold text-rose-700 dark:text-rose-400">{e.text}</p>
+              ) : (
+                <div key={e.id} className="space-y-0.5">
+                  <p className="text-sm font-medium leading-snug break-words">{e.text || <em className="text-gray-400">(nothing heard)</em>}</p>
+                  <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
+                    {e.language || '?'} · clip {seconds(e.durationMs)}{e.truncated ? ' (cut at 30 s)' : ''} · Groq {e.groqMs} ms · round trip {e.roundTripMs} ms
+                  </p>
+                </div>
+              )
+            )
+          )}
+        </div>
+      )}
+    </section>
+  );
+};

@@ -126,6 +126,11 @@ def is_allowed_origin(origin: Optional[str]) -> bool:
     return bool(origin) and origin.rstrip("/") in ALLOWED_ORIGINS
 
 
+# Voice pipeline (voicefirst.md step 1): /ws/voice lives in backend/voice/.
+from voice.ws import mount_voice  # noqa: E402
+mount_voice(app, origin_allowed=is_allowed_origin)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
