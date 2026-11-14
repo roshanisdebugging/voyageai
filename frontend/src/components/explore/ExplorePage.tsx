@@ -340,17 +340,17 @@ export const ExplorePage: React.FC = () => {
   });
 
   return (
-    <div className="w-full max-w-xl mx-auto px-4 pb-28 space-y-6 bg-white text-gray-900 overflow-x-hidden animate-fadeIn min-h-screen">
+    <div className="mx-auto w-full min-w-0 max-w-xl space-y-5 bg-(--color-background) px-4 pb-28 text-(--color-text-primary) animate-fadeIn min-h-screen">
 
       {/* ── 1. Top Header ── */}
       <div className="space-y-3 pt-2 w-full max-w-full overflow-hidden">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2 tracking-tight truncate">
-              <Compass className="w-6 h-6 text-[#1F5A3F] shrink-0" />
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 basis-44">
+            <h1 className="text-2xl font-bold text-(--color-text-primary) flex items-center gap-2 tracking-tight">
+              <Compass className="w-6 h-6 text-(--color-primary) shrink-0" />
               Explore &amp; Discover
             </h1>
-            <p className="text-xs font-medium text-gray-500 mt-0.5 truncate">
+            <p className="text-xs font-medium text-(--color-text-secondary) mt-0.5">
               Curated experiences, AI spot highlights &amp; itinerary builder
             </p>
           </div>
@@ -369,20 +369,21 @@ export const ExplorePage: React.FC = () => {
                 navigateToMap();
               }
             }}
-            className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-gray-50 border border-gray-200 text-[#1F5A3F] text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all press-scale shrink-0"
+            className="min-h-11 px-3.5 py-1.5 rounded-xl bg-(--color-surface) hover:bg-(--color-surface-elevated) border border-(--color-primary) text-(--color-primary) text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all press-scale shrink-0"
           >
-            <Navigation className="w-3.5 h-3.5 fill-[#1F5A3F]" />
+            <Navigation className="w-3.5 h-3.5 fill-current" />
             Map Mode
           </button>
         </div>
 
         {/* ── 2. Context Switcher (Near Me vs Trip) ── */}
-        <div className="p-1 rounded-2xl bg-gray-50 border border-gray-200 flex gap-1 w-full max-w-full">
+        <div className="p-1 rounded-2xl bg-(--color-surface-elevated) border border-(--color-border) flex gap-1 w-full max-w-full">
           <button
             onClick={() => setContextMode('gps')}
-            className={`flex-1 min-w-0 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${contextMode === 'gps' || !hasActiveTrip
-                ? 'bg-[#1F5A3F] text-white shadow-sm'
-                : 'text-gray-500 hover:text-gray-900'
+            aria-pressed={contextMode === 'gps' || !hasActiveTrip}
+            className={`flex-1 min-w-0 min-h-11 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${contextMode === 'gps' || !hasActiveTrip
+                ? 'bg-(--color-primary) text-white dark:text-zinc-950 shadow-sm'
+                : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'
               }`}
           >
             <MapPin className="w-3.5 h-3.5 shrink-0" />
@@ -392,9 +393,10 @@ export const ExplorePage: React.FC = () => {
           {hasActiveTrip ? (
             <button
               onClick={() => setContextMode('trip')}
-              className={`flex-1 min-w-0 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${contextMode === 'trip'
-                  ? 'bg-[#1F5A3F] text-white shadow-sm'
-                  : 'text-gray-500 hover:text-gray-900'
+              aria-pressed={contextMode === 'trip'}
+              className={`flex-1 min-w-0 min-h-11 py-2 px-3 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${contextMode === 'trip'
+                  ? 'bg-(--color-primary) text-white dark:text-zinc-950 shadow-sm'
+                  : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'
                 }`}
             >
               <Sparkles className="w-3.5 h-3.5 shrink-0" />
@@ -403,7 +405,7 @@ export const ExplorePage: React.FC = () => {
           ) : (
             <button
               onClick={() => navigate('/trips')}
-              className="flex-1 min-w-0 py-2 px-3 rounded-xl text-xs font-semibold text-gray-400 hover:text-gray-600 border border-dashed border-gray-300 flex items-center justify-center gap-1.5"
+              className="flex-1 min-w-0 min-h-11 py-2 px-3 rounded-xl text-xs font-semibold text-(--color-text-secondary) hover:text-(--color-text-primary) border border-dashed border-(--color-text-secondary) flex items-center justify-center gap-1.5"
             >
               <Plus className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">Plan a Trip</span>
@@ -412,55 +414,43 @@ export const ExplorePage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── 2. AI Destination Spotlight Banner ── */}
-      <div className="relative overflow-hidden rounded-3xl bg-[#1F5A3F] p-5 shadow-lg w-full max-w-full">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-0 w-48 h-48 bg-black/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="relative z-10 space-y-3 w-full max-w-full">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <span className="px-3 py-1 rounded-full bg-white/10 border border-white/15 text-white/90 text-[11px] font-semibold flex items-center gap-1 shrink-0">
-              <Sparkles className="w-3 h-3" /> AI Destination Spotlight
+      <section aria-labelledby="explore-highlights" className="space-y-2">
+        <div className="rounded-2xl bg-(--color-primary-glow) p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-(--color-primary)">
+            <Sparkles className="size-4 shrink-0" /> AI Destination Spotlight
+          </p>
+          <p className="mt-1 break-words text-sm text-(--color-text-primary)">{spotlightOverview}</p>
+        </div>
+        <div className="rounded-2xl border border-(--color-border) bg-(--color-surface) p-4">
+          <h2 id="explore-highlights" className="break-words text-lg font-semibold">
+            {spotlightDestination} Highlights
+          </h2>
+          <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2 text-xs font-medium text-(--color-text-secondary)">
+            <span className="flex items-center gap-1.5">
+              <Check className="size-4 text-(--color-primary)" /> {spotlightActivities.length} Top Places
             </span>
-            <span className="text-xs font-semibold text-amber-200 flex items-center gap-1 shrink-0">
-              <Star className="w-3.5 h-3.5 fill-amber-200" /> 4.9 Superb
+            <span className="flex items-center gap-1.5">
+              <Calendar className="size-4 text-(--color-primary)" /> {spotlightEvents.length} Live Events
             </span>
-          </div>
-
-          <div className="w-full max-w-full">
-            <h2 className="text-xl font-semibold text-white tracking-tight break-words">
-              {spotlightDestination} Highlights
-            </h2>
-            <p className="text-xs text-white/75 mt-1 leading-relaxed break-words">
-              {spotlightOverview}
-            </p>
-          </div>
-
-          <div className="pt-2 flex items-center gap-4 text-xs font-medium text-white/70 border-t border-white/15 flex-wrap">
-            <div className="flex items-center gap-1 text-white">
-              <Check className="w-3.5 h-3.5" /> {spotlightActivities.length} Top Places
-            </div>
-            <div className="flex items-center gap-1 text-white">
-              <Calendar className="w-3.5 h-3.5" /> {spotlightEvents.length} Live Events
-            </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* ── 3. Category Filter Pills ── */}
-      <div className="w-full max-w-full flex items-center gap-5 overflow-x-auto no-scrollbar border-b border-gray-200">
+      {/* Category filters scroll independently of the page. */}
+      <div role="group" aria-label="Activity category" className="flex min-w-0 max-w-full items-center gap-3 overflow-x-auto border-b border-(--color-border)">
         {categories.map((cat) => {
           const isActive = activeCategory === cat;
           return (
             <button
               key={cat}
               onClick={() => changeCategory(cat)}
-              className={`press-scale shrink-0 pb-2.5 text-xs font-semibold transition-all relative ${isActive ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'
+              aria-pressed={isActive}
+              className={`relative min-h-11 shrink-0 px-1 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--color-primary) ${isActive ? 'text-(--color-primary)' : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'
                 }`}
             >
               {cat}
               {isActive && (
-                <span className="absolute left-0 right-0 -bottom-px h-0.5 bg-[#1F5A3F] rounded-full" />
+                <span className="absolute left-0 right-0 bottom-0 h-0.5 bg-(--color-primary) rounded-full" />
               )}
             </button>
           );
@@ -471,39 +461,39 @@ export const ExplorePage: React.FC = () => {
       {(activeCategory === 'All' || activeCategory === 'Events') && spotlightEvents.length > 0 && (
         <div className="space-y-3 w-full max-w-full overflow-hidden">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
-              <Calendar className="w-4 h-4 text-[#1F5A3F] shrink-0" />
+            <h3 className="text-sm font-semibold text-(--color-text-primary) flex items-center gap-1.5">
+              <Calendar className="w-4 h-4 text-(--color-primary) shrink-0" />
               Upcoming Events &amp; Festivals
             </h3>
-            <span className="text-xs text-[#1F5A3F] font-semibold truncate">Live in {spotlightDestination}</span>
+            <span className="text-xs text-(--color-primary) font-semibold truncate">Live in {spotlightDestination}</span>
           </div>
 
           <div className="w-full max-w-full flex gap-4 overflow-x-auto no-scrollbar pb-2">
             {spotlightEvents.map((evt) => (
               <div
                 key={evt.id}
-                className="shrink-0 w-64 rounded-2xl bg-white border border-gray-200 overflow-hidden shadow-sm space-y-2 p-3"
+                className="w-64 max-w-full shrink-0 rounded-2xl bg-(--color-surface) border border-(--color-border) overflow-hidden shadow-sm space-y-2 p-3"
               >
-                <div className="h-32 rounded-xl overflow-hidden relative bg-gray-100">
+                <div className="h-32 rounded-xl overflow-hidden relative bg-(--color-surface-elevated)">
                   <img src={evt.image} alt={evt.title} className="w-full h-full object-cover" loading="lazy" decoding="async" />
-                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-white/90 text-[10px] font-semibold text-[#1F5A3F] border border-gray-200">
+                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-(--color-surface) text-[10px] font-semibold text-(--color-primary) border border-(--color-border)">
                     {evt.tag || evt.category}
                   </span>
                 </div>
                 <div>
-                  <h4 className="text-xs font-semibold text-gray-900 line-clamp-1">{evt.title}</h4>
-                  <p className="text-[11px] text-gray-500 flex items-center gap-1 mt-0.5">
-                    <Clock className="w-3 h-3 text-gray-400" /> {evt.date} • {evt.time}
+                  <h4 className="text-xs font-semibold text-(--color-text-primary) line-clamp-1">{evt.title}</h4>
+                  <p className="text-[11px] text-(--color-text-secondary) flex items-center gap-1 mt-0.5">
+                    <Clock className="w-3 h-3 text-(--color-text-secondary)" /> {evt.date} • {evt.time}
                   </p>
-                  <p className="text-[11px] text-[#1F5A3F] font-semibold mt-1">₹{evt.price} per ticket</p>
+                  <p className="text-[11px] text-(--color-primary) font-semibold mt-1">₹{evt.price} per ticket</p>
                   {contextMode === 'trip' && (
                     <button
                       type="button"
                       onClick={() => setSelectedPlaceForModal(evt)}
                       className={`w-full mt-2 py-1.5 px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all press-scale ${
                         addedItemDays.has(evt.id)
-                          ? 'bg-[#1F5A3F]/10 text-[#1F5A3F] border border-[#1F5A3F]/30'
-                          : 'bg-[#1F5A3F] hover:bg-[#194B34] text-white shadow-xs'
+                          ? 'bg-(--color-primary-glow) text-(--color-primary) border border-(--color-primary)'
+                          : 'bg-(--color-primary) hover:brightness-95 text-white dark:text-zinc-950 shadow-xs'
                       }`}
                     >
                       {addedItemDays.has(evt.id) ? (
@@ -529,18 +519,18 @@ export const ExplorePage: React.FC = () => {
       {activeCategory !== 'Events' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
-              <Layers className="w-4 h-4 text-[#1F5A3F]" />
+            <h3 className="text-sm font-semibold text-(--color-text-primary) flex items-center gap-1.5">
+              <Layers className="w-4 h-4 text-(--color-primary)" />
               Must-Visit Places &amp; Activities ({filteredActivities.length})
             </h3>
           </div>
 
           {isLoadingSpotlight ? (
-            <div className="py-12 text-center text-xs font-medium text-gray-400 animate-pulse">
+            <div role="status" className="py-12 text-center text-xs font-medium text-(--color-text-secondary) animate-pulse">
               Loading AI-curated destination highlights...
             </div>
           ) : filteredActivities.length === 0 ? (
-            <div className="py-12 text-center text-xs font-medium text-gray-400 bg-gray-50 rounded-3xl border border-gray-200 p-6">
+            <div className="py-12 text-center text-xs font-medium text-(--color-text-secondary) bg-(--color-surface-elevated) rounded-3xl border border-(--color-border) p-6">
               No active spotlights found in this immediate area. Expand your radius or search nearby hubs.
             </div>
           ) : (
@@ -562,13 +552,13 @@ export const ExplorePage: React.FC = () => {
                 <div
                   key={act.id}
                   ref={(el) => { cardRefs.current[act.id] = el; }}
-                  className={`group rounded-3xl overflow-hidden bg-white border transition-all duration-300 shadow-sm ${isFocusTarget
-                      ? 'border-[#1F5A3F] ring-2 ring-[#1F5A3F]/30'
-                      : 'border-gray-200 hover:border-[#1F5A3F]/40'
+                  className={`group rounded-3xl overflow-hidden bg-(--color-surface) border transition-all duration-300 shadow-sm ${isFocusTarget
+                      ? 'border-(--color-primary) ring-2 ring-(--color-primary)'
+                      : 'border-(--color-border) hover:border-(--color-primary)'
                     }`}
                 >
                   {/* Card Cover Image with Gradient Overlay */}
-                  <div className="h-48 relative overflow-hidden bg-gray-100">
+                  <div className="h-48 relative overflow-hidden bg-(--color-surface-elevated)">
                     <img
                       src={act.photos?.[0] || getFallbackImage(act.category)}
                       alt={act.title}
@@ -576,24 +566,26 @@ export const ExplorePage: React.FC = () => {
                       loading="lazy"
                       decoding="async"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/65 to-transparent" />
 
-                    {/* Tag Pill */}
-                    <span className="absolute top-3 left-3 px-3 py-1 rounded-full bg-white/90 backdrop-blur-md text-[11px] font-semibold text-[#1F5A3F] border border-white/40 flex items-center gap-1">
-                      <Tag className="w-3 h-3" />
-                      {act.tag || act.category}
-                    </span>
-
-                    {/* Duration & Rating */}
-                    <div className="absolute top-3 right-3 flex items-center gap-1.5">
-                      <span className="px-2.5 py-1 rounded-lg bg-white/90 backdrop-blur-md text-[11px] font-semibold text-gray-600 border border-white/40 flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-gray-500" /> {act.duration}
+                    <div className="absolute inset-x-3 top-3 flex items-start justify-between gap-1">
+                      {/* Tag Pill */}
+                      <span className="min-w-0 px-3 py-1 rounded-full bg-(--color-surface) text-[11px] font-semibold text-(--color-primary) border border-(--color-border) flex items-center gap-1">
+                        <Tag className="w-3 h-3" />
+                        <span className="truncate">{act.tag || act.category}</span>
                       </span>
-                      {act.rating ? (
-                        <span className="px-2.5 py-1 rounded-lg bg-white/90 backdrop-blur-md text-[11px] font-semibold text-amber-600 border border-white/40 flex items-center gap-1">
-                          <Star className="w-3 h-3 fill-amber-500" /> {act.rating}
+
+                      {/* Duration & Rating */}
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <span className="px-2.5 py-1 rounded-lg bg-(--color-surface) text-[11px] font-semibold text-(--color-text-secondary) border border-(--color-border) flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-(--color-text-secondary)" /> {act.duration}
                         </span>
-                      ) : null}
+                        {act.rating ? (
+                          <span className="px-2.5 py-1 rounded-lg bg-(--color-surface) text-[11px] font-semibold text-amber-800 dark:text-amber-300 border border-(--color-border) flex items-center gap-1">
+                            <Star className="w-3 h-3 fill-current" /> {act.rating}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
 
                     {/* Title & Location Overlay */}
@@ -601,7 +593,7 @@ export const ExplorePage: React.FC = () => {
                       <h3 className="text-lg font-semibold text-white leading-tight drop-shadow-md">
                         {act.title}
                       </h3>
-                      <p className="text-xs text-white/85 mt-0.5 flex items-center gap-1">
+                      <p className="text-xs text-white mt-0.5 flex items-center gap-1">
                         <MapPin className="w-3.5 h-3.5 shrink-0" />
                         <span className="truncate">{act.location}</span>
                       </p>
@@ -610,44 +602,46 @@ export const ExplorePage: React.FC = () => {
 
                   {/* Card Content & Action CTAs */}
                   <div className="p-4 space-y-3">
-                    <p className="text-xs text-gray-500 line-clamp-2 leading-relaxed">
+                    <p className="text-xs text-(--color-text-secondary) line-clamp-2 leading-relaxed">
                       {act.description}
                     </p>
 
-                    <div className="flex items-center justify-between pt-3 border-t border-gray-100 text-xs gap-2">
-                      <span className="font-semibold text-[#1F5A3F]">
+                    <div className="flex flex-wrap items-center justify-between pt-3 border-t border-(--color-border) text-xs gap-2">
+                      <span className="font-semibold text-(--color-primary)">
                         {act.cost > 0 ? `Est. ₹${act.cost}` : 'Free Entry'}
                       </span>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         {/* 1. Navigate / Directions (Both Modes) */}
                         <button
                           onClick={() => handleNavigate(act)}
-                          className="p-2 rounded-xl bg-gray-50 hover:bg-gray-100 text-gray-500 hover:text-gray-900 border border-gray-200 transition-all press-scale"
+                          className="p-2 rounded-xl bg-(--color-surface-elevated) hover:bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-(--color-text-primary) border border-(--color-text-secondary) transition-all press-scale"
                           title="Get Directions in Google Maps"
                         >
-                          <Navigation className="w-3.5 h-3.5 text-[#1F5A3F]" />
+                          <Navigation className="w-3.5 h-3.5 text-(--color-primary)" />
                         </button>
 
                         {/* 2. Save Place / Bookmark (Both Modes) */}
                         <button
                           onClick={() => handleToggleSave(act)}
                           className={`p-2 rounded-xl border transition-all press-scale ${savedPlaceIds.has(act.id)
-                              ? 'bg-[#1F5A3F]/10 text-[#1F5A3F] border-[#1F5A3F]/30'
-                              : 'bg-gray-50 hover:bg-gray-100 text-gray-500 hover:text-gray-900 border-gray-200'
+                              ? 'bg-(--color-primary-glow) text-(--color-primary) border-(--color-primary)'
+                              : 'bg-(--color-surface-elevated) hover:bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-(--color-text-primary) border-(--color-border)'
                             }`}
+                          aria-label="Save Place"
+                          aria-pressed={savedPlaceIds.has(act.id)}
                           title={savedPlaceIds.has(act.id) ? 'Saved' : 'Save Place'}
                         >
-                          <Bookmark className={`w-3.5 h-3.5 ${savedPlaceIds.has(act.id) ? 'fill-[#1F5A3F] text-[#1F5A3F]' : ''}`} />
+                          <Bookmark className={`w-3.5 h-3.5 ${savedPlaceIds.has(act.id) ? 'fill-current text-(--color-primary)' : ''}`} />
                         </button>
 
                         {/* 3. Ask AI (Both Modes) */}
                         <button
                           onClick={() => handleAskAI(act)}
-                          className="p-2 rounded-xl bg-gray-50 hover:bg-gray-100 text-gray-500 hover:text-gray-900 border border-gray-200 transition-all press-scale flex items-center gap-1"
+                          className="p-2 rounded-xl bg-(--color-surface-elevated) hover:bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-(--color-text-primary) border border-(--color-text-secondary) transition-all press-scale flex items-center gap-1"
                           title="Ask AI Concierge"
                         >
-                          <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                          <Sparkles className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300" />
                         </button>
 
                         {/* 4. Add to Itinerary (ONLY IN TRIP MODE) */}
@@ -655,8 +649,8 @@ export const ExplorePage: React.FC = () => {
                           <button
                             onClick={() => setSelectedPlaceForModal(act)}
                             className={`px-3 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-all press-scale ${addedItemDays.has(act.id)
-                                ? 'bg-[#1F5A3F]/10 text-[#1F5A3F] border border-[#1F5A3F]/30'
-                                : 'bg-[#1F5A3F] hover:bg-[#194B34] text-white shadow-sm'
+                                ? 'bg-(--color-primary-glow) text-(--color-primary) border border-(--color-primary)'
+                                : 'bg-(--color-primary) hover:brightness-95 text-white dark:text-zinc-950 shadow-sm'
                               }`}
                           >
                             {addedItemDays.has(act.id) ? (
@@ -703,7 +697,7 @@ export const ExplorePage: React.FC = () => {
           className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] px-4 py-2.5 rounded-2xl text-xs font-black flex items-center gap-2 shadow-2xl animate-bounce ${
             exploreToast.type === 'success'
               ? 'bg-emerald-500 text-slate-950 shadow-emerald-500/25'
-              : 'bg-rose-500 text-white shadow-rose-500/25'
+              : 'bg-rose-700 text-white dark:bg-rose-400 dark:text-zinc-950 shadow-rose-500/25'
           }`}
         >
           {exploreToast.type === 'success' ? (

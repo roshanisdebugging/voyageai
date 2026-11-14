@@ -30,13 +30,18 @@ export const MyTripsPage: React.FC = () => {
     actionType: 'DELETE',
   });
   const confirmationDialog = useRef<HTMLDialogElement>(null);
+  const keepTripButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const dialog = confirmationDialog.current;
     if (!dialog) return;
 
-    if (confirmActionModal.isOpen) dialog.showModal();
-    else dialog.close();
+    if (confirmActionModal.isOpen) {
+      dialog.showModal();
+      keepTripButton.current?.focus();
+    } else {
+      dialog.close();
+    }
   }, [confirmActionModal.isOpen]);
 
   const filteredTrips = trips.filter(trip => {
@@ -78,35 +83,35 @@ export const MyTripsPage: React.FC = () => {
           event.preventDefault();
           closeConfirmation();
         }}
-        className="fixed inset-x-0 top-auto bottom-4 mx-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-3xl border border-[#D9DEDA] bg-white p-6 text-center shadow-xl backdrop:bg-[#1F2522]/40 backdrop:backdrop-blur-xs"
+        className="fixed inset-x-0 top-auto bottom-4 mx-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-3xl border border-(--color-border) bg-(--color-surface) p-6 text-center shadow-xl backdrop:bg-black/55 backdrop:backdrop-blur-xs"
       >
         {confirmActionModal.isOpen && (
           <div className="space-y-4">
             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mx-auto ${
               confirmActionModal.actionType === 'DELETE'
-                ? 'bg-rose-100 text-rose-600'
-                : 'bg-amber-100 text-amber-600'
+                ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200'
+                : 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200'
             }`}>
               <AlertTriangle className="w-6 h-6" />
             </div>
 
             <div className="space-y-1">
-              <h3 id="my-trips-confirmation-title" className="text-lg font-bold text-[#1F2522]">
+              <h3 id="my-trips-confirmation-title" className="text-lg font-bold text-(--color-text-primary)">
                 {confirmActionModal.actionType === 'DELETE' ? 'Delete Trip?' : confirmActionModal.actionType === 'CANCEL' ? 'Cancel Trip?' : 'Archive Trip?'}
               </h3>
-              <p id="my-trips-confirmation-description" className="text-xs text-[#5F6863] [overflow-wrap:anywhere]">
-                Are you sure you want to {confirmActionModal.actionType.toLowerCase()} <span className="text-[#1F2522] font-semibold">{confirmActionModal.tripTitle}</span>?
+              <p id="my-trips-confirmation-description" className="text-xs text-(--color-text-secondary) [overflow-wrap:anywhere]">
+                Are you sure you want to {confirmActionModal.actionType.toLowerCase()} <span className="text-(--color-text-primary) font-semibold">{confirmActionModal.tripTitle}</span>?
               </p>
             </div>
 
-            <div className="space-y-2 pt-2">
+            <div className="flex flex-col gap-2 pt-2 sm:flex-row-reverse">
               <button
                 type="button"
                 onClick={handleConfirmAction}
                 className={`w-full py-3.5 font-bold text-sm rounded-xl shadow-xs transition-all ${
                   confirmActionModal.actionType === 'DELETE'
-                    ? 'bg-rose-600 hover:bg-rose-700 text-white'
-                    : 'bg-amber-600 hover:bg-amber-700 text-white'
+                    ? 'bg-rose-700 hover:bg-rose-800 text-white dark:bg-rose-400 dark:text-zinc-950 dark:hover:bg-rose-300'
+                    : 'bg-amber-800 hover:bg-amber-900 text-white dark:bg-amber-300 dark:text-zinc-950 dark:hover:bg-amber-200'
                 }`}
               >
                 Confirm {confirmActionModal.actionType}
@@ -114,8 +119,8 @@ export const MyTripsPage: React.FC = () => {
               <button
                 type="button"
                 onClick={closeConfirmation}
-                autoFocus
-                className="min-h-11 w-full py-2 text-xs text-[#5F6863] hover:text-[#1F2522]"
+                ref={keepTripButton}
+                className="min-h-11 w-full rounded-xl border border-(--color-text-secondary) px-3 py-2 text-sm font-semibold text-(--color-text-primary) hover:bg-(--color-surface-elevated)"
               >
                 Keep Trip
               </button>
@@ -127,21 +132,21 @@ export const MyTripsPage: React.FC = () => {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 pt-1">
         <div className="min-w-0">
-          <h1 className="text-2xl font-extrabold text-[#1F2522]">My Trips</h1>
-          <p className="text-xs text-[#5F6863]">Manage, switch & plan your adventures</p>
+          <h1 className="text-2xl font-extrabold text-(--color-text-primary)">My Trips</h1>
+          <p className="text-xs text-(--color-text-secondary)">Manage, switch & plan your adventures</p>
         </div>
 
         <button
           onClick={() => navigate('/trips/new')}
-          className="min-h-11 px-3.5 py-2 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white font-bold text-xs flex items-center gap-1.5 shadow-xs press-scale"
+          className="min-h-11 px-3.5 py-2 rounded-xl bg-(--color-primary) hover:brightness-95 text-white dark:text-zinc-950 font-bold text-xs flex items-center gap-1.5 shadow-xs press-scale"
         >
-          <Plus className="w-4 h-4 text-white" />
+          <Plus className="size-4" />
           <span>New Trip</span>
         </button>
       </div>
 
       {/* Tab Controls */}
-      <div role="group" aria-label="Trip status" className="grid grid-cols-2 gap-1.5 p-1.5 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA] text-xs font-bold sm:grid-cols-4">
+      <div role="group" aria-label="Trip status" className="grid grid-cols-2 gap-1.5 p-1.5 rounded-2xl bg-(--color-surface-elevated) border border-(--color-border) text-xs font-bold sm:grid-cols-4">
         {[
           { id: 'ACTIVE', label: 'Active / Planning' },
           { id: 'UPCOMING', label: 'Upcoming' },
@@ -154,8 +159,8 @@ export const MyTripsPage: React.FC = () => {
             aria-pressed={activeTab === tab.id}
             className={`min-h-11 min-w-0 py-2.5 px-2 rounded-xl transition-all text-center ${
               activeTab === tab.id
-                ? 'bg-[#355F58] text-white font-extrabold shadow-xs'
-                : 'text-[#5F6863] hover:text-[#1F2522]'
+                ? 'bg-(--color-primary) text-white dark:text-zinc-950 font-extrabold shadow-xs'
+                : 'text-(--color-text-secondary) hover:text-(--color-text-primary)'
             }`}
           >
             {tab.label}
@@ -166,19 +171,19 @@ export const MyTripsPage: React.FC = () => {
       {/* Trip List */}
       <div className="space-y-4">
         {filteredTrips.length === 0 ? (
-          <div className="bg-white border border-[#D9DEDA] rounded-3xl p-8 text-center space-y-3 shadow-xs">
-            <div className="w-12 h-12 rounded-2xl bg-[#F0F2EF] text-[#5F6863] flex items-center justify-center mx-auto">
+          <div className="bg-(--color-surface) border border-(--color-border) rounded-3xl p-8 text-center space-y-3 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-(--color-surface-elevated) text-(--color-text-secondary) flex items-center justify-center mx-auto">
               <Calendar className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-bold text-[#1F2522]">{activeTab === 'PAST' ? 'No past trips yet' : `No ${activeTab.toLowerCase()} trips found`}</h3>
-            <p className="text-xs text-[#5F6863] max-w-xs mx-auto font-medium">
+            <h3 className="text-base font-bold text-(--color-text-primary)">{activeTab === 'PAST' ? 'No past trips yet' : `No ${activeTab.toLowerCase()} trips found`}</h3>
+            <p className="text-xs text-(--color-text-secondary) max-w-xs mx-auto font-medium">
               You don't have any trips in this tab right now. Ready to start planning?
             </p>
             <button
               onClick={() => navigate('/trips/new')}
-              className="min-h-11 py-3 px-5 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs inline-flex items-center gap-1.5 shadow-xs press-scale"
+              className="min-h-11 py-3 px-5 rounded-2xl bg-(--color-primary) hover:brightness-95 text-white dark:text-zinc-950 font-extrabold text-xs inline-flex items-center gap-1.5 shadow-xs press-scale"
             >
-              <Plus className="w-4 h-4 text-white" />
+              <Plus className="size-4" />
               <span>Plan a Trip</span>
             </button>
           </div>
@@ -189,33 +194,33 @@ export const MyTripsPage: React.FC = () => {
               <div
                 key={trip.id}
                 className={`
-                  bg-white rounded-3xl overflow-hidden transition-all border shadow-xs
-                  ${isCurrent ? 'border-[#355F58]' : 'border-[#D9DEDA] hover:border-[#355F58]/30'}
+                  bg-(--color-surface) rounded-3xl overflow-hidden transition-all border shadow-xs
+                  ${isCurrent ? 'border-(--color-primary)' : 'border-(--color-border) hover:border-(--color-primary)'}
                 `}
               >
                 {/* Cover Image */}
-                <div className="relative h-36 w-full overflow-hidden bg-[#2C504A]">
+                <div className="relative h-44 w-full overflow-hidden bg-(--color-surface-elevated)">
                   <SafeImage
                     src={getTripCoverImage(trip)}
                     alt={trip.title}
                     className="w-full h-full object-cover"
                   />
-                  <div className="absolute inset-0 bg-gradient-to-t from-white via-white/30 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-(--color-surface) via-(--color-surface)/30 to-transparent" />
                   
-                  <div className="absolute top-3 left-3 flex items-center gap-2">
+                  <div className="absolute inset-x-3 bottom-2 flex flex-wrap items-center gap-2">
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider backdrop-blur-md ${
                       trip.status === 'ACTIVE'
-                        ? 'bg-[#355F58] text-white'
-                        : trip.status === 'UPCOMING' || (trip.status as any) === 'CONFIRMED'
-                        ? 'bg-[#487C74] text-white'
+                        ? 'bg-(--color-primary) text-white dark:text-zinc-950'
+                        : ['UPCOMING', 'CONFIRMED'].includes(trip.status)
+                        ? 'bg-sky-100 text-sky-900 dark:bg-sky-950 dark:text-sky-200'
                         : trip.status === 'COMPLETED'
-                        ? 'bg-emerald-700 text-white'
-                        : 'bg-[#F0F2EF] text-[#1F2522]'
+                        ? 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200'
+                        : 'bg-(--color-surface-elevated) text-(--color-text-primary)'
                     }`}>
                       {trip.status}
                     </span>
                     {isCurrent && (
-                      <span className="px-2.5 py-1 rounded-full bg-[#E8F0EE] text-[#355F58] border border-[#355F58]/30 font-extrabold text-[10px] uppercase">
+                      <span className="px-2.5 py-1 rounded-full bg-(--color-surface-elevated) text-(--color-primary) border border-(--color-primary) font-extrabold text-[10px] uppercase">
                         Current Context
                       </span>
                     )}
@@ -225,10 +230,10 @@ export const MyTripsPage: React.FC = () => {
                 {/* Content */}
                 <div className="p-4 space-y-3">
                   <div>
-                    <h3 className="font-extrabold text-lg text-[#1F2522] [overflow-wrap:anywhere]">{trip.title}</h3>
-                    <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs font-medium text-[#5F6863] [overflow-wrap:anywhere]">
+                    <h3 className="font-extrabold text-lg text-(--color-text-primary) [overflow-wrap:anywhere]">{trip.title}</h3>
+                    <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs font-medium text-(--color-text-secondary) [overflow-wrap:anywhere]">
                       <div className="flex min-w-0 items-start gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-[#355F58] shrink-0" />
+                        <MapPin className="w-3.5 h-3.5 text-(--color-primary) shrink-0" />
                         <span>{trip.destination.name}</span>
                       </div>
                       <span>{trip.startDate} to {trip.endDate}</span>
@@ -236,7 +241,7 @@ export const MyTripsPage: React.FC = () => {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#D9DEDA]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-(--color-border)">
                     <button
                       onClick={() => {
                         setCurrentTripId(trip.id);
@@ -244,8 +249,8 @@ export const MyTripsPage: React.FC = () => {
                       }}
                       className={`min-h-11 px-4 py-2.5 rounded-2xl font-extrabold text-xs flex items-center gap-1.5 press-scale shadow-xs ${
                         isCurrent
-                          ? 'bg-[#355F58] text-white hover:bg-[#2C504A]'
-                          : 'bg-[#F0F2EF] border border-[#D9DEDA] text-[#355F58] hover:border-[#355F58]/40'
+                          ? 'bg-(--color-primary) text-white hover:brightness-95 dark:text-zinc-950'
+                          : 'bg-(--color-surface-elevated) border border-(--color-primary) text-(--color-primary) hover:border-(--color-primary)'
                       }`}
                     >
                       <span>View Trip Details</span>
@@ -263,7 +268,7 @@ export const MyTripsPage: React.FC = () => {
                           })}
                           aria-label="Archive Trip"
                           title="Archive Trip"
-                          className="grid size-11 place-items-center rounded-xl text-[#5F6863] hover:text-amber-700 hover:bg-[#F0F2EF] transition-colors"
+                          className="grid size-11 place-items-center rounded-xl border border-(--color-text-secondary) bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-amber-800 dark:hover:text-amber-300 hover:bg-(--color-surface-elevated) transition-colors"
                         >
                           <Archive className="w-4.5 h-4.5" />
                         </button>
@@ -278,7 +283,7 @@ export const MyTripsPage: React.FC = () => {
                         })}
                         aria-label="Delete Trip"
                         title="Delete Trip"
-                        className="grid size-11 place-items-center rounded-xl text-[#5F6863] hover:text-rose-600 hover:bg-[#F0F2EF] transition-colors"
+                        className="grid size-11 place-items-center rounded-xl border border-(--color-text-secondary) bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-rose-800 dark:hover:text-rose-300 hover:bg-(--color-surface-elevated) transition-colors"
                       >
                         <Trash2 className="w-4.5 h-4.5" />
                       </button>

@@ -22,12 +22,13 @@ export const MobileHeader: React.FC = () => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  const pathname = location.pathname.replace(/\/+$/, '').toLowerCase();
+  const isItineraryRoute = ['/trip/itinerary', '/trip/details', '/itinerary', '/trip'].includes(pathname);
   const isSubRoute = location.pathname.startsWith('/trip/') && location.pathname !== '/trip';
   const avatarUrl = userProfile?.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=80&q=80';
   const destinationName = currentTrip?.destination?.name || 'Trip';
 
   const routeTitles: Record<string, string> = {
-    '/trip/itinerary': 'Itinerary',
     '/trip/map': 'Live Map',
     '/trip/bookings': 'Reservations',
     '/trip/expenses': 'Expenses',
@@ -53,7 +54,16 @@ export const MobileHeader: React.FC = () => {
       <div className="flex items-center justify-between h-14 px-4 max-w-xl mx-auto gap-2">
 
         {/* Left Side: Brand Logo or Sub-Route Back Action */}
-        {isSubRoute ? (
+        {isItineraryRoute ? (
+          <button
+            type="button"
+            onClick={() => navigate('/trips')}
+            className="flex min-h-11 shrink-0 items-center gap-2 text-sm font-bold text-[var(--color-text-primary)] hover:text-[var(--color-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] press-scale"
+          >
+            <ArrowLeft className="w-5 h-5 shrink-0 text-[var(--color-primary)]" aria-hidden="true" />
+            <span>My Trips</span>
+          </button>
+        ) : isSubRoute ? (
           <button
             type="button"
             onClick={() => navigate('/trip')}
