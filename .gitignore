@@ -53,3 +53,14 @@ AGENTS.override.md
 
 # Voice test recordings (testing.md), local only
 test_audio_folder/
+
+# Redis persistence snapshots (runtime artifact)
+dump.rdb
+*.rdb
+
+# Local architecture notes (not committed)
+ARCHITECTURE_AND_FLOWS.md
+
+#opencode
+opencode.exe
+opencode.json

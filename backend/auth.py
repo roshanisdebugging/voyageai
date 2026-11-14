@@ -226,8 +226,38 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
     if not token or not token.strip():
         raise ValueError("Missing session token")
 
+    # Redis session cache: avoid DB round-trips on hot path.
+    try:
+        from redis_client import redis_conn
+        import json
+        if redis_conn:
+            cached = redis_conn.get(f"session_user:{token}")
+            if cached:
+                data = json.loads(cached)
+                return (
+                    AuthUser(**data["user"]),
+                    UserProfile(**data["profile"]),
+                    UserPreferences(**data["prefs"]),
+                )
+    except Exception:
+        pass
+
     t_hash = hash_token(token)
-    session_record = db.query(SessionModel).filter(SessionModel.token_hash == t_hash).first()
+
+    # Single round-trip: session + user + profile + preferences via joins.
+    row = (
+        db.query(SessionModel, AuthUserModel, UserProfileModel, UserPreferencesModel)
+        .join(AuthUserModel, AuthUserModel.id == SessionModel.user_id)
+        .outerjoin(UserProfileModel, UserProfileModel.user_id == AuthUserModel.id)
+        .outerjoin(UserPreferencesModel, UserPreferencesModel.user_id == AuthUserModel.id)
+        .filter(SessionModel.token_hash == t_hash)
+        .first()
+    )
+
+    if not row:
+        raise ValueError("Invalid or expired session token")
+
+    session_record, db_user, db_profile, db_prefs = row
 
     if not session_record:
         raise ValueError("Invalid or expired session token")
@@ -252,20 +282,8 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
     if is_expired:
         raise ValueError("Session token has expired")
 
-    # Update last used timestamp and extend expiry (sliding activity window)
     now_iso = get_current_iso_time()
-    session_record.last_used_at = now_iso
-    session_record.expires_at = get_expiry_iso_time(SESSION_TTL_DAYS)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
 
-    db_user = db.query(AuthUserModel).filter(AuthUserModel.id == session_record.user_id).first()
-    if not db_user:
-        raise ValueError("Auth user record not found in database")
-
-    db_profile = db.query(UserProfileModel).filter(UserProfileModel.user_id == db_user.id).first()
     if not db_profile:
         db_profile = UserProfileModel(
             user_id=db_user.id,
@@ -275,7 +293,6 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
         )
         db.add(db_profile)
 
-    db_prefs = db.query(UserPreferencesModel).filter(UserPreferencesModel.user_id == db_user.id).first()
     if not db_prefs:
         db_prefs = UserPreferencesModel(
             user_id=db_user.id,
@@ -285,13 +302,51 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
         )
         db.add(db_prefs)
 
-    db.commit()
+    # Throttle session last_used/expires update to at most once per 5 minutes.
+    should_update_session = True
+    if session_record.last_used_at:
+        try:
+            last_iso = session_record.last_used_at.replace("Z", "+00:00")
+            last_dt = datetime.fromisoformat(last_iso)
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            if (now - last_dt).total_seconds() < 300:
+                should_update_session = False
+        except Exception:
+            pass
 
-    return (
-        to_pydantic_auth_user(db_user),
-        to_pydantic_user_profile(db_profile),
-        to_pydantic_user_prefs(db_prefs)
-    )
+    if should_update_session:
+        session_record.last_used_at = now_iso
+        session_record.expires_at = get_expiry_iso_time(SESSION_TTL_DAYS)
+
+    # Single commit for any pending changes.
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    _auth_user = to_pydantic_auth_user(db_user)
+    _profile = to_pydantic_user_profile(db_profile)
+    _prefs = to_pydantic_user_prefs(db_prefs)
+
+    try:
+        from redis_client import redis_conn
+        import json
+        if redis_conn:
+            redis_conn.setex(
+                f"session_user:{token}",
+                300,
+                json.dumps({
+                    "user": _auth_user.model_dump(),
+                    "profile": _profile.model_dump(),
+                    "prefs": _prefs.model_dump(),
+                }),
+            )
+    except Exception:
+        pass
+
+    return (_auth_user, _profile, _prefs)
+
 
 def revoke_session(db: Session, token: str):
     if not token or not token.strip():

@@ -6,9 +6,10 @@ uvicorn[standard]>=0.22.0       # [standard] brings websockets (for /ws/app, /ws
 pydantic>=2.0.0
 email-validator>=2.0.0          # pydantic EmailStr (registration)
 
-# Database (DATABASE_URL is postgresql://, which SQLAlchemy runs on psycopg2)
+# Database (DATABASE_URL is postgresql://, which SQLAlchemy 2.x runs on psycopg by default)
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
+psycopg[binary]>=3.1.0   # default driver for postgresql:// under SQLAlchemy 2.x
 
 # Cache, queue, rate limits (local Redis needs protocol=2, available from redis 5)
 redis>=5.0.0
