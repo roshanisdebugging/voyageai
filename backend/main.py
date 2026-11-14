@@ -636,6 +636,22 @@ def update_onboarding(
     )
     try:
         updated_profile, updated_prefs = auth.update_user_onboarding(db, current_user.id, req)
+        # Refresh cached session user so subsequent steps avoid DB round-trips.
+        try:
+            import json
+            from redis_client import redis_conn
+            if redis_conn and token:
+                redis_conn.setex(
+                    f"session_user:{token}",
+                    300,
+                    json.dumps({
+                        "user": current_user.model_dump(),
+                        "profile": (updated_profile.model_dump() if hasattr(updated_profile, "model_dump") else updated_profile),
+                        "prefs": (updated_prefs.model_dump() if hasattr(updated_prefs, "model_dump") else updated_prefs),
+                    }),
+                )
+        except Exception:
+            pass
         return {
             "userProfile": updated_profile,
             "userPreferences": updated_prefs
@@ -1630,7 +1646,7 @@ def get_pool_status():
     size, checkedout, and overflow connections.
     """
     status_data = get_db_pool_status()
-    log_event(f"📊 [POOL STATUS] Size: {status_data['pool_size']} | Checked Out: {status_data['checkedout']} | Overflow: {status_data['overflow']}")
+    log_event(f"📊 [POOL STATUS] Size: {status_data.get('size')} | Checked Out: {status_data.get('checked_out')} | Overflow: {status_data.get('overflow')}")
     return status_data
 
 @app.get("/api/user/location/latest", dependencies=[Depends(general_limiter)])
