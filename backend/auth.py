@@ -222,6 +222,11 @@ def authenticate_user(db: Session, req: LoginRequest) -> Tuple[str, AuthUser, Us
         to_pydantic_user_prefs(db_prefs),
     )
 
+from prometheus_client import Counter as _PromCounter
+
+_AUTH_CACHE_HITS = _PromCounter("auth_session_cache_hits_total", "Session user cache hits")
+_AUTH_CACHE_MISSES = _PromCounter("auth_session_cache_misses_total", "Session user cache misses")
+
 def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, UserPreferences]:
     if not token or not token.strip():
         raise ValueError("Missing session token")
@@ -234,6 +239,7 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
             cached = redis_conn.get(f"session_user:{token}")
             if cached:
                 data = json.loads(cached)
+                _AUTH_CACHE_HITS.inc()
                 return (
                     AuthUser(**data["user"]),
                     UserProfile(**data["profile"]),
@@ -241,6 +247,8 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
                 )
     except Exception:
         pass
+
+    _AUTH_CACHE_MISSES.inc()
 
     t_hash = hash_token(token)
 

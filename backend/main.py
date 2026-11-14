@@ -101,6 +101,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="VoyageAI Auth, Preferences & Trip API", version="1.0.0", lifespan=lifespan)
 
+# Prometheus metrics (no secrets required). Exposes /metrics in Prometheus text format.
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+from prometheus_client import Counter as _PromCounter, Gauge as _PromGauge
+TRIPS_CREATED_TOTAL = _PromCounter("trips_created_total", "Total trips created")
+ONBOARDING_COMPLETED_TOTAL = _PromCounter("onboarding_completed_total", "Onboarding flows completed")
+AI_CALLS_TOTAL = _PromCounter("ai_calls_total", "AI/LLM calls made", ["provider"])
+DB_POOL_SIZE = _PromGauge("db_pool_size", "SQLAlchemy pool size")
+DB_POOL_CHECKED_OUT = _PromGauge("db_pool_checked_out", "SQLAlchemy checked-out connections")
+DB_POOL_OVERFLOW = _PromGauge("db_pool_overflow", "SQLAlchemy pool overflow")
+
 # CORS: only these sites may call the API with the user's login cookie.
 # Add more with the comma-separated ALLOWED_ORIGINS env var.
 _DEFAULT_ALLOWED_ORIGINS = [
@@ -650,6 +662,12 @@ def update_onboarding(
                         "prefs": (updated_prefs.model_dump() if hasattr(updated_prefs, "model_dump") else updated_prefs),
                     }),
                 )
+        except Exception:
+            pass
+        # Metric: onboarding completed
+        try:
+            if getattr(req, "onboardingStatus", None) and str(req.onboardingStatus).upper() == "COMPLETED":
+                ONBOARDING_COMPLETED_TOTAL.inc()
         except Exception:
             pass
         return {
@@ -1646,7 +1664,12 @@ def get_pool_status():
     size, checkedout, and overflow connections.
     """
     status_data = get_db_pool_status()
-    log_event(f"📊 [POOL STATUS] Size: {status_data.get('size')} | Checked Out: {status_data.get('checked_out')} | Overflow: {status_data.get('overflow')}")
+    try:
+        DB_POOL_SIZE.set(status_data.get("size", 0) or 0)
+        DB_POOL_CHECKED_OUT.set(status_data.get("checked_out", 0) or 0)
+        DB_POOL_OVERFLOW.set(status_data.get("overflow", 0) or 0)
+    except Exception:
+        pass
     return status_data
 
 @app.get("/api/user/location/latest", dependencies=[Depends(general_limiter)])
@@ -2574,7 +2597,12 @@ def create_trip(
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     try:
-        return create_trip_for_user(db, auth_user, user_profile, user_prefs, trip_data)
+        result = create_trip_for_user(db, auth_user, user_profile, user_prefs, trip_data)
+        try:
+            TRIPS_CREATED_TOTAL.inc()
+        except Exception:
+            pass
+        return result
     except TripValidationError as err:
         raise HTTPException(status_code=400, detail=str(err))
 

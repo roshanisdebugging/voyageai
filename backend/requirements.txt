@@ -28,6 +28,9 @@ google-generativeai>=0.3.0      # tour guide chat (Gemini SDK)
 # Config
 python-dotenv>=1.0.0
 
+# Monitoring
+prometheus-fastapi-instrumentator>=6.1.0
+
 # Optional: only for COST_GUARD_BACKEND=semantic (local embedding cost guard, see docs/COST_GUARD.md).
 # The default cost guard (groq) doesn't need them.
 numpy>=1.24.0
