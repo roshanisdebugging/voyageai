@@ -1,17 +1,33 @@
-psycopg[binary]>=3.1
-psycopg2-binary>=2.9.0
+# VoyageAI backend. Install from backend/: pip install -r requirements.txt
+
+# Web server and API
 fastapi>=0.100.0
-uvicorn[standard]>=0.22.0
-python-multipart>=0.0.9
+uvicorn[standard]>=0.22.0       # [standard] brings websockets (for /ws/app, /ws/voice) and uvloop/httptools
 pydantic>=2.0.0
+email-validator>=2.0.0          # pydantic EmailStr (registration)
+
+# Database (DATABASE_URL is postgresql://, which SQLAlchemy runs on psycopg2)
 sqlalchemy>=2.0.0
-requests>=2.31.0
-httpx>=0.25.0
-python-dotenv>=1.0.0
-google-generativeai>=0.3.0
+psycopg2-binary>=2.9.0
+
+# Cache, queue, rate limits (local Redis needs protocol=2, available from redis 5)
+redis>=5.0.0
+
+# Auth (passlib bcrypt; bcrypt is pinned because newer versions break passlib 1.7.4)
 passlib>=1.7.4
 bcrypt==4.0.1
-email-validator>=2.0.0
-redis>=5.0.0
+
+# HTTP clients: Groq, Gemini REST, Sarvam, Open-Meteo (requests); Google Maps (httpx; also used by FastAPI's TestClient in tests/)
+requests>=2.31.0
+httpx>=0.25.0
+
+# AI
+google-generativeai>=0.3.0      # tour guide chat (Gemini SDK)
+
+# Config
+python-dotenv>=1.0.0
+
+# Optional: only for COST_GUARD_BACKEND=semantic (local embedding cost guard, see docs/COST_GUARD.md).
+# The default cost guard (groq) doesn't need them.
 numpy>=1.24.0
 fastembed>=0.7.4
