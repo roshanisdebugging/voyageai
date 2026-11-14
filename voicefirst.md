@@ -16,7 +16,13 @@ VoyageAI gets a mic button. The user speaks, the server collects what it needs, 
 
 Voice work starts only after **Step 0** is done. Step 0 fixes security holes in the WebSocket actions, the hard-coded budget and the missing starting city. It also builds the non-voice features voice depends on, and moves AI calls from Gemini to Groq.
 
-Status: plan agreed section by section on 12 Nov 2026. Nothing is built yet. Checked against the `main` branch of `roshanisdebugging/voyageai` (last commit 6 Nov 2026).
+Status (14 Nov 2026):
+- Step 0 is done.
+- Voice steps 1 and 1b are done.
+- Step 2 is built and on `main`, waiting for the owner's test.
+- Steps 1c and 3–7 are planned in detail below (section 8).
+
+The plan was first agreed on 12 Nov 2026.
 
 ## 1. What we are building
 
@@ -42,7 +48,7 @@ Updated 12 Nov 2026 after Step 0. The table first described the 6 Nov code; rows
 | --- | --- | --- | --- |
 | Text-to-speech, Sarvam `bulbul:v3`, Redis cache, default voice `ritu` | `backend/tts_service.py` | Exists | Speak every reply |
 | Play base64 audio | `frontend/src/hooks/useAudioGuide.ts` | Exists | Play replies |
-| One WebSocket, ~40 actions | `frontend/src/services/wsClient.ts`, `process_ws_action` in `backend/main.py` | Exists | Carry voice turns |
+| One WebSocket, ~40 actions | `frontend/src/services/wsClient.ts`, `process_ws_action` in `backend/main.py` | Exists | Unchanged; voice uses its own `/ws/voice` |
 | Trip creation | `backend/trip_lifecycle.py` `create_trip_for_user`, used by WebSocket and REST | Exists *(Step 0)* | The agent's `create_trip` calls it |
 | Ownership check | `backend/ownership.py`; every WebSocket trip action checked before it runs | Exists *(Step 0)* | Every agent tool goes through it |
 | Rate limits | `rate_limiter.py`; `WS_RATE_LIMITS` in `main.py` for WebSocket actions | Exists *(Step 0)* | Add a `voice` bucket |
@@ -276,14 +282,38 @@ Done when: searching "Hawa Mahal" from Delhi flies to Jaipur, pins it and shows 
 
 The backend decides and the app only shows. All rules (login, ownership, limits, validation) stay on the server.
 
-1. **Record.** The user taps the mic. The browser records until the second tap, or until 30 seconds. Android gives `webm/opus`, iPhone Safari gives `mp4/aac`; the server accepts both. The mic needs HTTPS.
-2. **Send** over the existing `/ws/app` as action `voice:turn`, with `{ audio_base64, mime, conversation_id, screen }`.
-3. **Speech to text:** Groq Whisper. The provider can be swapped to Sarvam or xAI with one setting.
-4. **Agent:** a Groq model reads the text, the conversation memory and the current screen, then picks tools (section 5).
-5. **Tools run.** Safe and small ones run now. Big ones become a pending action waiting for "haan" or Proceed.
-6. **Reply to speech:** Sarvam TTS, voice `ritu`, in the user's language.
-7. **Reply to the app** in one message: `{ reply_text, reply_audio_base64, ui_actions, pending_confirmation }`. Text and audio arrive together.
-8. **App:** shows the speaking animation, plays the audio, and runs the `ui_actions` (change page, open the filled review page, show the confirm card or the Undo toast).
+*(Updated 14 Nov 2026 to match what was built in steps 1–2. The first version described MediaRecorder and a `voice:turn` action on `/ws/app`; that design was replaced.)*
+
+1. **Open.**
+   - The first mic tap opens a separate socket, **`/ws/voice`**.
+   - Login comes from the session cookie, or an `auth` message within 5 s.
+   - Foreign origins are refused.
+   - `/ws/app` is untouched, so a voice turn never blocks other app requests.
+2. **Start.** The app sends `{"type":"start","conversation_id","screen","trip_id"}`. The server answers `{"type":"recording","turn_id"}`.
+3. **Stream.**
+   - The mic runs with echo cancellation and noise suppression.
+   - An AudioWorklet (`frontend/public/pcm-worklet.js`) converts it to **16 kHz, 16-bit, mono PCM**.
+   - It sends ~100 ms binary frames while the user speaks. There's no VAD and no base64.
+   - The mic needs HTTPS.
+4. **Stop.** The second tap, or 30 s, sends `{"type":"stop"}`. The server caps each recording at 30 s (960 KB).
+5. **Speech to text.** The PCM gets a WAV header and goes to Groq Whisper (`voice/stt.py`, provider swappable). The audio is thrown away after the call. The `transcript` message goes out at once (for the test panel).
+6. **Agent.** A Groq model with tools (`voice/agent.py`) reads:
+   - the transcript;
+   - the conversation memory (Redis, last 10 turns);
+   - the current screen and the open trip.
+
+   It calls a tool, asks a question, or declines.
+7. **Backend checks.** Every tool call goes through the backend before anything happens:
+   - page names through `voice/pages.py`;
+   - trips and activities through `ownership.py`.
+
+   Small actions run now. Big ones become a **pending action** waiting for "haan" or a tap on Confirm (step 4 onwards).
+8. **Spoken reply.** Sarvam TTS (`voice/tts.py`), voice `ritu`, no caching of the user's words.
+9. **Reply to the app** in one message: `{"type":"reply", reply_text, reply_audio_base64, mime, ui_actions, action, llm_ms, tts_ms}`. Later steps add `pending_confirmation`.
+10. **App.**
+    - Runs the `ui_actions` first: change page, open the filled review page, show the Confirm card or the Undo toast, refresh data.
+    - Then shows the speaking animation and plays the audio.
+    - Tapping the mic during playback interrupts it (barge-in).
 
 During trip creation, most turns send no `ui_actions`. The server keeps a **draft trip** in Redis and fills it turn by turn. Only the final turn sends one action: "open the filled review page". If the user leaves midway, the draft and the conversation are thrown away.
 
@@ -295,10 +325,10 @@ The agent is a Groq model with function calling. It never touches the database. 
 
 | Tool | Group | Behaviour | Voice step |
 | --- | --- | --- | --- |
-| `navigate(page)`: Home, Trip, Itinerary, Map, Food, Rides, Expenses, Explore, Guide, Saved places, My trips | Look and move | Runs now | 2 |
-| `list_my_trips()`, `open_trip(trip)`, `show_itinerary(day?)` | Look and move | Runs now | 2 |
-| `search_places(query, near?)` | Look and move | Runs now | 2 |
-| `answer_question(question)` | Look and move | Runs now; the Groq agent answers travel questions itself | 3 |
+| `navigate(page, day?)`: Home, My trips, Trip, Itinerary (day), Map, Food, Rides, Expenses, Explore, Guide, Saved places, More, Plan trip | Look and move | Runs now | 2 (built) |
+| `list_my_trips()`, `open_trip(trip)` | Look and move | Runs now | 3 |
+| `search_places(query)` | Look and move | Runs now (shows the place on the map) | 3 |
+| `answer_question(question)` | Look and move | Runs now; answered by the tour guide (Gemini with Google Search), short for voice | 3 |
 | `update_trip_draft(fields)` | Collect | Fills the server draft; jumps to the review page when complete | 4 |
 | `create_trip(...)` | Big | Waits for Proceed or "haan" | 4 |
 | `save_place`, `unsave_place`, `mark_activity_done`, `set_filter` | Small | Runs now, Undo toast | 5 |
@@ -342,25 +372,44 @@ The user stays where they are while the agent asks. The app jumps once, to the f
 
 Only voice-specific work is listed here; everything else is in Step 0.
 
-**Backend**
+*(Updated 14 Nov 2026: what exists after steps 1–2, and which step adds the rest.)*
 
-1. `voice:turn` WebSocket action: login required, audio capped at 30 seconds / 1 MB, its own rate limit.
-2. `voice_service.py`: speech-to-text behind a swappable provider (Groq Whisper by default; Sarvam or xAI by setting). Returns the transcript and the detected language.
-3. `voice_agent.py`: the Groq function-calling loop, the tool definitions, and conversation memory in Redis (last ~10 turns, 30-minute expiry, cleared when the user leaves midway).
-4. Trip draft in Redis, filled turn by turn.
-5. Pending actions in Redis (5-minute expiry), plus `voice:confirm` and `voice:cancel` for the tap path.
-6. Place lookup: "Jaipur" becomes a real place with existing place search; the agent asks if the name is ambiguous.
+**Backend: `backend/voice/`**
 
-**Frontend**
+| File | Job | Added in |
+| --- | --- | --- |
+| `ws.py` | `/ws/voice`: login, origin check, 30 s cap, rate limit (15/min, 100/day), message routing | 1 |
+| `stt.py` | Speech to text, Groq Whisper; provider chosen by `VOICE_STT_PROVIDER` | 1 (Wispr Flow in 1c) |
+| `pipeline.py` | One turn as stages: STT → agent → TTS; `after_turn` for the test-only store | 1, grows every step |
+| `messages.py` | All message shapes and user-facing error texts | 1, grows every step |
+| `debug_store.py` | Test-only saving (`testing.md`) | 1 |
+| `tts.py` | Sarvam replies, `use_cache=False` | 1b |
+| `agent.py` | The mind: system prompt, tools, memory, checks | 2, grows every step |
+| `pages.py` | Page name → route, confirm sentences | 2 |
+| `tools/` | One file per tool group: the backend checks and actions behind each tool | 3 |
+| `pending.py` | Pending big actions in Redis (5 min), confirm and cancel | 4 |
+| `draft.py` | The trip draft in Redis, required fields, read-back | 4 |
+| `context.py` | Facts about the open trip (days, activities, expenses) for the prompt | 5 |
 
-1. Floating mic button on every page, after login only.
-2. `useVoiceRecorder`: mic permission, MediaRecorder, `webm` or `mp4`, 30-second cap.
-3. Listening and speaking animations.
-4. Voice client: sends `voice:turn` and plays the reply. Tapping during playback stops it and starts recording.
-5. UI action runner: change page, open the filled review page, show the confirm card and the Undo toast.
-6. Developer-only transcript view.
+**Shared trip actions** (step 5): the add-expense, swap and mark-done logic moves out of `main.py` into `backend/trip_actions.py`. Taps (`/ws/app`) and voice then use the same functions.
 
-**Removed from the first plan:** the Normal/Voice toggle, and captions for users.
+**Frontend: `frontend/src/voice/`**
+
+| File | Job | Added in |
+| --- | --- | --- |
+| `MicButton.tsx` | Floating mic after login; idle, recording, waiting, speaking; barge-in | 1, 1b |
+| `useVoiceRecorder.ts` + `public/pcm-worklet.js` | Mic → 16 kHz PCM frames | 1 |
+| `voiceSocket.ts` | `/ws/voice` client | 1 |
+| `replyPlayer.ts` | iPhone-safe reply playback | 1b |
+| `uiActions.ts` | Runs `ui_actions` from an allowlist | 2, grows every step |
+| `ConfirmCard.tsx` | Confirm / Cancel card for pending actions | 4 |
+| `TestTranscriptPanel.tsx` | Developer-only panel (`VITE_VOICE_TEST_TRANSCRIPT=true`) | 1, removed in 7 |
+
+**Removed from the first plan:**
+- the Normal/Voice toggle;
+- captions for users;
+- `voice:turn` on `/ws/app`;
+- MediaRecorder.
 
 ## 8. Build order
 
@@ -376,12 +425,23 @@ Each step works and can be tested on its own. We review after every step before 
 | 1. Voice pipeline (test phase) | Dedicated `/ws/voice` pipeline: tap mic, PCM streamed to the backend, Groq Whisper transcribes, transcript shown in a temporary test panel. Nothing stored. See "Step 1 in detail" | Hindi, English and Hinglish transcripts appear on screen; nothing saved anywhere |
 | 1b. Spoken reply | Sarvam speaks a short reply on top of the step 1 pipeline. **Built 13 Nov 2026**, see "Step 1b notes" | Reply audio plays after each turn |
 | 2. Navigation | "Open my itinerary", "food dikhao". **Built 13 Nov 2026, waiting for owner test** (eval 91%), see "Step 2 notes" | Every page reachable by voice |
-| 3. Questions | "Amber Fort kab jaana best hai?" | Short spoken answer |
-| 4. Create trip | Collect, confirm date, review page, Proceed | Nothing created without Proceed or "haan" |
-| 5. More actions | Small actions with Undo; expense, swap, regenerate with confirmation; delete redirects | Each behaves as decided; other users' trips untouchable |
-| 6. Smart actions | Weather replan, optimize day, optimize budget | Work on own trip only, after confirmation |
-| 7. Polish | Speed, error messages, interrupting, voice choice in settings | Reply heard in under ~3 seconds |
-| Later | Add stay, add transport, refine | Not scheduled |
+| 1c. Hearing better | Fix the speech-to-text problems found in testing; Wispr Flow as a provider (hackathon). Can run any time. See "Step 1c in detail" | Saved clips re-scored; place names and language detection better than Groq alone |
+| 3. Questions and look-ups | Travel questions answered briefly; find a place on the map; list and open trips; step 2's eval misses fixed. See "Step 3 in detail" | Spoken answers are short and correct; "Hawa Mahal dikhao" pins it on the map; "Goa wali trip kholo" opens it |
+| 4. Create trip | Collect details, read the date back, jump to the filled review page, Proceed. Adds pending actions and the Confirm card. See "Step 4 in detail" | Nothing created without Proceed or "haan"; edits on the review page are what gets saved |
+| 5. More actions | Small actions with Undo; expense, swap and regenerate with confirmation; delete redirects; shared trip actions. See "Step 5 in detail" | Each behaves as decided; other users' trips untouchable |
+| 6. Smart actions | Weather replan, optimize day, optimize budget by voice. See "Step 6 in detail" | Work on the user's own trip only, after confirmation, and say what changed |
+| 7. Polish | Speed, errors, voice choice, phone testing, test panel off. See "Step 7 in detail" | Second tap → reply heard in ≤ 3 s on a phone; ready for real users |
+| Later | Add stay, add transport, refine trip by voice | Not scheduled |
+
+**Order:** 3 → 4 → 5 → 6 → 7. Step 1c can run in parallel at any time; the hackathon needs Wispr Flow, so do it before the demo.
+
+**Rules for every step** (same as steps 1 and 2):
+- Work on a local branch named `voice-stepN`.
+- Do not push, open a PR or merge until the owner says where.
+- Every new tool goes through the backend checks and the ownership check. The LLM never touches data itself.
+- Logs carry action names, timings and error codes, never the user's words.
+- New `ui_actions` types are added to the frontend allowlist in `uiActions.ts`; anything unknown is ignored.
+- Each step ends with: unit tests (Groq and Sarvam simulated), an eval script with real Groq (run once per change), the owner's own test by voice, and a "Step N notes" section here.
 
 ### Step 1 in detail: the voice pipeline (first testing phase)
 
@@ -630,6 +690,377 @@ VITE_VOICE_TEST_TRANSCRIPT=true
   - Romanized Hinglish is tagged `en`, so it gets English confirm sentences and the `en-IN` voice.
 - **Occasional Groq errors:** they reach the fallback reply. If they're frequent, retry once on Groq's 400 "tool_use_failed".
 - **Speed:** the agent adds about 0.5–1 s per turn.
+
+### Step 1c in detail: hearing better (can run any time)
+
+**Goal:** fix the speech-to-text problems found in testing on 13 Nov, and add Wispr Flow as a provider for the hackathon. This doesn't change how the agent works; it gives the agent better text.
+
+**What testing showed** (25 real clips, owner's voice, Groq Whisper):
+
+| Problem | Example | How bad |
+| --- | --- | --- |
+| Wrong language detected | 3 clips tagged **Icelandic**: "Það er hann" for Hinglish | The whole sentence is lost |
+| Indian place names | Varanasi → "Bara Nasi", "Vajara si", "Badaanasi", "**12 nati**"; Jaipur → "Jajapur"; Thiruvananthapuram → "तिलू बननत पूरम"; Delhi → "Gildi"; Bombay → "पॉंबे" | Frequent |
+| English words inside Hindi | "agle Friday" → "अगले प्राइटे"; "itinerary page" → "आइटिरी पेज़े" | Sometimes |
+| Romanized Hinglish tagged `en` | All Hinglish clips in 1b → English confirm lines and the `en-IN` voice | Every Hinglish turn |
+| Fine | navigation commands, food, haan/nahi, "bees/pachaas hazaar", "teen/paanch din", "kal subah", "Diwali ke baad" | — |
+
+Devanagari vs Roman script is **not** a problem: the user never sees the transcript and the agent reads both.
+
+**Fixes**
+
+1. **Language retry** (`voice/stt.py`):
+   - If Whisper detects anything other than `hi`, `en` or `ur`, run the same audio again with `language="hi"`.
+   - Treat `ur` as `hi`.
+   - The retry costs one extra call, and only on bad clips.
+2. **Vocabulary hint:** a `prompt` (≤ 224 tokens) with about 40 Indian city and place names, the weekdays and app words. Set it in `VOICE_STT_PROMPT`, already supported. Example:
+   *"Varanasi, Jaipur, Mumbai, Bombay, Delhi, Goa, Kolkata, Bengaluru, Chennai, Hyderabad, Thiruvananthapuram, Puducherry, Udaipur, Rishikesh, Manali, Shimla, Amritsar, Agra, Hawa Mahal, Amber Fort… Monday, Friday. Mujhe kal Jaipur jaana hai, budget 20 hazaar, itinerary dikhao."*
+3. **Place aliases** (`backend/place_aliases.py`), used by every tool that takes a place:
+   - Bombay → Mumbai, Calcutta → Kolkata, Bangalore → Bengaluru, Banaras/Benares → Varanasi, Madras → Chennai, Trivandrum → Thiruvananthapuram, Pondicherry → Puducherry, Gurgaon → Gurugram.
+   - Then a fuzzy match against the place search (India only) resolves garbled names like "Badaanasi" and "वारा नसी".
+4. **Reply voice language:** Sarvam's `hi-IN` voice reads code-mixed Hindi and English well, so use `hi-IN` for every reply, unless both the transcript and the reply are plain English (no Hindi words). The owner listens and decides.
+5. **Wispr Flow provider** (`voice/stt.py`, `VOICE_STT_PROVIDER=wispr`), for the hackathon:
+   - **REST first:** on `stop`, WAV → base64 → `POST https://platform-api.wisprflow.ai/api/v1/dash/api` with `Authorization: Bearer <WISPR_API_KEY>`. Read `text`, `detected_language` and `total_time`.
+   - **WebSocket later** (faster):
+     - open `wss://platform-api.wisprflow.ai/api/v1/dash/ws` at `start`;
+     - send the `auth` message;
+     - regroup the 100 ms PCM frames into 1-second packets (with a volume value), sent as `append`;
+     - send `commit` on `stop`.
+   - **Context:**
+     - `language: ["hi","en"]`;
+     - `dictionary_context` with city names, the trip's destination and saved places;
+     - `app: {type: "ai"}`;
+     - the last few turns as `conversation`.
+   - **Fallback:** if Wispr fails, use Groq for that turn.
+   - **Access:** the API is approval-only. Get the key from the hackathon organisers.
+6. **Re-score script** (`backend/scripts/rescore_stt.py`):
+   - Re-transcribes every saved WAV in `test_audio_folder/` with each setting: prompt off/on, language auto/`hi`, Groq/Wispr/Sarvam.
+   - Prints them side by side, with the time each took.
+   - Needs `VOICE_DEBUG_STORE` recordings and runs locally only.
+
+**Done when**
+- [ ] No clip in the saved set comes back as a language other than Hindi, English or Urdu.
+- [ ] Of the place names in the saved set, at least 80% are recognised or resolved by the alias and fuzzy match. Today about 40% are.
+- [ ] `rescore_stt.py` comparison table for Groq vs Wispr Flow (vs Sarvam if a key is available), pasted into the Step 1c notes.
+- [ ] Owner listens: `hi-IN` voice on Hinglish replies sounds right.
+- [ ] Wispr Flow works end to end with `VOICE_STT_PROVIDER=wispr`, and falls back to Groq when it fails.
+
+---
+
+### Step 3 in detail: questions and look-ups
+
+**Goal:** the user can ask travel questions and look things up by voice. Nothing changes any data in this step.
+
+| User says | What happens |
+| --- | --- |
+| "Amber Fort kab jaana best hai?" | Short spoken answer (≤ 2 sentences); the full answer appears in the Guide chat |
+| "Hawa Mahal dikhao" / "where is Amber Fort" | Map opens and flies to it, with a pin and "X km from you" |
+| "Meri trips kaun si hain?" | "Aapki 2 trips hain: Jaipur 14 Nov se aur Goa 20 Dec se." My trips opens |
+| "Goa wali trip kholo" | That trip becomes the current trip; the trip page opens |
+| "Goa wali trip kholo" with two Goa trips | "Goa ki do trips hain: November wali ya December wali?" |
+| "Nayi trip banani hai" | Opens the new-trip form. Fixes step 2's eval miss: plain navigation, no questions |
+
+**Tools added to `voice/agent.py`**
+
+| Tool | Arguments | Backend does |
+| --- | --- | --- |
+| `answer_question` | `question` (the user's question, cleaned up), `place?` | Calls the tour guide (Gemini with Google Search) in **voice mode**: answer in ≤ 2 short sentences in the user's language. Also saves the full answer in the user's Guide chat history (`tour_guide_service.persist_message`), so it's readable later. If Gemini fails, Groq answers with a note that details may vary. |
+| `search_places` | `query` | Existing `search_places` (India only) + the aliases from step 1c. Top result → `ui_actions: [{type: "map_focus", lat, lng, name, place_id}]`. Several close matches → asks which one. None → "Yeh jagah nahi mili." |
+| `list_my_trips` | — | The user's trips (closed ones skipped unless asked for "purani trips"). Reply lists up to 3 by destination and start date, then navigates to `/trips`. |
+| `open_trip` | `destination?`, `month?`, `which?` (`next`/`current`/`last`) | Matches the user's own trips in code. One match → `ui_actions: [{type: "open_trip", trip_id}, {type: "navigate", to: "/trip"}]`. Several → asks with month names. None → "Is naam ki koi trip nahi mili." |
+
+**Changes to the system prompt and tools**
+- Every page in `navigate` gets a one-line meaning in the tool description, e.g. `plan_trip: open the new trip form (do not ask for details)`, `more: settings, profile, language`. This fixes the step 2 misses.
+- Add to the prompt:
+  - "For questions about places, timings, tickets, food or travel tips, call answer_question. Do not answer from memory."
+  - "Use search_places when the user wants to see where a place is."
+- Today's date (India) goes into the prompt, so "kal" and "is weekend" make sense.
+
+**Backend files**
+- `voice/tools/lookups.py`: `answer_question`, `search_places`, `list_my_trips`, `open_trip`.
+- `tour_guide_service.py`: add a short `voice_answer(question, user_id, trip, lang)`. It reuses the existing Gemini grounded model with a "max 2 sentences, spoken" instruction and a 6 s timeout.
+- The `reply` message: `action` becomes `answer`, `map_focus:<name>`, `list_trips` or `open_trip`.
+
+**Frontend**
+- `uiActions.ts`:
+  - `map_focus`: navigate to `/map` and set `mapFocusTarget` (already used by the map search from Step 0e), so the card shows the distance.
+  - `open_trip`: set the current trip in `TripContext` (only an ID from the user's own trip list), then navigate.
+- Guide page: answers asked by voice show in the chat history with a small mic icon.
+
+**Tests** (`backend/tests/test_voice_step3.py`, Groq and Gemini simulated)
+- Each tool's backend checks.
+- `open_trip` only finds the user's own trips; two matches → a question.
+- `search_places` outside India → nothing.
+- The answer is trimmed to 2 sentences; a Gemini failure falls back to Groq.
+- The full answer is saved to the Guide history and the short one is spoken.
+- No user words in logs.
+
+**Eval** (`backend/scripts/eval_lookups.py`, real Groq, ~30 phrases)
+- Expected tool and arguments for each phrase, including:
+  - "Amber Fort ki timing kya hai", "Jaipur mein kya khana famous hai";
+  - "Hawa Mahal dikhao", "show me Gateway of India";
+  - "meri trips", "Goa wali trip kholo", "agli trip kholo";
+  - "nayi trip banani hai", "settings kholo".
+- Also: "ek joke sunao" (decline), and a weather question (`answer_question`).
+- Target ≥ 90%. Step 2's navigation eval must still pass.
+
+**Done when**
+- [ ] Both evals ≥ 90%.
+- [ ] By voice: 5 travel questions get correct, short answers. The full answer is in the Guide chat.
+- [ ] "Hawa Mahal dikhao" pins it on the map with the distance.
+- [ ] "Goa wali trip kholo" works with one and with two Goa trips.
+- [ ] Second tap → answer heard ≤ 4 s for questions (Gemini adds time), ≤ 3 s for the rest.
+
+---
+
+### Step 4 in detail: create a trip by voice
+
+**Goal:** the full conversation from section 6. The user speaks, the server collects the details, reads the date back, and opens the review page already filled in. Nothing is saved until the user taps **Proceed** or says "haan" on that page.
+
+This step also adds the two pieces later steps reuse: **pending actions** and the **Confirm card**.
+
+**The draft** (`voice/draft.py`)
+- Kept in Redis under `voice:draft:{user}:{conversation}` for 30 minutes. Deleted when the session ends or the user leaves midway (socket closes).
+- Fields:
+
+| Field | Required | Filled from |
+| --- | --- | --- |
+| `destination` | Yes | Speech → aliases (1c) → place search, India only. Ambiguous → asks |
+| `origin` | No | Same as destination |
+| `start_date` | Yes | The agent turns "agle Friday", "15 tareekh", "Diwali ke baad" into a date using today's India date in the prompt. Code checks: not in the past, ≤ 1 year ahead |
+| `start_date_confirmed` | Yes | Set **only by code**, after the read-back ("14 November, Friday se, sahi hai?") gets a yes |
+| `days` or `end_date` | Yes | 1–30 days |
+| `adults` | Yes | ≥ 1 |
+| `children` | Yes | ≥ 0 ("koi bachcha nahi" = 0) |
+| `budget_amount` | Yes | Rupees. "bees hazaar" = 20000, "1.5 lakh" = 150000 |
+| `travel_style` | No | From speech, else the user's saved preferences |
+
+- **Code, not the LLM, decides what's missing:** `missing_fields(draft)` is passed to the agent each turn. The agent only phrases the question, at most 2 missing fields per question.
+
+**Tools added**
+
+| Tool | Arguments | Backend does |
+| --- | --- | --- |
+| `update_trip_draft` | any of the fields above | Checks and normalises each value, saves the draft, returns `missing_fields` and the next step (`ask`, `confirm_date` or `ready`) |
+| `confirm_date` | `yes: bool` | Only valid right after the read-back. Yes → `start_date_confirmed`. No → clears the date and asks again |
+
+**The jump**
+- When nothing is missing and the date is confirmed, the reply is "Sab details check karke Proceed dabaiye.", with `ui_actions: [{type: "open_review", prefill: TripDraft}]`.
+- The frontend opens `navigate('/trips/new', { state: { prefill } })`. The wizard already accepts this since Step 0c and shows its review step.
+- **"Haan" on the review page:**
+  - The agent calls `submit_review`, and the app presses Proceed itself: `{type: "submit_review"}`. It's only allowed while the review step is showing.
+  - So **the values on the page, including any edits the user made by tap, are what get saved**, through the existing wizard path (`trips:create` → `create_trip_for_user`).
+  - Voice never creates a trip from its own copy of the draft.
+
+**Pending actions and the Confirm card** (`voice/pending.py`, used from step 5 on)
+- A big tool doesn't run. It saves `{id, tool, arguments, summary}` in Redis as `voice:pending:{user}:{conversation}`, for 5 minutes.
+- The reply carries `pending_confirmation: {id, summary}`, and the app shows `ConfirmCard.tsx` with **Confirm** and **Cancel**.
+- **Confirm:**
+  - by tap: `{"type":"confirm","pending_id"}` on `/ws/voice`;
+  - by voice: "haan", "yes", "confirm", "kar do".
+- **Cancel:** "nahi", "no", "cancel", "rehne do", a new topic, or 5 minutes passing.
+- **Clear yes/no words are matched in code first,** with no LLM call, for speed. Anything else goes to the agent with the pending action in its prompt.
+- **Only the confirm handler runs the real function,** after checking ownership again. The agent cannot run it.
+
+**After creation**
+- The trip is created and the itinerary is queued (existing flow).
+- When `ITINERARY_READY` arrives on `/ws/app`, the app speaks a fixed line through the existing TTS endpoint: "Aapka Jaipur plan ready hai. Itinerary kholun?" (caching is fine, since it isn't the user's words).
+- "Haan" opens the itinerary.
+- The existing visual notice stays.
+
+**Frontend**
+- `uiActions.ts`: `open_review`, `submit_review` (only on the wizard's review step).
+- `ConfirmCard.tsx`: summary text, Confirm, Cancel; above the nav (`z-[var(--z-modal)]`, through `Portal`).
+- `MicButton`: sends `screen = "/trips/new#review"` while the review step shows, so the agent knows "haan" means Proceed.
+
+**Tests** (`test_voice_step4.py`)
+- **Draft:** fields, normalisation (Hindi number words, past dates refused, 31 days refused), `missing_fields`, at most 2 questions per turn.
+- **Date read-back:** the draft is never `ready` without confirmation.
+- **Review page:** `open_review` carries the exact prefill shape; `submit_review` is only allowed on the review screen.
+- **Pending:** saved, expires after 5 minutes, confirm runs once (a second confirm does nothing), cancel, a new topic cancels.
+- **Ownership:** another user's pending ID is refused.
+- **Clean up:** leaving midway deletes the draft.
+
+**Eval** (`eval_create_trip.py`): about 10 scripted multi-turn conversations, typed:
+- the section 6 example;
+- everything said in one sentence;
+- the date changed after the read-back;
+- an unknown city;
+- budget said as "1.5 lakh";
+- "koi bachche nahi";
+- changing the destination midway.
+
+Each checks the final prefill. Target: all 10.
+
+**Done when**
+- [ ] The section 6 conversation works by voice, start to finish, on a phone.
+- [ ] Nothing is created without Proceed or "haan" on the review page. Editing a field by tap and then saying "haan" saves the edited value.
+- [ ] The date is always read back, and a wrong date can be corrected.
+- [ ] The itinerary-ready line is spoken, and "haan" opens it.
+- [ ] Eval 10/10. Earlier evals still pass.
+
+---
+
+### Step 5 in detail: more actions
+
+**Goal:** everyday changes by voice, following the rules in section 1: small ones happen with Undo, big ones ask first, and voice never deletes.
+
+**First, shared trip actions** (`backend/trip_actions.py`)
+- Today, add expense, swap activity and mark done are written inline in `main.py`'s WebSocket handlers.
+- Move them into functions: `add_expense(db, user, trip_id, ...)`, `swap_activity(...)`, `set_activity_done(...)`, `save_place(...)`, `unsave_place(...)`.
+- Both `/ws/app` (taps) and the voice tools call these, so the rules exist once.
+- The existing tap tests must still pass unchanged.
+
+**Trip context for the agent** (`voice/context.py`): when a trip is open, the prompt gets a compact view:
+- the days, with dates;
+- the activities, with short IDs and names (today's day first);
+- the total spent vs the budget.
+
+That lets "Hawa Mahal wala mark done karo" become an activity ID. The ID is matched by **code** against the trip's own activities, never trusted from the LLM.
+
+**Tools added**
+
+| Tool | Kind | Arguments | Backend does |
+| --- | --- | --- | --- |
+| `mark_activity_done` | Small | `activity`, `done` (default true) | Runs now. Reply "Hawa Mahal done mark kar diya." Undo toast → `trips:set_activity_done` with `done=false` |
+| `save_place` / `unsave_place` | Small | `place` (from the screen, or the last `search_places` result) | Runs now. Undo toast reverses it |
+| `set_filter` | Small | `page` (`food`, `explore`), `filter` (e.g. `veg`, `open_now`) | Frontend-only: `ui_actions: [{type: "set_filter", ...}]`; Undo restores the previous filter |
+| `add_expense` | Big | `title`, `amount`, `category` (food, transport, stay, shopping, tickets, other) | Pending: "₹350, auto, transport mein add karun?" → on confirm runs `trip_actions.add_expense` |
+| `swap_activity` | Big | `activity`, `reason?` | Opens the existing swap sheet for that activity with options (`ui_actions: [{type: "open_swap", activity_id}]`). The user picks by tap, or by voice ("doosra wala"), and the sheet's own Confirm applies it |
+| `regenerate_itinerary` | Big | — | Pending: "Poora itinerary dobara banaun? Isme thoda time lagega." → on confirm queues regeneration (AI rate limit bucket) |
+| delete | Not a tool | — | The prompt says: never delete. Reply "Trip delete karne ke liye button khud dabaiye, dhyan se." + navigate to `/trip` |
+
+**After any change:** `ui_actions` also carries `{type: "refresh", what: "itinerary" | "expenses" | "saved_places"}`, so the open screen reloads data that changed through `/ws/voice`.
+
+**Undo** (`ui_actions: [{type: "undo_toast", message, undo: {action, payload}}]`)
+- The Undo button runs the reverse through the existing `/ws/app` action, from an allowlist: `trips:set_activity_done`, saved-places add/delete, filter restore.
+- It's shown for 5 seconds. Undo is by tap only, as decided.
+
+**Tests** (`test_voice_step5.py`)
+- `trip_actions` used by both paths; the old tap tests unchanged.
+- An activity name matches only the user's own trip; an unknown name → a question.
+- Small actions run with an Undo payload; Undo reverses them.
+- Big actions never run without confirm; confirm runs once.
+- Another user's trip or activity is refused at every point.
+- "Delete my trip" never deletes.
+- `refresh` is sent after each change.
+
+**Eval** (`eval_actions.py`, ~30 phrases)
+- "Hawa Mahal done ho gaya", "auto ka 350 add karo", "khane ka 1200 kharcha", "Amber Fort ki jagah kuch aur";
+- "plan dobara banao", "yeh jagah save karo", "veg wale dikhao", "meri trip delete karo";
+- plus earlier phrases, to make sure nothing regressed.
+
+**Done when**
+- [ ] Each action behaves as in the table, by voice, on a phone.
+- [ ] Undo works for every small action.
+- [ ] Big actions never happen without "haan" or Confirm.
+- [ ] Delete only redirects.
+- [ ] The screen updates after each change without a reload.
+- [ ] All evals ≥ 90%. All earlier tests pass.
+
+---
+
+### Step 6 in detail: smart actions
+
+**Goal:** the three AI helpers that already work by tap, now by voice:
+
+| User says | Tool | Before asking |
+| --- | --- | --- |
+| "Aaj baarish hai, plan badlo" / "kal ka plan mausam ke hisaab se karo" | `weather_replan(day?)` | Reads the real forecast first (`weather_service`, read-only). No bad weather → "Kal mausam theek hai, plan badalne ki zaroorat nahi." and nothing else happens. Bad weather → pending: "Kal dopahar baarish ka forecast hai. Outdoor jagahon ki jagah indoor rakh doon?" More than 16 days away → "Itni door ka forecast abhi nahi hai." |
+| "Aaj ka route chhota karo" / "day 2 optimize karo" | `optimize_day(day, goal?)` | `goal`: `MINIMIZE_TRAVEL_TIME` (default), `RELAXED`, `MORE_SIGHTS`. Pending: "Day 2 ka order travel kam karne ke liye badal doon?" |
+| "Budget mein fit karo" / "kharcha kam karo" | `optimize_budget()` | Needs a budget amount on the trip; if missing → "Pehle budget batayein, kitna hai?" (and saves it through `trip_actions`). Pending: "Plan ko ₹45,000 ke andar laane ki koshish karoon?" |
+
+**How**
+- `day` is resolved in code: "aaj" and "kal" from the trip's dates (India date), "day 2" / "doosra din" from the number. A day outside the trip → a question.
+- On confirm, the existing services run: `weather_replan_service`, `optimize_day_flow_service`, `optimize_budget_service`. Ownership is checked again, and the AI rate-limit bucket applies.
+- These take several seconds. The reply says so at once ("Plan badal raha hoon, ek minute…"); a second spoken line comes when the service returns.
+- **The result is spoken as a one-sentence summary** built from the service's return value, e.g. "Day 2 mein 2 jagah badli: Amber Fort subah, City Palace dopahar." Then `refresh: itinerary`, and the itinerary opens on that day.
+- If the service fails, the reply is "Abhi plan badal nahi paaya, thodi der mein try karein." Nothing is half-applied, because the services already run in one database transaction. Check this, and fix it if not.
+
+**Tests** (`test_voice_step6.py`)
+- The forecast is read before asking.
+- No bad weather → no pending action.
+- Far-off trips handled.
+- "aaj/kal/day 2" resolution; a day outside the trip → a question.
+- Budget missing → asks for it first.
+- Confirm runs the service once, on the user's own trip only.
+- A service failure leaves the trip unchanged.
+- The summary sentence is built from the result.
+
+**Eval** (`eval_smart.py`, ~20 phrases, real Groq; the services are simulated in eval).
+
+**Done when**
+- [ ] All three work by voice on the user's own trip, only after confirmation, and say what changed.
+- [ ] With good weather, nothing is changed and the user is told why.
+- [ ] Evals ≥ 90%. All earlier tests pass.
+
+---
+
+### Step 7 in detail: polish
+
+**Goal:** make it fast, reliable and ready for real users and the hackathon demo.
+
+**Speed** (target: second tap → reply heard ≤ 3 s on a phone; today ~2.3–3.3 s on desktop):
+- **Measure first:** the test panel and the debug store already have `stt_ms`, `llm_ms` and `tts_ms`. Make a table for 20 clips on a phone.
+- **Shorter replies:** fixed confirm sentences are already templates. Keep model replies to ≤ 2 sentences.
+- **Cache fixed lines:** template replies ("Map khol diya.") contain no user words, so their audio can be cached in Redis. Only free-form replies stay uncached.
+- **Sarvam streaming,** if available on the plan: start playing before the whole reply is synthesised.
+- **Overlap:** for template replies, start TTS as soon as the tool is chosen, while the backend checks run.
+- **STT:** the Wispr Flow WebSocket (step 1c) transcribes while the user speaks.
+
+**Errors:** one table in `messages.py` of every error, its spoken line and what the app shows:
+- no internet, socket dropped (auto-reconnect), login expired;
+- mic blocked (show how to allow it), too short;
+- Groq, Sarvam or Wispr down, rate limited (15/min, 100/day: "Thodi der baad try karein").
+
+Each is spoken if possible, otherwise shown, and a test covers each.
+
+**Voice choice**
+- A setting in **More → Voice**: `ritu`, `priya`, `rahul` or `aditya` (Sarvam speakers), with a "Play sample" button.
+- Saved in user preferences on the server, not the browser, and sent with `start`.
+
+**Barge-in and interruptions**
+- Tapping during a reply stops it (built in 1b). Add: a phone call or the app going to the background stops playback and recording.
+- Pending actions survive a barge-in, until 5 minutes or a new topic.
+
+**Phones and accessibility**
+- Full test on Android Chrome and iPhone Safari over HTTPS: the iPhone autoplay unlock, the mic permission flow, landscape, 320 px wide.
+- The mic button has a clear label in each state. The Confirm card works with screen readers.
+- Respect the system "reduce motion" setting for the animations.
+
+**Ready for real users**
+- `VITE_VOICE_TEST_TRANSCRIPT=false` in production. The panel's code can stay behind the flag.
+- `VOICE_DEBUG_STORE` must be off on the cloud server, and the server refuses to start with it on and a non-local URL. That second check is already built.
+- The Groq paid tier (the free tier is shared by all users: ~15–20 turns per minute), and Sarvam credits.
+- A per-user daily voice limit stays: 100 turns.
+
+**Hackathon demo**
+- A 2-minute scripted demo, as a sequence:
+  1. Create a trip in Hinglish.
+  2. Review page and Proceed.
+  3. Itinerary ready (spoken).
+  4. "Day 2 dikhao".
+  5. "Aaj baarish hai, plan badlo".
+  6. "Auto ka 350 add karo".
+  7. Undo.
+- Recorded as a backup video.
+
+**Done when**
+- [ ] Second tap → reply heard ≤ 3 s for 80% of 20 phone clips.
+- [ ] Every error in the table tested and understandable.
+- [ ] Voice choice saved per user and used on the next reply.
+- [ ] Android and iPhone full pass.
+- [ ] Production settings checked.
+- [ ] Demo script runs cleanly three times in a row.
+
+---
+
+### Later (not scheduled)
+
+- **`add_stay`, `add_transport`:** big actions, asking first. Need hotel or transport details by voice: name, dates, price.
+- **`refine`:** free-form changes ("thoda relaxed kar do"). It uses `execute_refinement_actions_service`, and the user needs to see the changes before confirming. Probably a preview screen.
+- **Road distance and travel time** on the map (Google Routes API, paid per call).
+- **More languages:** Tamil, Bengali and others need the language set explicitly. Wispr Flow can't detect some of them from speech alone.
 
 ## 9. Cost, speed and safety
 
