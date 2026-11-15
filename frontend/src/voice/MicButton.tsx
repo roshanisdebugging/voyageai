@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation } from 'react-router-dom';
 import { Loader2, Mic, Square } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
@@ -18,7 +19,7 @@ const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slic
  * Floating mic (voicefirst.md step 1): tap to start, tap to stop, 30 s cap.
  * Streams 16 kHz PCM over /ws/voice and shows what Groq heard in the test panel.
  */
-const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
+const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | null }> = ({ raised, inlineTarget }) => {
   const location = useLocation();
   const { showToast } = useToast();
   const [phase, setPhase] = useState<Phase>('idle');
@@ -174,40 +175,45 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
     : phase === 'starting' ? 'Starting microphone'
     : 'Start voice input';
 
+  const inline = inlineTarget !== null;
+  const button = (
+    <button
+      type="button"
+      onClick={handleTap}
+      aria-label={label}
+      title={label}
+      aria-pressed={phase === 'recording'}
+      disabled={phase === 'waiting' || phase === 'starting'}
+      className={`${inline ? 'size-11 shrink-0 rounded-lg' : 'fixed z-30 right-4 size-14 rounded-full shadow-lg'} flex flex-col items-center justify-center press-scale transition-colors disabled:cursor-wait ${
+        phase === 'recording'
+          ? 'bg-rose-600 text-white ring-4 ring-rose-300/60 animate-pulse'
+          : 'bg-white dark:bg-zinc-900 text-[#355F58] dark:text-emerald-400 border border-[#D9DEDA] dark:border-zinc-700'
+      }`}
+      style={inline ? undefined : { bottom: `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px)` }}
+    >
+      {phase === 'recording' ? (
+        <>
+          <Square className="w-4 h-4 fill-white" aria-hidden="true" />
+          <span className="text-[10px] font-bold leading-none mt-0.5 tabular-nums">{remaining}s</span>
+        </>
+      ) : phase === 'idle' ? (
+        <Mic className={inline ? 'size-5' : 'size-6'} aria-hidden="true" />
+      ) : (
+        <Loader2 className="w-6 h-6 animate-spin" aria-hidden="true" />
+      )}
+    </button>
+  );
+
   return (
     <>
       {SHOW_TEST_PANEL && <TestTranscriptPanel entries={entries} onClear={() => setEntries([])} />}
-      <button
-        type="button"
-        onClick={handleTap}
-        aria-label={label}
-        title={label}
-        aria-pressed={phase === 'recording'}
-        disabled={phase === 'waiting' || phase === 'starting'}
-        className={`fixed z-30 right-4 w-14 h-14 rounded-full shadow-lg flex flex-col items-center justify-center press-scale transition-colors disabled:cursor-wait ${
-          phase === 'recording'
-            ? 'bg-rose-600 text-white ring-4 ring-rose-300/60 animate-pulse'
-            : 'bg-white dark:bg-zinc-900 text-[#355F58] dark:text-emerald-400 border border-[#D9DEDA] dark:border-zinc-700'
-        }`}
-        style={{ bottom: `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px)` }}
-      >
-        {phase === 'recording' ? (
-          <>
-            <Square className="w-4 h-4 fill-white" aria-hidden="true" />
-            <span className="text-[10px] font-bold leading-none mt-0.5 tabular-nums">{remaining}s</span>
-          </>
-        ) : phase === 'idle' ? (
-          <Mic className="w-6 h-6" aria-hidden="true" />
-        ) : (
-          <Loader2 className="w-6 h-6 animate-spin" aria-hidden="true" />
-        )}
-      </button>
+      {inlineTarget ? createPortal(button, inlineTarget) : button}
     </>
   );
 };
 
 /** Only after login. `raised` stacks it above the floating AI button when that one is shown. */
-export const MicButton: React.FC<{ raised?: boolean }> = ({ raised = true }) => {
+export const MicButton: React.FC<{ raised?: boolean; inlineTarget?: HTMLElement | null }> = ({ raised = true, inlineTarget = null }) => {
   const { isAuthenticated } = useAuth();
-  return isAuthenticated ? <MicButtonInner raised={raised} /> : null;
+  return isAuthenticated ? <MicButtonInner raised={raised} inlineTarget={inlineTarget} /> : null;
 };

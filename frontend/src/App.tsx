@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Routes, Route, useLocation, useParams, useNavigate } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
 import { AuthProvider } from './auth/AuthContext';
@@ -81,7 +81,7 @@ const LocaleRedirect: React.FC = () => {
   return null;
 };
 
-const MainContent: React.FC = () => {
+const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement> }> = ({ guideMicSlotRef }) => {
   const { appUIState, setAppUIState, navigationTarget, setNavigationTarget, tripView, setTripView } = useApp();
   const location = useLocation();
 
@@ -171,8 +171,8 @@ const MainContent: React.FC = () => {
       <Route path="/trips" element={<MyTripsPage />} />
       <Route path="/trips/*" element={<MyTripsPage />} />
       <Route path="/explore" element={<ExplorePage />} />
-      <Route path="/tour-guide" element={<TourGuidePage />} />
-      <Route path="/guide" element={<TourGuidePage />} />
+      <Route path="/tour-guide" element={<TourGuidePage micSlotRef={guideMicSlotRef} />} />
+      <Route path="/guide" element={<TourGuidePage micSlotRef={guideMicSlotRef} />} />
       <Route path="/more" element={<MorePage />} />
       <Route path="/saved-places" element={<SavedPlacesPage />} />
       <Route path="*" element={<HomePage />} />
@@ -181,30 +181,66 @@ const MainContent: React.FC = () => {
 };
 const AppShell: React.FC = () => {
   const location = useLocation();
-  const isGuideView = location.pathname === '/guide' || location.pathname === '/tour-guide';
+  const isGuideView = /^\/(?:guide|tour-guide)\/?$/i.test(location.pathname);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [guideMicSlot, setGuideMicSlot] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    const viewport = window.visualViewport;
+    if (!isGuideView || !shell || !viewport) return;
+
+    const syncViewport = () => {
+      // An overlay keyboard shrinks the visual viewport while the layout viewport stays tall.
+      const keyboardOpen = viewport.scale === 1 && window.innerHeight - viewport.height > 80;
+      shell.toggleAttribute('data-guide-keyboard', keyboardOpen);
+      shell.toggleAttribute('data-guide-tight-viewport', keyboardOpen && viewport.height < 260);
+      if (keyboardOpen) {
+        shell.style.setProperty('--guide-viewport-height', `${Math.floor(viewport.height)}px`);
+        shell.style.setProperty('--guide-viewport-top', `${viewport.offsetTop}px`);
+      } else {
+        shell.style.removeProperty('--guide-viewport-height');
+        shell.style.removeProperty('--guide-viewport-top');
+      }
+    };
+
+    syncViewport();
+    viewport.addEventListener('resize', syncViewport);
+    viewport.addEventListener('scroll', syncViewport);
+    return () => {
+      viewport.removeEventListener('resize', syncViewport);
+      viewport.removeEventListener('scroll', syncViewport);
+      shell.removeAttribute('data-guide-keyboard');
+      shell.removeAttribute('data-guide-tight-viewport');
+      shell.style.removeProperty('--guide-viewport-height');
+      shell.style.removeProperty('--guide-viewport-top');
+    };
+  }, [isGuideView]);
 
   return (
-    <div className="min-h-dvh bg-[#F6F7F5] dark:bg-zinc-950 text-[#1F2522] dark:text-zinc-100 flex flex-col antialiased overflow-x-hidden w-full max-w-full transition-colors">
+    <div
+      ref={shellRef}
+      className={`${isGuideView ? 'guide-app-shell' : 'min-h-dvh'} bg-[#F6F7F5] dark:bg-zinc-950 text-[#1F2522] dark:text-zinc-100 flex flex-col antialiased overflow-x-hidden w-full max-w-full transition-colors`}
+    >
       {/* Mobile Lightweight Header */}
       <MobileHeader />
 
       {/* Main Layout Area */}
-      <div className="flex-1 flex max-w-7xl w-full mx-auto overflow-hidden">
+      <div className={`${isGuideView ? 'guide-app-frame min-h-0' : ''} flex-1 flex max-w-7xl w-full mx-auto overflow-hidden`}>
         <DesktopSidebar />
 
         <main className={`flex-1 min-w-0 flex flex-col max-w-full overflow-x-hidden ${isGuideView ? 'px-0 sm:px-4 py-0 sm:py-2 overflow-hidden' : 'px-4 lg:px-8 py-4 lg:py-6 overflow-y-auto'}`}>
-          <MainContent />
+          <MainContent guideMicSlotRef={setGuideMicSlot} />
         </main>
       </div>
 
-      {/* Fixed 4-Tab Bottom Navigation */}
-      <MobileBottomNav />
+      <MobileBottomNav inFlow={isGuideView} />
 
       {/* Floating Contextual AI Button (Omitted on Guide page) */}
       {!isGuideView && <FloatingAIButton />}
 
       {/* Voice (step 1): floating mic, logged-in users only */}
-      <MicButton raised={!isGuideView} />
+      <MicButton raised={!isGuideView} inlineTarget={guideMicSlot} />
 
       {/* Bottom Sheets & Modals */}
       <NotificationDrawer />

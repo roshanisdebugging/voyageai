@@ -91,7 +91,7 @@ export const MobileHeader: React.FC = () => {
         )}
 
         {/* Center: Single Interactive Context Switcher Pill */}
-        <div className="relative" ref={dropdownRef}>
+        <div className="relative min-w-0" ref={dropdownRef}>
           <button
             type="button"
             onClick={() => setDropdownOpen(prev => !prev)}

@@ -23,6 +23,14 @@
   --color-text-secondary: #5F6863;
   --color-text-tertiary: #7C8580;
 
+  --itinerary-border: #cdd6d0;
+  --itinerary-control-border: #71837a;
+  --itinerary-muted: #4d5a53;
+  --itinerary-accent: #285a4c;
+  --itinerary-accent-surface: #e6f2ed;
+  --itinerary-error: #912440;
+  --itinerary-error-surface: #fcebf0;
+
   --bottom-nav-h: 64px;
   --header-h: 56px;
   --touch-target-min: 52px;
@@ -51,6 +59,14 @@
   --color-text-primary: #f4f4f5;
   --color-text-secondary: #a1a1aa;
   --color-text-tertiary: #71717a;
+
+  --itinerary-border: #414146;
+  --itinerary-control-border: #8c9a94;
+  --itinerary-muted: #bcc0bc;
+  --itinerary-accent: #79e6b7;
+  --itinerary-accent-surface: #14352c;
+  --itinerary-error: #ffabc0;
+  --itinerary-error-surface: #45232d;
 }
 
 /* Nighttime dark theme filter for Leaflet basemap tiles */
@@ -493,5 +509,49 @@ h6 {
   * {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+  }
+}
+
+/* The Guide shares the shell height with navigation; only the conversation scrolls. */
+.guide-app-shell {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.guide-app-shell > header {
+  flex-shrink: 0;
+}
+
+.guide-app-frame > aside {
+  height: auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.guide-app-shell[data-guide-keyboard] {
+  position: fixed;
+  inset-inline: 0;
+  top: var(--guide-viewport-top);
+  height: var(--guide-viewport-height);
+}
+
+.guide-app-shell[data-guide-keyboard] .guide-app-nav,
+.guide-app-shell[data-guide-tight-viewport] > header {
+  display: none;
+}
+
+.guide-app-shell[data-guide-keyboard] .guide-app-frame > main {
+  padding-block: 0;
+}
+
+.guide-app-shell[data-guide-keyboard] .guide-chat-header,
+.guide-app-shell[data-guide-keyboard] .guide-chat-composer {
+  padding-block: 0.25rem;
+}
+
+@media (max-height: 400px) {
+  .guide-app-shell .guide-chat-header,
+  .guide-app-shell .guide-chat-composer {
+    padding-block: 0.25rem;
   }
 }
