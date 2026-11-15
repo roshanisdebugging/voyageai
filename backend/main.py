@@ -1674,9 +1674,12 @@ async def places_autocomplete(q: str = "", lat: Optional[float] = None, lng: Opt
 
 @app.get("/api/places/details", dependencies=[Depends(places_limiter)])
 async def places_details(place_id: str):
-    """Google Places Details proxy with Redis caching."""
-    from services.google_maps_service import get_place_details
-    detail = await get_place_details(place_id)
+    """Place details for the map's details page (Google Places, full fields, cached). Bad IDs -> 404 without a Google call."""
+    from services.google_maps_service import get_place_details, is_valid_place_id
+    place_id = (place_id or "").strip()
+    if not is_valid_place_id(place_id):
+        raise HTTPException(status_code=404, detail="Place details not found.")
+    detail = await get_place_details(place_id, full=True)
     if not detail:
         raise HTTPException(status_code=404, detail="Place details not found.")
     return detail

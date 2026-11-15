@@ -39,6 +39,7 @@ import { ItineraryView } from './components/itinerary/ItineraryView';
 import { SavedPlacesPage } from './components/places/SavedPlacesPage';
 import { RefreshCw, AlertTriangle } from 'lucide-react';
 
+const PlaceDetailsPage = React.lazy(() => import('./components/places/PlaceDetailsPage'));
 const MapView = React.lazy(() =>
   import('./components/map/MapView').then((mod) => ({ default: mod.MapView }))
 );
@@ -148,6 +149,11 @@ const MainContent: React.FC = () => {
       <Route path="/:lang/home" element={<HomePage />} />
       <Route path="/:lang" element={<HomePage />} />
       <Route path="/:lang/*" element={<LocaleRedirect />} />
+      <Route path="/details/:placeId" element={
+        <React.Suspense fallback={<div className="h-full min-h-[350px] flex items-center justify-center p-12 text-[#355F58]"><RefreshCw className="w-8 h-8 animate-spin" /></div>}>
+          <PlaceDetailsPage />
+        </React.Suspense>
+      } />
       <Route path="/map" element={
         <React.Suspense fallback={<div className="h-full min-h-[350px] flex items-center justify-center p-12 text-[#355F58]"><RefreshCw className="w-8 h-8 animate-spin" /></div>}>
           <MapView />

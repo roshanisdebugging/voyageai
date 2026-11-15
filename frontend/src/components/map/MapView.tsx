@@ -8,11 +8,12 @@ import {
 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { getApiBaseUrl, DEFAULT_HEADERS, getAuthHeaders } from '../../config/apiConfig';
+import { getApiBaseUrl, DEFAULT_HEADERS } from '../../config/apiConfig';
 import { useAudioGuide } from '../../hooks/useAudioGuide';
 import { createUserLocationIcon, createPoiIcon } from './mapIcons';
-import { AddToItineraryModal, type ItineraryDayOption } from '../itinerary/AddToItineraryModal';
-import { sanitizeLocationName } from '../../utils/locationSanitizer';
+import { AddToItineraryModal } from '../itinerary/AddToItineraryModal';
+import { usePlaceItineraryAdd } from '../itinerary/usePlaceItineraryAdd';
+import { useNavigate } from 'react-router-dom';
 import { getCanonicalCategory, type CanonicalCategoryKey } from './mapCategoryConfig';
 import { useTheme } from '../../context/ThemeContext';
 import { GOOGLE_MAP_DARK_STYLES } from '../../utils/googleMapStyles';
@@ -22,6 +23,8 @@ import type { DestinationReference } from '../../features/trip/types';
 
 // Shown when there is no location and no trip yet, so search still works.
 const INDIA_CENTER: [number, number] = [22.9734, 78.6569];
+// Where the map was when the user opened a place's Details page; restored once on the way back.
+let returnView: { center: [number, number]; zoom: number } | null = null;
 const SEARCH_DEBOUNCE_MS = 300;
 
 /** "850 m" / "4.2 km" / "240 km" */
@@ -77,9 +80,10 @@ const HEADER_HEIGHT = 64;
 const BOTTOM_NAV_HEIGHT = 72;
 
 export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
-  const { userLocation, userLocationName, isFollowMode, setIsFollowMode } = useApp();
-  const { currentTrip, currentItinerary, refetchItinerary } = useTrip();
+  const { userLocation, isFollowMode, setIsFollowMode } = useApp();
+  const { currentTrip } = useTrip();
   const { mapFocusTarget, setMapFocusTarget, navigateToExplore } = useNavigation();
+  const navigate = useNavigate();
   const { theme } = useTheme();
 
   // If a Google Maps JS API map instance is supplied, apply custom dark JSON styles dynamically
@@ -114,10 +118,9 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
   const [playingPlaceId, setPlayingPlaceId] = useState<string | null>(null);
   const [audioLoadingId, setAudioLoadingId] = useState<string | null>(null);
 
-  // Day picker modal state & added place day map
-  const [selectedPlaceForModal, setSelectedPlaceForModal] = useState<any | null>(null);
-  const [addedPlaceDays, setAddedPlaceDays] = useState<Map<string, number>>(new Map());
-  const [isAddingToItinerary, setIsAddingToItinerary] = useState<boolean>(false);
+  // "Add to Itinerary" day picker (shared with the place details page)
+  const itineraryAdd = usePlaceItineraryAdd();
+  const addedPlaceDays = itineraryAdd.addedPlaceDays;
 
   // Map search (India only, straight-line distance from the current location)
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -128,80 +131,13 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
   const searchMarkerRef = useRef<L.Marker | null>(null);
   const searchSeqRef = useRef(0);
 
-  const modalDays: ItineraryDayOption[] = useMemo(() => {
-    if (currentItinerary?.days && currentItinerary.days.length > 0) {
-      return currentItinerary.days.map((d) => ({
-        id: d.id,
-        dayNumber: d.dayNumber,
-        title: d.title || `Day ${d.dayNumber}`,
-      }));
-    }
-    const totalDays = currentTrip?.totalDays || 3;
-    return Array.from({ length: Math.max(totalDays, 1) }, (_, i) => ({
-      id: `day_${i + 1}`,
-      dayNumber: i + 1,
-      title: `Day ${i + 1} Highlights`,
-    }));
-  }, [currentItinerary, currentTrip]);
-
-  // Handle Add to Itinerary confirmation from modal
-  const handleConfirmAddToItinerary = async (dayId: string, timeSlot: string) => {
-    if (!selectedPlaceForModal) return;
-    setIsAddingToItinerary(true);
-
-    const targetDay = modalDays.find((d) => d.id === dayId);
-    const dayNumber = targetDay?.dayNumber || 1;
-    // First number of the price text ("₹500 - ₹1,500" -> 500). Unknown price -> 0.
-    const firstNumber = (selectedPlaceForModal.price_approx || '').match(/\d[\d,]*/);
-    const costInt = firstNumber ? parseInt(firstNumber[0].replace(/,/g, ''), 10) : 0;
-    const loc = sanitizeLocationName(selectedPlaceForModal.address || userLocationName);
-
-    const payload = {
-      trip_id: currentTrip?.id || 'active_trip',
-      destination: currentTrip?.destination?.name || userLocationName || 'Local Area',
-      item_id: selectedPlaceForModal.id,
-      day_id: dayId,
-      day_number: dayNumber,
-      time_slot: timeSlot,
-      title: selectedPlaceForModal.name,
-      location: loc,
-      location_name: loc,
-      tag: selectedPlaceForModal.category || 'spotlight',
-      price: selectedPlaceForModal.price_approx || undefined,
-      estimated_cost_inr: costInt,
-      activity_type: selectedPlaceForModal.category || 'spotlight',
-      is_confirmed: true,
-    };
-
-    try {
-      const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/trips/itinerary/add`, {
-        method: 'POST',
-        headers: {
-          ...DEFAULT_HEADERS,
-          ...getAuthHeaders(),
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
-        setAddedPlaceDays((prev) => new Map(prev).set(selectedPlaceForModal.id, dayNumber));
-        setSelectedPlaceForModal(null);
-        if (refetchItinerary) {
-          await refetchItinerary(currentTrip?.id || payload.trip_id);
-        }
-      }
-    } catch (err) {
-      console.warn('[MAP] Add to itinerary error:', err);
-    } finally {
-      setIsAddingToItinerary(false);
-    }
-  };
-
   // Refs for Leaflet event closures
   const activeCategoryRef = useRef(activeCategory);
   const isFollowModeRef = useRef(isFollowMode);
   const hasUserPannedRef = useRef(false);
+  // Read once per mount into a ref, so React's dev double-run of effects restores it too.
+  const restoreViewRef = useRef(returnView);
+  const hadCoordsRef = useRef<boolean>(!!activeCoords);
   const isProgrammaticMoveRef = useRef(false);
 
   useEffect(() => { activeCategoryRef.current = activeCategory; }, [activeCategory]);
@@ -319,12 +255,19 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     if (!mapContainerRef.current) return;
     if (mapInstanceRef.current) return; // Initialize once
 
-    // Starts at the current location (or trip destination); otherwise all of India, so search still works.
-    const [initialLat, initialLng] = activeCoords || INDIA_CENTER;
+    // Back from a place's Details page: reopen exactly there (once); follow mode and the first GPS fix
+    // leave it alone. Otherwise the current location (or trip destination), or all of India.
+    const restore = restoreViewRef.current;
+    returnView = null;
+    if (restore) {
+      hasUserPannedRef.current = true;
+      hadCoordsRef.current = true;
+    }
+    const [initialLat, initialLng] = restore?.center || activeCoords || INDIA_CENTER;
 
     const map = L.map(mapContainerRef.current, {
       center: [initialLat, initialLng],
-      zoom: activeCoords ? 15 : 5,
+      zoom: restore?.zoom ?? (activeCoords ? 15 : 5),
       zoomControl: false,
       attributionControl: false,
     });
@@ -394,7 +337,6 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
   }, [userLocation, activeCoords, isFollowMode]);
 
   // The map may start before GPS answers: move to the location the first time it arrives.
-  const hadCoordsRef = useRef<boolean>(!!activeCoords);
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !activeCoords || hadCoordsRef.current) return;
@@ -843,7 +785,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedPlaceForModal(place);
+                      itineraryAdd.open(place);
                     }}
                     className={`flex-1 min-h-[44px] px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors press-scale ${addedPlaceDays.has(place.id)
                         ? 'bg-[#1F5A3F]/10 dark:bg-emerald-950/60 text-[#1F5A3F] dark:text-emerald-400 border border-[#1F5A3F]/30 dark:border-emerald-800/40'
@@ -865,7 +807,26 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      navigateToExplore(place.id, place.category);
+                      const map = mapInstanceRef.current;
+                      if (map) {
+                        const c = map.getCenter();
+                        returnView = { center: [c.lat, c.lng], zoom: map.getZoom() };
+                      }
+                      navigate(`/details/${encodeURIComponent(place.id)}`, {
+                        state: {
+                          place: {
+                            id: place.id,
+                            name: place.name,
+                            category: place.category,
+                            distanceText: place.distanceMeters != null ? formatDistance(place.distanceMeters) : undefined,
+                            address: place.address,
+                            latitude: place.latitude,
+                            longitude: place.longitude,
+                            description: place.description,
+                            price_approx: place.price_approx,
+                          },
+                        },
+                      });
                     }}
                     className="min-h-[44px] px-4 rounded-xl bg-white dark:bg-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-700 text-gray-900 dark:text-zinc-100 border border-gray-200 dark:border-zinc-700 font-semibold text-xs flex items-center gap-1.5 press-scale transition-colors"
                   >
@@ -909,19 +870,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       )}
 
       {/* Interactive Day Selection Modal */}
-      <AddToItineraryModal
-        isOpen={Boolean(selectedPlaceForModal)}
-        onClose={() => {
-          if (!isAddingToItinerary) setSelectedPlaceForModal(null);
-        }}
-        itemTitle={selectedPlaceForModal?.name || ''}
-        days={modalDays}
-        isSubmitting={isAddingToItinerary}
-        onConfirm={handleConfirmAddToItinerary}
-        category={selectedPlaceForModal?.category}
-        location={sanitizeLocationName(selectedPlaceForModal?.address || userLocationName)}
-        price={selectedPlaceForModal?.price_approx}
-      />
+      <AddToItineraryModal {...itineraryAdd.modalProps} />
     </div>
   );
 };

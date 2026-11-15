@@ -35,6 +35,9 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   const [phase, setPhase] = useState<Phase>('idle');
   const [entries, setEntries] = useState<PanelEntry[]>([]);
   const [remaining, setRemaining] = useState(MAX_RECORDING_MS / 1000);
+  const [note, setNote] = useState<string | null>(null);
+  const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (noteTimerRef.current) clearTimeout(noteTimerRef.current); }, []);
 
   const phaseRef = useRef<Phase>('idle');
   const conversationId = useRef(`conv_${newId()}`);
@@ -114,6 +117,10 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
         const navTo = (msg.ui_actions || []).find((a) => a.type === 'navigate')?.to;
         update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
         if (phaseRef.current !== 'waiting') return; // the user already moved on (e.g. started recording)
+        // A note (e.g. "Details badal sakti hain.") is shown as small text for a few seconds, never spoken.
+        if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
+        setNote(typeof msg.note === 'string' && msg.note ? msg.note.slice(0, 120) : null);
+        if (msg.note) noteTimerRef.current = setTimeout(() => setNote(null), 6000);
         // Step 2: run the agent's ui_actions FIRST (e.g. open the map), then speak.
         runUiActions(msg.ui_actions, {
           navigate: (to) => navigate(to),
@@ -236,6 +243,16 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   return (
     <>
       {SHOW_TEST_PANEL && <TestTranscriptPanel entries={entries} onClear={() => setEntries([])} />}
+      {note && (
+        <p
+          role="status"
+          data-voice-note
+          className="fixed z-[var(--z-floating)] right-4 max-w-[220px] px-2.5 py-1 rounded-lg bg-white/95 dark:bg-zinc-900/95 border border-[#D9DEDA] dark:border-zinc-700 text-[11px] text-[#5F6863] dark:text-zinc-400 shadow-sm"
+          style={{ bottom: `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px + 64px)` }}
+        >
+          {note}
+        </p>
+      )}
       <button
         type="button"
         onClick={handleTap}

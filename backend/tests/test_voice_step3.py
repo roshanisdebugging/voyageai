@@ -119,7 +119,8 @@ nav_desc = agent.NAVIGATE_TOOL["function"]["description"]
 check("navigate tool has a meaning for every page", all(f"{p}: " in nav_desc for p in pages.PAGES))
 check("plan_trip meaning: open the form, don't ask for details", "plan_trip: start planning a NEW trip" in nav_desc and "Do NOT ask" in nav_desc)
 check("more: settings and profile", "more: settings, profile" in nav_desc)
-check("five tools offered", sorted(agent.TOOL_NAMES) == ["answer_question", "list_my_trips", "navigate", "open_trip", "search_places"])
+check("seven tools offered", sorted(agent.TOOL_NAMES) == ["answer_question", "cant_help", "get_weather", "list_my_trips", "navigate",
+                                                         "open_trip", "search_places"])
 check("open_trip takes no trip_id from the model", "trip_id" not in json.dumps(agent.OPEN_TRIP_TOOL))
 sp = agent.build_system_prompt("/home", None, today="Saturday 15 November 2026")
 check("system prompt has today's date and tool rules", "Today (India): Saturday 15 November 2026" in sp
@@ -134,12 +135,12 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
 
     # ---------------- search_places
     with mock.patch.object(places, "search_places", lambda q: SEARCH_HITS):
-        FakeGroqTools.queue = [("tool", ("search_places", {"query": "Hawa Mahal"}))]
+        FakeGroqTools.queue = [("tool", ("search_places", {"query": "Hawa Mahal", "show": True}))]
         r = ra("Hawa Mahal dikhao")
     check("search_places -> map_focus + navigate /map",
           r.ui_actions == [{"type": "map_focus", "lat": 26.9239, "lng": 75.8267, "name": "Hawa Mahal", "place_id": "ChIJhawa"},
                            {"type": "navigate", "to": "/map"}] and r.action == "map_focus", r.ui_actions)
-    check("search_places reply (Hinglish)", r.reply_text == "Hawa Mahal map par dikha diya.", r.reply_text)
+    check("search_places reply (Hinglish)", r.reply_text == "Hawa Mahal: map par dikha diya.", r.reply_text)
     with mock.patch.object(places, "search_places", lambda q: [{"name": "Eiffel Tower", "latitude": 48.858, "longitude": 2.294}]):
         FakeGroqTools.queue = [("tool", ("search_places", {"query": "Eiffel Tower"}))]
         r = ra("show me Eiffel Tower", lang="en")
@@ -211,57 +212,105 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
     r = ra("meri trips", user=OTHER)
     check("the other user's list has no Jaipur", "Jaipur" not in r.reply_text and "Manali" in r.reply_text, r.reply_text)
 
-    # ---------------- answer_question
+    # ---------------- answer_question (fixes-before-step4: grounded facts only, 2 sentences, note not spoken)
     saved = []
     guard = {"allowed": True}
-    gem = {"text": "**Amber Fort** subah 8 baje khulta hai. Subah jaldi jaana best hai, bheed kam hoti hai. Ticket 200 rupaye ka hai. "
-                   "Hathi ki sawari bhi hoti hai.\n<<<CHIPS:[\"Timings\",\"Tickets\"]>>>"}
-    groq_answer = {"text": "Amber Fort subah 8 se shaam 5:30 tak khula rehta hai. Subah jaldi jaaiye. Teesra vaakya."}
+    gem = {"grounded": ("**Amber Fort** subah jaldi jaana best hai. Bheed kam hoti hai. Teesra vaakya.\n<<<CHIPS:[\"Timings\"]>>>", None),
+           "plain": ("Amber Fort subah jaana accha hai. Dopahar mein garmi hoti hai. Teesra.", None)}
+    gem_calls = []
+    groq_answer = {"text": "Amber Fort subah jaaiye. Shaam ko roshni dekhiye. Teesra vaakya."}
+
+    def fake_gem(q, sp, grounded):
+        gem_calls.append(grounded)
+        return gem["grounded" if grounded else "plain"]
 
     def fake_guard(q):
         return (True, "PASSED", "") if guard["allowed"] else (False, "OFF_TOPIC", "nope")
 
     with mock.patch.object(tgs, "evaluate_cost_guards", fake_guard), \
-            mock.patch.object(tgs, "_voice_gemini", lambda q, sp: gem["text"]), \
+            mock.patch.object(tgs, "_gemini_rest", fake_gem), \
             mock.patch.object(tgs, "_voice_groq", lambda q, sp: groq_answer["text"]), \
             mock.patch.object(tgs, "persist_message", lambda *a, **k: saved.append((a, k))):
         FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?", "place": "Amber Fort"}))]
         r = ra("Amber Fort kab jaana best hai")
-        check("answer_question: spoken answer = first 2 sentences, no markdown/chips",
-              r.reply_text == "Amber Fort subah 8 baje khulta hai. Subah jaldi jaana best hai, bheed kam hoti hai."
-              and r.action == "answer" and r.ui_actions == [], r.reply_text)
-        check("answer_question: full answer + question saved to Guide history (mode voice)",
-              len(saved) == 2 and saved[0][0][1] == "user" and saved[1][0][1] == "assistant" and saved[1][0][3] == "voice"
-              and "Ticket 200 rupaye" in saved[1][0][2] and "CHIPS" not in saved[1][0][2] and "**" not in saved[1][0][2], saved[-1:])
-        check("answer_question: one deciding Groq call, tool time counted separately", r.llm_ms >= 0 and r.tool_ms >= 0)
+        check("grounded Gemini answer: 2 sentences, no markdown/chips, no note",
+              r.reply_text == "Amber Fort subah jaldi jaana best hai. Bheed kam hoti hai." and r.action == "answer"
+              and r.note is None and r.error_code is None, (r.reply_text, r.note, r.error_code))
+        check("answer + question saved to Guide history (mode voice, source gemini_grounded)",
+              len(saved) == 2 and saved[1][0][3] == "voice" and saved[1][0][5].get("source") == "gemini_grounded"
+              and "CHIPS" not in saved[1][0][2] and "**" not in saved[1][0][2], saved[-1:])
 
-        saved.clear()
-        gem["text"] = None
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort timing?"}))]
+        gem["grounded"] = (None, "http_429")
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
+        r = ra("Amber Fort kab jaana best hai")
+        check("grounding fails (429) on a general question -> plain Gemini; note on screen, not spoken",
+              r.reply_text == "Amber Fort subah jaana accha hai. Dopahar mein garmi hoti hai." and r.note == "Details badal sakti hain."
+              and "Details" not in r.reply_text and r.error_code == "answered_by_gemini:http_429", (r.reply_text, r.note, r.error_code))
+
+        gem["plain"] = (None, "http_500")
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
+        r = ra("Amber Fort kab jaana best hai")
+        check("plain Gemini fails too -> Groq (2 sentences, note on screen)", r.reply_text == "Amber Fort subah jaaiye. Shaam ko roshni dekhiye."
+              and r.note == "Details badal sakti hain." and r.error_code.startswith("answered_by_groq"), (r.reply_text, r.error_code))
+
+        gem_calls.clear()
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort ki timing kya hai?", "facts": True}))]
         r = ra("Amber Fort ki timing kya hai")
-        check("Gemini fails -> Groq answers (2 sentences) + 'Details badal sakti hain.'",
-              r.reply_text == "Amber Fort subah 8 se shaam 5:30 tak khula rehta hai. Subah jaldi jaaiye. Details badal sakti hain."
-              and r.error_code == "answered_by_groq", r.reply_text)
-        check("Groq answer saved with source groq", saved and saved[-1][0][5].get("source") == "groq")
+        check("timings without a grounded answer -> 'Abhi pakki jaankari nahi mil rahi.', never guessed",
+              r.reply_text == "Abhi pakki jaankari nahi mil rahi." and gem_calls == [True] and r.error_code == "no_facts:http_429", (r.reply_text, gem_calls))
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Hawa Mahal ka ticket kitne ka hai?"}))]
+        r = ra("Hawa Mahal ka ticket kitne ka hai", lang="en")
+        check("price question detected even without facts=true (English reply for English words? no: Hinglish words -> hi)",
+              r.reply_text == "Abhi pakki jaankari nahi mil rahi.", r.reply_text)
+        gem["grounded"] = ("Amber Fort 8 baje khulta hai.", "not_grounded")
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "What are Amber Fort timings?", "facts": True}))]
+        r = ra("What are Amber Fort timings?", lang="en")
+        check("an answer without search sources is not used for facts", r.reply_text == "I couldn't find reliable info right now.", r.reply_text)
+        gem["grounded"] = ("Amber Fort 8 baje se 5:30 tak khula hai. Ticket 200 rupaye.", None)
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort timing?", "facts": True}))]
+        r = ra("Amber Fort ki timing kya hai")
+        check("grounded answer for facts is used", r.reply_text.startswith("Amber Fort 8 baje") and r.error_code is None)
 
-        groq_answer["text"] = None
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort timing?"}))]
-        r = ra("Amber Fort ki timing kya hai", lang="en")
-        check("both fail -> polite 'couldn't get an answer'", r.reply_text == agent.ANSWER_FAILED["en"] and r.error_code == "answer_failed")
+        gem["grounded"], gem["plain"], groq_answer["text"] = (None, "timeout"), (None, "timeout"), None
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "best food in Jaipur?"}))]
+        r = ra("What is the best food in Jaipur", lang="en")
+        check("everything fails -> polite 'couldn't get an answer'", r.reply_text == agent.ANSWER_FAILED["en"] and r.error_code.startswith("answer_failed"))
 
         guard["allowed"] = False
-        called = []
-        with mock.patch.object(tgs, "_voice_gemini", lambda q, sp: called.append(1) or "x"):
-            FakeGroqTools.queue = [("tool", ("answer_question", {"question": "write me python code"}))]
-            r = ra("write python code", lang="en")
-        check("cost guard refuses -> decline, Gemini never called", r.reply_text == tgs.VOICE_DECLINE["en"] and not called
-              and r.error_code == "declined")
+        gem_calls.clear()
+        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "write me python code"}))]
+        r = ra("write python code", lang="en")
+        check("cost guard refuses -> action decline, Gemini never called", r.reply_text == tgs.VOICE_DECLINE["en"] and not gem_calls
+              and r.action == "decline", (r.action, gem_calls))
         guard["allowed"] = True
+
+    # _gemini_rest itself: google_search tool, grounding check, 429 cool-down
+    class Resp:
+        def __init__(self, code, body):
+            self.status_code, self._b = code, body
+        def json(self):
+            return self._b
+    sent = []
+    queue = [Resp(429, {}), Resp(200, {"candidates": [{"content": {"parts": [{"text": "Plain."}]}}]})]
+    tgs._grounding_off_until = 0.0
+    with mock.patch.object(tgs.requests, "post", lambda url, json=None, headers=None, timeout=None: sent.append(json) or queue.pop(0)), \
+            mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test"}):
+        t1 = tgs._gemini_rest("q", "sp", grounded=True)
+        t2 = tgs._gemini_rest("q", "sp", grounded=True)
+        t3 = tgs._gemini_rest("q", "sp", grounded=False)
+    check("grounded call sends the google_search tool", sent and sent[0].get("tools") == [{"google_search": {}}])
+    check("429 -> grounding skipped for a while (no HTTP call)", t1 == (None, "http_429") and t2 == (None, "grounding_cooldown") and len(sent) == 2)
+    check("plain call still works during the cool-down", t3 == ("Plain.", None) and "tools" not in sent[1])
+    tgs._grounding_off_until = 0.0
+    with mock.patch.object(tgs.requests, "post", lambda *a, **k: Resp(200, {"candidates": [{"content": {"parts": [{"text": "X."}]}, "groundingMetadata": {}}]})), \
+            mock.patch.dict(os.environ, {"GEMINI_API_KEY": "test"}):
+        t4 = tgs._gemini_rest("q", "sp", grounded=True)
+    check("grounded call without search sources -> not_grounded", t4 == ("X.", "not_grounded"))
 
     # ---------------- no tool / unknown tool
     FakeGroqTools.queue = [("text", "Main sirf aapki trip mein madad kar sakta hoon.")]
     r = ra("ek joke sunao")
-    check("off-topic: decline text, no actions", r.ui_actions == [] and r.action == "reply")
+    check("off-topic said as text -> action decline, no actions", r.ui_actions == [] and r.action == "decline")
     FakeGroqTools.queue = [("tool", ("delete_trip", {"name": "Goa"}))]
     r = ra("Goa trip delete karo")
     check("a tool we don't offer -> no action", r.ui_actions == [] and r.error_code == "unknown_tool")
@@ -273,13 +322,13 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
         logging.getLogger(name).addHandler(handler)
         logging.getLogger(name).setLevel(logging.DEBUG)
     with mock.patch.object(tgs, "evaluate_cost_guards", lambda q: (True, "PASSED", "")), \
-            mock.patch.object(tgs, "_voice_gemini", lambda q, sp: None), \
+            mock.patch.object(tgs, "_gemini_rest", lambda q, sp, grounded: (None, "http_429")), \
             mock.patch.object(tgs, "_voice_groq", lambda q, sp: "Secretanswer zebra. Second."), \
             mock.patch.object(tgs, "persist_message", lambda *a, **k: None), \
             mock.patch.object(places, "search_places", lambda q: SEARCH_HITS):
         FakeGroqTools.queue = [("tool", ("answer_question", {"question": "zebraquestion about Jaipur"})),
                                ("tool", ("open_trip", {"name_or_destination": "Zanzibarxyz"})),
-                               ("tool", ("search_places", {"query": "Hawa Mahal zebraplace"}))]
+                               ("tool", ("search_places", {"query": "Hawa Mahal zebraplace", "show": True}))]
         ra("zebraquestion about Jaipur")
         ra("Zanzibarxyz wali trip")
         ra("zebraplace dikhao")

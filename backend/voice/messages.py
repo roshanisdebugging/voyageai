@@ -16,7 +16,7 @@ Server -> app (text frames, JSON):
                                                           sent as soon as speech-to-text finishes
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
    "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
-   "llm_ms", "tool_ms"}
+   "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null)}
                                                           the agent's spoken reply (steps 1b + 2), after
                                                           "transcript"; the app runs ui_actions first
   {"type": "error", "code": "...", "message": "...", "turn_id"?}
@@ -80,7 +80,7 @@ def recording(turn_id: str) -> Dict[str, Any]:
 
 def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str, tts_ms: int,
           ui_actions: Optional[list] = None, action: str = "reply", llm_ms: int = 0,
-          tool_ms: int = 0) -> Dict[str, Any]:
+          tool_ms: int = 0, note: Optional[str] = None) -> Dict[str, Any]:
     return {
         "type": "reply",
         "turn_id": turn_id,
@@ -92,6 +92,7 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
         "action": action,
         "llm_ms": llm_ms,
         "tool_ms": tool_ms,
+        "note": note,
     }
 
 

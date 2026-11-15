@@ -20,7 +20,7 @@ Status (15 Nov 2026):
 - Step 0 is done.
 - Voice steps 1 and 1b are done.
 - Step 2 is done: on `main`, tested by the owner on 15 Nov 2026.
-- Step 3 is built on the local branch `voice-step3` (not pushed), waiting for the owner's test.
+- Step 3 and the "Fixes before Step 4" are on `main` (15 Nov 2026), waiting for the owner's test by voice.
 - Steps 1c and 3–7 are planned in detail below (section 8).
 
 The plan was first agreed on 12 Nov 2026.
@@ -814,7 +814,7 @@ Devanagari vs Roman script is **not** a problem: the user never sees the transcr
 
 ---
 
-#### Step 3 notes (15 Nov 2026, local branch `voice-step3`, not pushed)
+#### Step 3 notes (15 Nov 2026; on `main` since the fixes below)
 
 **Status: built and tested by script and eval. Waiting for the owner's test by voice.** Nothing in this step changes data.
 
@@ -867,6 +867,29 @@ Devanagari vs Roman script is **not** a problem: the user never sees the transcr
 13. "Nayi trip banani hai" -> new trip form, no questions.
 14. "Settings kholo"
 15. "Ek joke sunao" -> polite decline.
+
+#### Fixes before Step 4 (15 Nov 2026, on `main`)
+
+**Status: built and tested by script and eval; pushed to `main` on the owner's request. Not yet tested by voice.** Step 3 is included.
+
+| # | Item | What changed (files) |
+| --- | --- | --- |
+| 1 | Gemini answers not used | Cause found: **the Gemini key's Google Search grounding quota is exhausted** (HTTP 429 on every model, for both Search and Maps grounding; plain Gemini works). Not a code bug, and no code fix can restore it: it needs billing or another key. Code: grounding now uses the current `google_search` tool over REST (`tour_guide_service._gemini_rest`), the fallback logs its error code, and after a 429 grounding is skipped for 10 min (saves ~0.5 s per question). |
+| 2 | No invented facts | Timings / hours / prices / fees only from a grounded answer (one with search sources); else "Abhi pakki jaankari nahi mil rahi." / "I couldn't find reliable info right now." Detected by `facts=true` from the agent and a word check (`is_fact_question`). Other questions: plain Gemini, then Groq. |
+| 3 | "Where is X" answers | `search_places(query, show)`: "kahan hai / where is" -> "Taj Mahal Agra, Uttar Pradesh mein hai. Map par dikhaun?" (city/state from the search result); the map actions wait in Redis (`voice:pending:*`, 2 min) and run on "haan/yes" without an LLM call. "dikhao / show me" -> "Hawa Mahal, Jaipur: map par dikha diya." (`voice/tools/lookups.py`, `voice/agent.py`) |
+| 4 | Weather from real data | New read-only tool `get_weather(place, day)` -> `weather_service` (Open-Meteo): "Kal Jaipur mein baarish ka 20% chance hai, high 24°C." No place -> the open trip's destination (ownership re-checked). Weather never goes to answer_question. |
+| 5 | Shorter answers | Max 2 short sentences. "Details badal sakti hain" is a separate `note` field in `reply`, shown as small text by the mic button, never spoken (`messages.py`, `MicButton.tsx`). |
+| 6 | Garbled vs off-topic | New tool `cant_help(reason)`: `unclear` -> "Samajh nahi aaya, phir se boliye."; `off_topic` -> "Main sirf aapki trip mein madad kar sakta hoon." No letters at all -> unclear without an LLM call. |
+| 7 | Groq tool errors | `GroqTransient` (400 `tool_use_failed`, 5xx, timeout, bad JSON) -> one retry, then the fallback reply (`groq_client.py`, `agent.py`). Optional tool arguments accept null. |
+| 8 | Reply voice language | `voice/lang.py`: Devanagari or Hindi words in Roman letters -> hi-IN, plain English -> en-IN; used for the TTS voice (from the reply text) and the templates (from the user's words), not Whisper's tag. |
+| 9 | Logging | `total_time_ms` = "stop" received -> "reply" sent (was STT only); a `total_ms` log line per turn. `agent_action`: navigate:<page> / map_focus / where / answer / weather / decline / unclear / list_trips / open_trip / reply / error; a cost-guard refusal is `decline`. |
+| 10 | Map card "Details" | New `/details/:placeId` (`PlaceDetailsPage.tsx`): card data at once, then `/api/places/details` (now full fields: opening hours, phone, website, Google Maps link, summary; empty ones hidden; bad/mock IDs -> 404 without a Google call). Add to itinerary (shared hook `usePlaceItineraryAdd`), Save with Undo, Open in Google Maps; Back returns to the map at the same position. |
+
+**Tests:** fixes 45/45 (`test_voice_fixes4.py`), step 3 48/48, step 2 51/51, step 1b 22/22, step 1 31/31, place details 10/10, step 0 27/27, ownership 21/21, step 0e 13/13. Frontend build and lint clean.
+
+**Eval** (`python -m scripts.eval_lookups`, real Groq): step 3 + fixes phrases **37/40 = 92%**, step 2 phrases **32/32 = 100%**. Misses: "where is Charminar" (Groq wrote "Charminal"), "pichli trip kholo" (asked which instead of `which=last`), "ka ka the trip sa no hmm" (asked a question instead of "Samajh nahi aaya"). Deciding call: median 819 ms, average 842 ms.
+
+**Not measured yet:** the 10-question Gemini count (with grounding out of quota it would be 0 of 10 grounded) and the average total times per category (not run because the owner asked to push first).
 
 ### Step 4 in detail: create a trip by voice
 

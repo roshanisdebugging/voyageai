@@ -20,6 +20,7 @@ from voice import debug_store
 from voice.messages import ErrorCode
 from voice.stt import STTError, STTRateLimited, get_stt, pcm_duration_ms
 from voice.agent import TripInfo, run_agent
+from voice.lang import detect_lang
 from voice.tts import REPLY_MIME, synthesize_reply
 
 EMPTY_TRANSCRIPT_REPLY = "Mujhe kuch sunai nahi diya, phir se boliye."
@@ -65,6 +66,8 @@ class TurnResult:
     action: str = "reply"                # "navigate:<page>" | "reply" | "error"
     llm_ms: int = 0
     tool_ms: int = 0                     # step 3: the tool after the deciding call (answer: cost guard + Gemini)
+    note: Optional[str] = None           # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
+    reply_language: Optional[str] = None # "hi" / "en", from the reply text (TTS voice)
     tts_error: Optional[str] = None      # None = reply audio ready
 
 
@@ -101,7 +104,7 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
     """Stage 2a: the agent (one Groq call). Empty transcript -> a fixed reply, no LLM call."""
     text = (result.text or "").strip()
     if not text:
-        result.reply_text, result.ui_actions, result.action, result.llm_ms = EMPTY_TRANSCRIPT_REPLY, [], "reply", 0
+        result.reply_text, result.ui_actions, result.action, result.llm_ms = EMPTY_TRANSCRIPT_REPLY, [], "unclear", 0
         return
     try:
         agent = run_agent(text, result.language, user_id=ctx.user_id,
@@ -112,15 +115,17 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
         logger.warning("[VOICE] turn=%s agent crashed: %s", ctx.turn_id, type(exc).__name__)
         result.reply_text, result.ui_actions, result.action, result.llm_ms = FALLBACK_REPLY, [], "error", 0
         return
-    result.reply_text, result.ui_actions, result.action, result.llm_ms, result.tool_ms = (
-        agent.reply_text, agent.ui_actions, agent.action, agent.llm_ms, agent.tool_ms)
+    result.reply_text, result.ui_actions, result.action, result.llm_ms, result.tool_ms, result.note = (
+        agent.reply_text, agent.ui_actions, agent.action, agent.llm_ms, agent.tool_ms, agent.note)
 
 
 def make_reply(ctx: TurnContext, result: TurnResult) -> TurnResult:
     """Stage 2: agent decision + Sarvam audio. Fills the reply fields; never raises."""
     decide_reply(ctx, result)
+    # The voice follows the reply's own words (Hinglish -> hi-IN, plain English -> en-IN), not Whisper's tag.
+    result.reply_language = detect_lang(result.reply_text, result.language)
     try:
-        audio, mime, tts_ms, err = synthesize_reply(result.reply_text, result.language)
+        audio, mime, tts_ms, err = synthesize_reply(result.reply_text, result.reply_language)
     except Exception as exc:  # synthesize_reply doesn't raise, but a turn must never crash here
         audio, mime, tts_ms, err = None, REPLY_MIME, 0, type(exc).__name__
     result.reply_audio_b64, result.reply_mime, result.tts_ms, result.tts_error = audio, mime, tts_ms, err

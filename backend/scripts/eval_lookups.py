@@ -42,15 +42,24 @@ LOOKUP_CASES = [
     ("Amber Fort kab jaana best hai", "hi", "answer_question", has("amber"), True, None),
     ("Jaipur mein kya khana famous hai", "hi", "answer_question", has("jaipur", "khana", "food"), True, None),
     ("Hawa Mahal ka ticket kitne ka hai", "hi", "answer_question", has("hawa"), True, None),
-    ("kal Jaipur mein baarish hogi kya", "hi", "answer_question", has("jaipur", "baarish", "rain", "weather"), True, None),
     ("what is the best time to visit Goa", "en", "answer_question", has("goa"), True, None),
     ("is Udaipur safe at night", "en", "answer_question", has("udaipur"), True, None),
     ("Delhi se Agra kaise jaayein", "hi", "answer_question", has("agra"), True, None),
-    ("Hawa Mahal dikhao", "hi", "search_places", has("hawa"), True, None),
-    ("where is Amber Fort", "en", "search_places", has("amber"), True, None),
-    ("show me Gateway of India", "en", "search_places", has("gateway"), True, None),
-    ("India Gate map pe dikhao", "hi", "search_places", has("india gate"), True, None),
-    ("Qutub Minar kahan hai", "hi", "search_places", has("qutub"), True, None),
+    # "dikhao / show me" -> map now (show=true); "kahan hai / where is" -> say where, ask first (show=false)
+    ("Hawa Mahal dikhao", "hi", "search_places", lambda a: has("hawa")(a) and a.get("show") is True, True, None),
+    ("show me Gateway of India", "en", "search_places", lambda a: has("gateway")(a) and a.get("show") is True, True, None),
+    ("India Gate map pe dikhao", "hi", "search_places", lambda a: has("india gate")(a) and a.get("show") is True, True, None),
+    ("Amber Fort map par dikhao", "hi", "search_places", lambda a: has("amber")(a) and a.get("show") is True, True, None),
+    ("Taj Mahal kahan hai", "hi", "search_places", lambda a: has("taj")(a) and a.get("show") is False, True, None),
+    ("where is Amber Fort", "en", "search_places", lambda a: has("amber")(a) and a.get("show") is False, True, None),
+    ("Qutub Minar kahan hai", "hi", "search_places", lambda a: has("qutub")(a) and a.get("show") is False, True, None),
+    ("where is Charminar", "en", "search_places", lambda a: has("charminar")(a) and a.get("show") is False, True, None),
+    # weather -> get_weather (never answer_question)
+    ("kal Jaipur mein baarish hogi kya", "hi", "get_weather", lambda a: has("jaipur")(a) and str(a.get("day") or "").lower() in ("tomorrow", "kal"), True, None),
+    ("aaj Goa ka mausam kaisa hai", "hi", "get_weather", has("goa"), True, None),
+    ("will it rain in Mumbai tomorrow", "en", "get_weather", has("mumbai"), True, None),
+    ("Shimla mein kitni thand hai", "hi", "get_weather", has("shimla"), True, None),
+    ("what's the weather like today", "en", "get_weather", None, True, None),
     ("meri trips kaun si hain", "hi", "list_my_trips", lambda a: not a.get("include_past"), True, None),
     ("what trips do I have", "en", "list_my_trips", lambda a: not a.get("include_past"), True, None),
     ("meri purani trips batao", "hi", "list_my_trips", lambda a: a.get("include_past") is True, True, None),
@@ -67,6 +76,10 @@ LOOKUP_CASES = [
     ("ek joke sunao", "hi", "DECLINE", None, True, None),
     ("who won the cricket match", "en", "DECLINE", None, True, None),
     ("write a python program", "en", "DECLINE", None, True, None),
+    # garbled speech -> unclear (not "I only help with trips")
+    ("blorf manta kizzle vopo", "en", "UNCLEAR", None, True, None),
+    ("ka ka the trip sa no hmm", "hi", "UNCLEAR", None, True, None),
+    ("zhrr pateeka lomnu", "hi", "UNCLEAR", None, True, None),
     ("woh wala dikhao", "hi", "QUESTION", None, True, None),
 ]
 
@@ -92,9 +105,14 @@ def grade(expected, chk, out, has_trip):
     calls = [c for c in out["tool_calls"] if c.get("name") in agent.TOOL_NAMES]
     call = calls[0] if calls else None
     text = (out.get("content") or "").strip()
+    reason = (call.get("arguments") or {}).get("reason") if call and call["name"] == "cant_help" else None
     if expected in ("DECLINE", "NONE"):
-        ok = call is None or (call["name"] == "answer_question" and expected == "NONE")
-        return ok, (call["name"] if call else "no tool")
+        ok = (call is None and expected == "NONE") or reason == "off_topic" or (call is None and "sirf" in text.lower() or "only help" in text.lower())
+        if expected == "NONE":
+            ok = ok or call is None or (call and call["name"] in ("answer_question", "cant_help"))
+        return bool(ok), (f"{call['name']} {reason or ''}" if call else f"no tool: {text[:40]}")
+    if expected == "UNCLEAR":
+        return reason == "unclear", (f"{call['name']} {reason or (call.get('arguments') or {})}" if call else f"no tool: {text[:40]}")
     if expected == "QUESTION":
         return call is None and text.endswith("?"), (call["name"] if call else f"asked: {text[:40]}")
     if call is None:

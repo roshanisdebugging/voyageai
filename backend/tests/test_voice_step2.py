@@ -186,22 +186,31 @@ with mock.patch.object(groq_client.requests, "post", fake_groq):
 
     FakeGroq.queue = [("text", "Main sirf aapki trip mein madad kar sakta hoon. Koi aur sawaal? Teesra vaakya.")]
     r = ra("ek joke sunao")
-    check("off-topic -> no ui_actions, reply trimmed to 2 sentences",
-          r.ui_actions == [] and r.action == "reply" and r.reply_text == "Main sirf aapki trip mein madad kar sakta hoon. Koi aur sawaal?", r.reply_text)
+    # fixes-before-step4 item 6: a decline said as text becomes the fixed decline line (action "decline")
+    check("off-topic -> no ui_actions, the fixed decline line, action decline",
+          r.ui_actions == [] and r.action == "decline" and r.reply_text == "Main sirf aapki trip mein madad kar sakta hoon.", r.reply_text)
+    FakeGroq.queue = [("text", "Yeh pehla vaakya hai. Doosra vaakya. Teesra vaakya.")]
+    r = ra("kuch batao")
+    check("plain text reply trimmed to 2 sentences", r.reply_text == "Yeh pehla vaakya hai. Doosra vaakya." and r.action == "reply", r.reply_text)
 
     FakeGroq.queue = [("tool", "settings_page", None)]
     r = ra("woh kholo")
     check("unknown page -> 'Kaunsa page kholun?', no navigation", r.ui_actions == [] and r.reply_text == "Kaunsa page kholun?")
     FakeGroq.queue = [("tool", "map", 5)]
     r = ra("map day 5")
-    check("day on a non-itinerary page -> question, no navigation", r.ui_actions == [] and r.reply_text == "Kaunsa page kholun?")
+    # item 8: the template language follows the user's words ("map day 5" is English)
+    check("day on a non-itinerary page -> question, no navigation", r.ui_actions == [] and r.reply_text == "Which page should I open?", r.reply_text)
 
-    FakeGroq.queue = [("badargs",)]
+    # item 7: transient Groq errors (bad tool args, 5xx, 400 tool_use_failed) are retried once
+    FakeGroq.queue = [("badargs",), ("badargs",)]
     r = ra("map dikha")
-    check("malformed tool args -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.action == "error" and r.ui_actions == [])
-    FakeGroq.queue = [("http", 500)]
+    check("malformed tool args twice -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.action == "error" and r.ui_actions == [])
+    FakeGroq.queue = [("badargs",), ("tool", "map", None)]
     r = ra("map dikha")
-    check("Groq error -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.action == "error")
+    check("malformed tool args once -> retried, then works", r.ui_actions == [{"type": "navigate", "to": "/map"}], r)
+    FakeGroq.queue = [("http", 500), ("http", 500)]
+    r = ra("map dikha")
+    check("Groq 5xx twice -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.action == "error")
     FakeGroq.queue = [("http", 429)]
     r = ra("map dikha")
     check("Groq rate limit -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.error_code == "rate_limited")
@@ -294,11 +303,11 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.objec
         check("another user's trip_id is ignored (treated as none)", "Open trip: none" in sysmsg and "Secret Trip Of B" not in sysmsg)
         check("... so itinerary -> /trips", rep["ui_actions"] == [{"type": "navigate", "to": "/trips"}])
 
-        FakeGroq.queue = [("badargs",)]
+        FakeGroq.queue = [("badargs",), ("badargs",)]
         tr, rep = turn(ws, trip_id="trip_v2_a")
         check("socket: malformed tool args -> fallback reply", rep["reply_text"] == agent.FALLBACK_REPLY and rep["action"] == "error"
               and rep["ui_actions"] == [])
-        FakeGroq.queue = [("http", 500)]
+        FakeGroq.queue = [("http", 500), ("http", 500)]
         tr, rep = turn(ws, trip_id="trip_v2_a")
         check("socket: Groq error -> fallback reply", rep["reply_text"] == agent.FALLBACK_REPLY)
         FakeGroq.queue = [("tool", "food", None)]
