@@ -2,7 +2,7 @@
 One voice turn, run as stages in order.
 
 Stages: run_turn() = speech to text (its result goes to the app at once as "transcript"),
-then make_reply() = the agent decides (step 2: voice/agent.py, one tool: navigate) and Sarvam
+then make_reply() = the agent decides (voice/agent.py: navigate, answers and look-ups) and Sarvam
 speaks its short reply (step 1b TTS, never cached).
 after_turn() is the last stage, run once the app has its answer; it only feeds the test-only
 debug store (testing.md).
@@ -64,6 +64,7 @@ class TurnResult:
     ui_actions: List[Dict[str, Any]] = field(default_factory=list)
     action: str = "reply"                # "navigate:<page>" | "reply" | "error"
     llm_ms: int = 0
+    tool_ms: int = 0                     # step 3: the tool after the deciding call (answer: cost guard + Gemini)
     tts_error: Optional[str] = None      # None = reply audio ready
 
 
@@ -111,8 +112,8 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
         logger.warning("[VOICE] turn=%s agent crashed: %s", ctx.turn_id, type(exc).__name__)
         result.reply_text, result.ui_actions, result.action, result.llm_ms = FALLBACK_REPLY, [], "error", 0
         return
-    result.reply_text, result.ui_actions, result.action, result.llm_ms = (
-        agent.reply_text, agent.ui_actions, agent.action, agent.llm_ms)
+    result.reply_text, result.ui_actions, result.action, result.llm_ms, result.tool_ms = (
+        agent.reply_text, agent.ui_actions, agent.action, agent.llm_ms, agent.tool_ms)
 
 
 def make_reply(ctx: TurnContext, result: TurnResult) -> TurnResult:

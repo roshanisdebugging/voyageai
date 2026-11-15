@@ -48,6 +48,8 @@ export interface MapFocusTarget {
   zoom?: number;
   highlight?: boolean;
   address?: string;
+  /** Voice look-ups: show it like a map search result (pin + "X km from you"). */
+  pin?: boolean;
 }
 
 export interface EventItem {

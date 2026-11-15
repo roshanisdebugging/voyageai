@@ -9,6 +9,7 @@ import { TestTranscriptPanel, type PanelEntry } from './TestTranscriptPanel';
 import { replyPlayer } from './replyPlayer';
 import { runUiActions } from './uiActions';
 import { useTrip } from '../features/trip/TripContext';
+import { useNavigation } from '../context/NavigationContext';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
 const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
@@ -25,7 +26,11 @@ const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slic
 const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentTrip } = useTrip();
+  const { currentTrip, trips, setCurrentTripId } = useTrip();
+  const { setMapFocusTarget } = useNavigation();
+  // The socket handler is subscribed once: read the latest trips / setters through a ref.
+  const tripApiRef = useRef({ trips, setCurrentTripId, setMapFocusTarget });
+  useEffect(() => { tripApiRef.current = { trips, setCurrentTripId, setMapFocusTarget }; }, [trips, setCurrentTripId, setMapFocusTarget]);
   const { showToast } = useToast();
   const [phase, setPhase] = useState<Phase>('idle');
   const [entries, setEntries] = useState<PanelEntry[]>([]);
@@ -110,7 +115,19 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
         update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
         if (phaseRef.current !== 'waiting') return; // the user already moved on (e.g. started recording)
         // Step 2: run the agent's ui_actions FIRST (e.g. open the map), then speak.
-        runUiActions(msg.ui_actions, (to) => navigate(to));
+        runUiActions(msg.ui_actions, {
+          navigate: (to) => navigate(to),
+          // Step 3: "Hawa Mahal dikhao" -> the map shows a pin and the distance (the navigate to /map follows).
+          mapFocus: ({ lat, lng, name, placeId }) => tripApiRef.current.setMapFocusTarget({
+            id: placeId || `voice-${lat}-${lng}`, name, coordinates: [lat, lng], zoom: 15, highlight: true, pin: true,
+          }),
+          // Only an ID from the user's own loaded trips; anything else is ignored.
+          openTrip: (tripId) => {
+            if (!tripApiRef.current.trips.some((t) => t.id === tripId)) return false;
+            tripApiRef.current.setCurrentTripId(tripId);
+            return true;
+          },
+        });
         if (!msg.reply_audio_base64) {
           setPhaseBoth('idle'); // the error ("Couldn't play the reply.") follows as its own message
           return;

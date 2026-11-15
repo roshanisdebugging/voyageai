@@ -21,6 +21,24 @@ ROUTES: Dict[str, str] = {
 }
 PAGES = list(ROUTES)
 
+# One line per page for the navigate tool's description (step 3: fixes step 2's misses, e.g.
+# "plan a new trip" must open plan_trip without asking for details).
+MEANINGS: Dict[str, str] = {
+    "home": "the home screen",
+    "my_trips": "list of all the user's trips (also past trips)",
+    "trip": "the currently open trip's overview",
+    "itinerary": "day-by-day plan of the open trip; open it directly, set day only if the user names one",
+    "map": "the map with nearby places",
+    "food": "restaurants and food places nearby",
+    "rides": "book a cab/auto/ride (hands over to Uber or Google Maps)",
+    "expenses": "the trip's expenses / spending",
+    "explore": "things to see and do, sightseeing ideas",
+    "guide": "chat with the AI tour guide",
+    "saved_places": "places the user saved",
+    "more": "settings, profile, language and account",
+    "plan_trip": "start planning a NEW trip: opens the new-trip form. Do NOT ask for destination or dates first",
+}
+
 NEEDS_TRIP = {"trip", "itinerary"}
 MIN_DAY, MAX_DAY = 1, 30
 

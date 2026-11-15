@@ -544,3 +544,114 @@ def fetch_nearby_places(lat, lng, radius=5000):
 
 def check_proactive_alert(session, lat, lng, places):
     return None
+
+
+# --------------------------------------------------------------------------
+# Voice mode (voicefirst.md step 3): short spoken answers
+# --------------------------------------------------------------------------
+VOICE_ANSWER_PROMPT = """
+You are VoyageAI's travel guide answering by VOICE inside a travel app for India.
+
+RULES:
+1. {lang_rule}
+2. Answer in at most 4 short sentences of under 15 words each. The FIRST TWO sentences must answer the
+   question on their own, because only they are spoken aloud; the rest may add detail.
+3. Plain spoken text only: no markdown, lists, headings, emojis, links, cards or chips.
+4. Facts that change (timings, prices, closures): give what you know and say it may vary.
+5. Only travel topics (places, food, timings, tickets, transport, weather, culture, safety).
+   For anything else answer exactly: {decline}
+"""
+VOICE_LANG_RULE = {
+    "hi": "Reply in natural Hinglish written in Roman script (Hindi words in English letters).",
+    "en": "Reply in simple English.",
+}
+VOICE_DECLINE = {
+    "hi": "Main sirf travel aur aapki trip mein madad kar sakta hoon.",
+    "en": "I can only help with travel and your trip.",
+}
+VOICE_GROQ_NOTE = {"hi": "Details badal sakti hain.", "en": "Details may vary."}
+VOICE_GEMINI_TIMEOUT = 5.0
+VOICE_GROQ_TIMEOUT = 5.0
+
+_MARKDOWN = re.compile(r"(\*\*|__|`|#+\s|^\s*[-*•]\s+|\[\d+\])", re.MULTILINE)
+
+
+def _clean_spoken(raw: str) -> str:
+    """Drop chips/cards/markdown/links so the text can be spoken."""
+    text, _, _ = parse_blocks(raw or "")
+    text = re.sub(r"https?://\S+", "", text)
+    text = _MARKDOWN.sub("", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _first_sentences(text: str, limit: int) -> str:
+    parts = re.split(r"(?<=[.!?।])\s+", text.strip())
+    return " ".join(parts[:limit]).strip()
+
+
+def _voice_gemini(question: str, system_prompt: str) -> Optional[str]:
+    """One grounded Gemini call (first model only, with a timeout): voice can't wait for the full tier walk."""
+    if not MODEL_CANDIDATES:
+        return None
+    model = _build_model(MODEL_CANDIDATES[0], system_prompt, grounded=True, temperature=0.3)
+    if not model:
+        return None
+    try:
+        resp = model.generate_content(question, request_options={"timeout": VOICE_GEMINI_TIMEOUT})
+        return resp.text.strip() if resp and resp.text else None
+    except Exception as e:
+        log.warning("[voice answer] gemini failed: %s", type(e).__name__)
+        return None
+
+
+def _voice_groq(question: str, system_prompt: str) -> Optional[str]:
+    try:
+        from groq_client import groq_chat
+        return groq_chat([{"role": "system", "content": system_prompt}, {"role": "user", "content": question}],
+                         temperature=0.3, timeout=VOICE_GROQ_TIMEOUT, max_completion_tokens=600, reasoning_effort="low")
+    except Exception as e:
+        log.warning("[voice answer] groq failed: %s", type(e).__name__)
+        return None
+
+
+def voice_answer(question: str, lang: str = "hi", user_id: Optional[str] = None,
+                 trip_id: Optional[str] = None, place: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Short spoken answer to a travel question. Gemini (grounded) first, Groq second (same rules, plus
+    "details may vary"). The cost guard runs first and fails closed, as for every paid answer.
+    The question and the full answer are saved to the user's Guide chat history (mode "voice").
+    Returns {status: ok|declined|failed, spoken, full, source: gemini|groq|None}. Never raises.
+    Logs carry the outcome only, never the question or the answer.
+    """
+    lang = lang if lang in VOICE_LANG_RULE else "hi"
+    q = (question or "").strip()[:500]
+    if place and place.strip() and place.strip().lower() not in q.lower():
+        q = f"{q} ({place.strip()[:120]})"
+    if not q:
+        return {"status": "failed", "spoken": None, "full": None, "source": None}
+
+    allowed, gate, _reply = evaluate_cost_guards(q)
+    if not allowed:
+        log.info("[voice answer] cost guard refused (%s)", gate)
+        return {"status": "declined", "spoken": VOICE_DECLINE[lang], "full": None, "source": None}
+
+    system_prompt = VOICE_ANSWER_PROMPT.format(lang_rule=VOICE_LANG_RULE[lang], decline=VOICE_DECLINE[lang])
+    source, raw = "gemini", _voice_gemini(q, system_prompt)
+    if not raw:
+        source, raw = "groq", _voice_groq(q, system_prompt)
+    full = _clean_spoken(raw or "")
+    if not full:
+        return {"status": "failed", "spoken": None, "full": None, "source": None}
+    if source == "groq":
+        full = f"{full} {VOICE_GROQ_NOTE[lang]}"
+    spoken = _first_sentences(full, 2)
+    if source == "groq" and VOICE_GROQ_NOTE[lang] not in spoken:
+        spoken = f"{spoken} {VOICE_GROQ_NOTE[lang]}"
+
+    if user_id and not _is_guest(user_id):
+        try:
+            persist_message(user_id, "user", q, "voice", trip_id, {"via": "voice"})
+            persist_message(user_id, "assistant", full, "voice", trip_id, {"via": "voice", "source": source})
+        except Exception as e:
+            log.warning("[voice answer] history save failed: %s", type(e).__name__)
+    return {"status": "ok", "spoken": spoken, "full": full, "source": source}

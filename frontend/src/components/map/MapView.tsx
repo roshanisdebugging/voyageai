@@ -562,6 +562,20 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       const map = mapInstanceRef.current;
       const { coordinates, id, name, category, zoom, address } = mapFocusTarget;
 
+      // Voice "Hawa Mahal dikhao": same as choosing a search result (pin + distance from the user).
+      if (mapFocusTarget.pin) {
+        selectSearchResult({
+          id: id || `voice-${coordinates[0]}-${coordinates[1]}`,
+          name: name || 'Place',
+          country: 'India',
+          latitude: coordinates[0],
+          longitude: coordinates[1],
+          ...(address ? { displayName: address } : {}),
+        } as DestinationReference);
+        setMapFocusTarget(null);
+        return;
+      }
+
       isProgrammaticMoveRef.current = true;
       map.flyTo(coordinates, zoom || 17, { animate: true, duration: 1.5 });
       setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1600);
@@ -591,7 +605,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
 
       return () => clearTimeout(timer);
     }
-  }, [mapFocusTarget, userLocation, activeCoords, setMapFocusTarget, setIsFollowMode]);
+  }, [mapFocusTarget, userLocation, activeCoords, setMapFocusTarget, setIsFollowMode, selectSearchResult]);
 
   // Recenter handler
   const handleRecenter = () => {

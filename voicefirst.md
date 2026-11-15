@@ -16,10 +16,11 @@ VoyageAI gets a mic button. The user speaks, the server collects what it needs, 
 
 Voice work starts only after **Step 0** is done. Step 0 fixes security holes in the WebSocket actions, the hard-coded budget and the missing starting city. It also builds the non-voice features voice depends on, and moves AI calls from Gemini to Groq.
 
-Status (14 Nov 2026):
+Status (15 Nov 2026):
 - Step 0 is done.
 - Voice steps 1 and 1b are done.
-- Step 2 is built and on `main`, waiting for the owner's test.
+- Step 2 is done: on `main`, tested by the owner on 15 Nov 2026.
+- Step 3 is built on the local branch `voice-step3` (not pushed), waiting for the owner's test.
 - Steps 1c and 3–7 are planned in detail below (section 8).
 
 The plan was first agreed on 12 Nov 2026.
@@ -424,7 +425,7 @@ Each step works and can be tested on its own. We review after every step before 
 | 0e. Fixes | Past trips closed automatically, /trip empty state, Past trips section; map search (India only) with straight-line distance | Ended trips never open by themselves; "Hawa Mahal" search pins it with distance |
 | 1. Voice pipeline (test phase) | Dedicated `/ws/voice` pipeline: tap mic, PCM streamed to the backend, Groq Whisper transcribes, transcript shown in a temporary test panel. Nothing stored. See "Step 1 in detail" | Hindi, English and Hinglish transcripts appear on screen; nothing saved anywhere |
 | 1b. Spoken reply | Sarvam speaks a short reply on top of the step 1 pipeline. **Built 13 Nov 2026**, see "Step 1b notes" | Reply audio plays after each turn |
-| 2. Navigation | "Open my itinerary", "food dikhao". **Built 13 Nov 2026, waiting for owner test** (eval 91%), see "Step 2 notes" | Every page reachable by voice |
+| 2. Navigation | "Open my itinerary", "food dikhao". **DONE 15 Nov 2026** (owner tested, all fine; eval 91%), see "Step 2 notes" | Every page reachable by voice |
 | 1c. Hearing better | Fix the speech-to-text problems found in testing; Wispr Flow as a provider (hackathon). Can run any time. See "Step 1c in detail" | Saved clips re-scored; place names and language detection better than Groq alone |
 | 3. Questions and look-ups | Travel questions answered briefly; find a place on the map; list and open trips; step 2's eval misses fixed. See "Step 3 in detail" | Spoken answers are short and correct; "Hawa Mahal dikhao" pins it on the map; "Goa wali trip kholo" opens it |
 | 4. Create trip | Collect details, read the date back, jump to the filled review page, Proceed. Adds pending actions and the Confirm card. See "Step 4 in detail" | Nothing created without Proceed or "haan"; edits on the review page are what gets saved |
@@ -633,9 +634,9 @@ VITE_VOICE_TEST_TRANSCRIPT=true
 - Remove `SARVAM_API_KEY` and restart the backend. The transcript should still show, the panel should say "Couldn't play the reply.", and the next recording should still work. This is covered by the test with a simulated failure, not tried live.
 - About 10 of your own clips for the timing table.
 
-#### Step 2 notes (13 Nov 2026, local branch `voice-step2`, not pushed)
+#### Step 2 notes (13 Nov 2026; on `main`)
 
-**Status: built, waiting for the owner's test. Not done.** The step 1b echo is replaced by the agent. Each turn: mic → `/ws/voice` → Groq Whisper (transcript) → the agent decides → the backend checks the decision → the app navigates → Sarvam speaks a short reply.
+**Status: DONE (15 Nov 2026).** The owner tested it by voice: all fine. The step 1b echo is replaced by the agent. Each turn: mic → `/ws/voice` → Groq Whisper (transcript) → the agent decides → the backend checks the decision → the app navigates → Sarvam speaks a short reply.
 
 **How it's built**
 - `backend/groq_client.py`: `groq_chat_tools()` sends `tools` and `tool_choice`, accepts `finish_reason` "stop" or "tool_calls", and returns `{content, tool_calls: [{name, arguments}]}`.
@@ -805,13 +806,67 @@ Devanagari vs Roman script is **not** a problem: the user never sees the transcr
 - Target ≥ 90%. Step 2's navigation eval must still pass.
 
 **Done when**
-- [ ] Both evals ≥ 90%.
+- [x] Both evals ≥ 90%. *(Step 3 phrases 30/30 = 100%, step 2 phrases 30/32 = 94%; both misses fixed and re-checked, 15 Nov 2026.)*
 - [ ] By voice: 5 travel questions get correct, short answers. The full answer is in the Guide chat.
 - [ ] "Hawa Mahal dikhao" pins it on the map with the distance.
 - [ ] "Goa wali trip kholo" works with one and with two Goa trips.
-- [ ] Second tap → answer heard ≤ 4 s for questions (Gemini adds time), ≤ 3 s for the rest.
+- [ ] Second tap → answer heard ≤ 4 s for questions (Gemini adds time), ≤ 3 s for the rest. *(Not met yet for questions, see Step 3 notes.)*
 
 ---
+
+#### Step 3 notes (15 Nov 2026, local branch `voice-step3`, not pushed)
+
+**Status: built and tested by script and eval. Waiting for the owner's test by voice.** Nothing in this step changes data.
+
+**What was built**
+- `voice/agent.py`: still one Groq call per turn to decide, now with 5 tools: `navigate`, `answer_question`, `search_places`, `list_my_trips`, `open_trip`. Today's India date is in the prompt. Every page in `navigate` has a one-line meaning (`voice/pages.py` `MEANINGS`), e.g. `plan_trip: start planning a NEW trip ... Do NOT ask`, `more: settings, profile, language and account`.
+- `voice/tools/lookups.py`:
+  - `search_place`: the existing India-only search (`places.search_places`, Google), checked against the India box. Top hit -> `ui_actions: [map_focus {lat, lng, name, place_id}, navigate /map]`; none -> "Yeh jagah nahi mili."
+  - `list_my_trips`: the user's own trips (closed automatically if ended), ongoing/upcoming first, up to 3 spoken ("Aapki 3 trips hain: Jaipur 20 Nov se, ..."), then "aur bhi hain"; `include_past` for purani trips. Opens `/trips`.
+  - `open_trip`: matches the user's own trips in code (name/destination with fuzzy match, incl. swapped letters like "Gao"; month; next/current/last). One -> `[open_trip {trip_id}, navigate /trip]`; several -> asks by month ("Goa ki 2 trips hain: November wali ya January wali?"); none -> "Is naam ki koi trip nahi mili."
+  - User ID always from the session; trips always from a query filtered by it. The model is never asked for a trip ID, and one it sends is ignored.
+- `tour_guide_service.voice_answer`: the cost guard first (fails closed, as for every paid answer), then Gemini (grounded, first model, 5 s timeout), else Groq with the same rules plus "Details badal sakti hain". Up to 4 short sentences; the first 2 are spoken, chips/markdown/links removed. The question and the full answer are saved to the Guide chat history (mode `voice`).
+- The open trip's ID now reaches the agent (`TripInfo.id`, set only after the ownership check in `ws._resolve_trip`).
+- `reply` message: `action` is `answer`, `map_focus`, `list_trips`, `open_trip` (or `navigate:<page>` / `reply` / `error`); new `tool_ms` next to `llm_ms`. Logs carry action, `llm_ms`, `tool_ms` and error codes only.
+- Frontend: `uiActions.ts` allows `map_focus` (lat/lng must be in India, name 1-120 chars) and `open_trip` (only an ID in the user's loaded trip list); everything else is ignored. A voice `map_focus` opens the map like a search result: pin + "X km from you" (new `pin` flag on `MapFocusTarget`).
+
+**Bug found and fixed:** Groq checks tool arguments strictly. The model sent `"place": null` for "where can I eat", and Groq refused the whole call (HTTP 400 `tool_use_failed`), so the user heard "Abhi samajh nahi paaya". All optional tool arguments now accept null.
+
+**Tests**
+- `tests/test_voice_step3.py`: 41/41 (Groq, Gemini, cost guard and Google search simulated; SQLite trips for two users). Step 2 49/49, step 1b 22/22 (reply now has `tool_ms`), step 1 31/31, step 0 27/27, ownership 21/21.
+- `uiActions.ts` checked in Node (transpiled): 9/9 (map_focus outside India, unknown types, foreign trip IDs ignored).
+- Eval `python -m scripts.eval_lookups` (real Groq, decision only, nothing run or saved): step 3 phrases **30/30**, step 2 phrases **30/32 = 94%**. The two misses ("where can I eat" -> Groq 400; "ghoomne ki jagah dikhao" -> search_places with an empty query) were fixed and re-checked.
+
+**Timings (15 Nov 2026)**
+- Deciding Groq call (`llm_ms`): median 800 ms, average 863 ms, max 2.2 s.
+- `search_places`: 1.1-1.2 s (Google autocomplete + details).
+- `answer_question`: 2.3-3.8 s, **all answered by Groq** because the Gemini key's quota was used up (`ResourceExhausted`). Gemini's own time is not measured yet.
+- So a question takes about STT 0.8 s + decide 0.8 s + answer 2.3-3.8 s + TTS: **over the 4 s target.** Look-ups and navigation are close to 3 s. Ideas for later: run the cost guard alongside the answer, skip Gemini for a while after a quota error, shorter tool descriptions.
+
+**Groq limits (important for real users):** this key allows **8,000 tokens a minute and 1,000 requests a day** for the whole app. With 5 tools a voice decision is about 2,000 tokens, so roughly 4 voice turns a minute across all users; a question turn uses up to 3 Groq calls (decide, cost guard, and the Groq answer when Gemini is down). The eval had to be paced at 4.5 s with retries. Needs a decision before real users (paid tier, a separate key, or a smaller model for the decision).
+
+**Not done in this step**
+- The small mic icon on voice answers in the Guide chat (they show there as normal messages).
+- Step 1c aliases for place names.
+- Gemini voice answers measured (quota).
+- Tested by voice in the browser or on a phone: needs the owner.
+
+**Owner test: 15 sentences to say**
+1. "Amber Fort ki timing kya hai?" -> short spoken answer; full answer in the Guide chat.
+2. "Jaipur mein kya khana famous hai?"
+3. "What is the best time to visit Goa?"
+4. "Kal Jaipur mein baarish hogi kya?"
+5. "Hawa Mahal dikhao" -> map, pin, "X km from you".
+6. "Where is Gateway of India?"
+7. "Qutub Minar kahan hai?"
+8. "Meri trips kaun si hain?" -> up to 3 trips spoken, My trips opens.
+9. "Meri purani trips batao"
+10. "Goa wali trip kholo" (one Goa trip -> opens it; two -> asks which month)
+11. Then answer the question, e.g. "December wali"
+12. "Agli trip kholo"
+13. "Nayi trip banani hai" -> new trip form, no questions.
+14. "Settings kholo"
+15. "Ek joke sunao" -> polite decline.
 
 ### Step 4 in detail: create a trip by voice
 
