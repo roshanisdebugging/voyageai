@@ -9,6 +9,7 @@ import { TestTranscriptPanel, type PanelEntry } from './TestTranscriptPanel';
 import { replyPlayer } from './replyPlayer';
 import { runUiActions } from './uiActions';
 import { useTrip } from '../features/trip/TripContext';
+import { useNavigation } from '../context/NavigationContext';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
 const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
@@ -25,11 +26,18 @@ const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slic
 const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentTrip } = useTrip();
+  const { currentTrip, trips, setCurrentTripId } = useTrip();
+  const { setMapFocusTarget } = useNavigation();
+  // The socket handler is subscribed once: read the latest trips / setters through a ref.
+  const tripApiRef = useRef({ trips, setCurrentTripId, setMapFocusTarget });
+  useEffect(() => { tripApiRef.current = { trips, setCurrentTripId, setMapFocusTarget }; }, [trips, setCurrentTripId, setMapFocusTarget]);
   const { showToast } = useToast();
   const [phase, setPhase] = useState<Phase>('idle');
   const [entries, setEntries] = useState<PanelEntry[]>([]);
   const [remaining, setRemaining] = useState(MAX_RECORDING_MS / 1000);
+  const [note, setNote] = useState<string | null>(null);
+  const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (noteTimerRef.current) clearTimeout(noteTimerRef.current); }, []);
 
   const phaseRef = useRef<Phase>('idle');
   const conversationId = useRef(`conv_${newId()}`);
@@ -109,8 +117,24 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
         const navTo = (msg.ui_actions || []).find((a) => a.type === 'navigate')?.to;
         update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
         if (phaseRef.current !== 'waiting') return; // the user already moved on (e.g. started recording)
+        // A note (e.g. "Details badal sakti hain.") is shown as small text for a few seconds, never spoken.
+        if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
+        setNote(typeof msg.note === 'string' && msg.note ? msg.note.slice(0, 120) : null);
+        if (msg.note) noteTimerRef.current = setTimeout(() => setNote(null), 6000);
         // Step 2: run the agent's ui_actions FIRST (e.g. open the map), then speak.
-        runUiActions(msg.ui_actions, (to) => navigate(to));
+        runUiActions(msg.ui_actions, {
+          navigate: (to) => navigate(to),
+          // Step 3: "Hawa Mahal dikhao" -> the map shows a pin and the distance (the navigate to /map follows).
+          mapFocus: ({ lat, lng, name, placeId }) => tripApiRef.current.setMapFocusTarget({
+            id: placeId || `voice-${lat}-${lng}`, name, coordinates: [lat, lng], zoom: 15, highlight: true, pin: true,
+          }),
+          // Only an ID from the user's own loaded trips; anything else is ignored.
+          openTrip: (tripId) => {
+            if (!tripApiRef.current.trips.some((t) => t.id === tripId)) return false;
+            tripApiRef.current.setCurrentTripId(tripId);
+            return true;
+          },
+        });
         if (!msg.reply_audio_base64) {
           setPhaseBoth('idle'); // the error ("Couldn't play the reply.") follows as its own message
           return;
@@ -219,6 +243,16 @@ const MicButtonInner: React.FC<{ raised: boolean }> = ({ raised }) => {
   return (
     <>
       {SHOW_TEST_PANEL && <TestTranscriptPanel entries={entries} onClear={() => setEntries([])} />}
+      {note && (
+        <p
+          role="status"
+          data-voice-note
+          className="fixed z-[var(--z-floating)] right-4 max-w-[220px] px-2.5 py-1 rounded-lg bg-white/95 dark:bg-zinc-900/95 border border-[#D9DEDA] dark:border-zinc-700 text-[11px] text-[#5F6863] dark:text-zinc-400 shadow-sm"
+          style={{ bottom: `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px + 64px)` }}
+        >
+          {note}
+        </p>
+      )}
       <button
         type="button"
         onClick={handleTap}

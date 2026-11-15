@@ -20,9 +20,12 @@ export type VoiceServerMessage =
       reply_audio_base64: string | null;
       mime: string;
       tts_ms: number;
-      ui_actions?: Array<{ type: string; to?: string }>;
-      action?: string; // "navigate:<page>" | "reply" | "error"
+      ui_actions?: Array<{ type: string; to?: string; [key: string]: unknown }>;
+      action?: string; // navigate:<page> | map_focus | where | answer | weather | decline | unclear | list_trips | open_trip | reply | error
       llm_ms?: number;
+      tool_ms?: number;
+      /** Small on-screen text, never spoken (e.g. "Details badal sakti hain."). */
+      note?: string | null;
     }
   | { type: 'error'; code: string; message: string; turn_id?: string }
   | { type: 'closed'; code: number };

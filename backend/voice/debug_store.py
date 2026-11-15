@@ -55,7 +55,7 @@ voice_speeches = Table(
     Column("total_time_ms", Integer),
     Column("reply_text", Text),          # step 1b; the reply AUDIO is never saved
     Column("tts_time_ms", Integer),
-    Column("agent_action", Text),        # step 2: navigate:<page> | reply | error
+    Column("agent_action", Text),        # navigate:<page> | map_focus | where | answer | weather | decline | unclear | list_trips | open_trip | reply | error
     Column("llm_time_ms", Integer),
     Column("status", String(16), nullable=False),
     Column("error", Text),

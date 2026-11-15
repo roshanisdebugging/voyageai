@@ -64,3 +64,5 @@ ARCHITECTURE_AND_FLOWS.md
 #opencode
 opencode.exe
 opencode.json
+# Claude Code local config
+/.claude/

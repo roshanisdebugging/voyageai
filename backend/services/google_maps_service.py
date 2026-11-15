@@ -6,6 +6,7 @@ to conserve API quota and eliminate synthetic mock fallbacks.
 """
 
 import os
+import re
 import json
 import time
 import math
@@ -404,15 +405,51 @@ async def autocomplete_places(
     return []
 
 
-async def get_place_details(place_id: str) -> Optional[Dict[str, Any]]:
+# Google place IDs are URL-safe base64-like strings. Anything else (slashes, our own "poi-..." IDs) is rejected.
+PLACE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,300}$")
+# BASIC: what address search needs (cheap). FULL: what the place details page shows (one call per place).
+PLACE_FIELDS_BASIC = "id,displayName,formattedAddress,location,addressComponents"
+PLACE_FIELDS_FULL = (
+    "id,displayName,formattedAddress,location,regularOpeningHours.openNow,regularOpeningHours.weekdayDescriptions,"
+    "nationalPhoneNumber,websiteUri,googleMapsUri,editorialSummary"
+)
+DETAIL_CACHE_VERSION = "v2"  # bump when the cached shape changes, so old entries aren't reused
+
+
+def is_valid_place_id(place_id: str) -> bool:
+    return bool(place_id) and bool(PLACE_ID_RE.match(place_id))
+
+
+def _map_full_detail(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Google Places (New) response -> the app's shape. Missing fields become None / [] (the page hides them)."""
+    loc = data.get("location") or {}
+    hours = data.get("regularOpeningHours") or {}
+    return {
+        "id": data.get("id"),
+        "name": (data.get("displayName") or {}).get("text") or "",
+        "address": data.get("formattedAddress") or "",
+        "latitude": loc.get("latitude"),
+        "longitude": loc.get("longitude"),
+        "open_now": hours.get("openNow"),
+        "hours": list(hours.get("weekdayDescriptions") or []),
+        "phone": data.get("nationalPhoneNumber"),
+        "website": data.get("websiteUri"),
+        "maps_url": data.get("googleMapsUri"),
+        "summary": (data.get("editorialSummary") or {}).get("text"),
+    }
+
+
+async def get_place_details(place_id: str, full: bool = False) -> Optional[Dict[str, Any]]:
     """
-    Retrieve exact latitude, longitude, and address for a Google Place ID.
-    Caches for 24 hours.
+    Details for a Google Place ID, cached 24 hours.
+    full=False: id, name, address, latitude, longitude (address search).
+    full=True:  also open_now, hours, phone, website, maps_url, summary (the map's place details page).
+    Returns None for an invalid ID, a missing key, or when Google has no such place.
     """
-    if not place_id or not GOOGLE_MAPS_API_KEY:
+    if not is_valid_place_id(place_id) or not GOOGLE_MAPS_API_KEY:
         return None
 
-    cache_key = f"places:detail:{place_id}"
+    cache_key = f"places:detail:{DETAIL_CACHE_VERSION}:{'full' if full else 'basic'}:{place_id}"
     cached_val = await cache.get(cache_key)
     if cached_val is not None:
         return cached_val
@@ -421,7 +458,7 @@ async def get_place_details(place_id: str) -> Optional[Dict[str, Any]]:
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
-        "X-Goog-FieldMask": "id,displayName,formattedAddress,location,addressComponents",
+        "X-Goog-FieldMask": PLACE_FIELDS_FULL if full else PLACE_FIELDS_BASIC,
     }
 
     try:
@@ -429,17 +466,21 @@ async def get_place_details(place_id: str) -> Optional[Dict[str, Any]]:
             res = await client.get(url, headers=headers)
             if res.status_code == 200:
                 data = res.json()
-                loc = data.get("location", {})
-                detail = {
-                    "id": data.get("id"),
-                    "name": data.get("displayName", {}).get("text", ""),
-                    "address": data.get("formattedAddress", ""),
-                    "latitude": loc.get("latitude"),
-                    "longitude": loc.get("longitude"),
-                }
+                if full:
+                    detail = _map_full_detail(data)
+                else:
+                    loc = data.get("location", {})
+                    detail = {
+                        "id": data.get("id"),
+                        "name": data.get("displayName", {}).get("text", ""),
+                        "address": data.get("formattedAddress", ""),
+                        "latitude": loc.get("latitude"),
+                        "longitude": loc.get("longitude"),
+                    }
                 await cache.set(cache_key, detail, ttl_seconds=86400)
                 return detail
+            print(f"[GOOGLE PLACE DETAIL] HTTP {res.status_code}", flush=True)
     except Exception as e:
-        print(f"[GOOGLE PLACE DETAIL EXCEPTION] {e}", flush=True)
+        print(f"[GOOGLE PLACE DETAIL EXCEPTION] {type(e).__name__}", flush=True)
 
     return None

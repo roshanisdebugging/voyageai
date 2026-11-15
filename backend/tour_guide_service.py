@@ -544,3 +544,170 @@ def fetch_nearby_places(lat, lng, radius=5000):
 
 def check_proactive_alert(session, lat, lng, places):
     return None
+
+
+# --------------------------------------------------------------------------
+# Voice mode (voicefirst.md step 3 + fixes before step 4): short spoken answers
+# --------------------------------------------------------------------------
+VOICE_ANSWER_PROMPT = """
+You are VoyageAI's travel guide answering by VOICE inside a travel app for India.
+
+RULES:
+1. {lang_rule}
+2. At most 2 short sentences, under 15 words each. They are spoken aloud.
+3. Plain spoken text only: no markdown, lists, headings, emojis, links, cards or chips.
+4. Never guess timings, opening hours, prices or entry fees. Give them only if your search results
+   state them; otherwise say you don't have reliable information.
+5. Only travel topics (places, food, timings, tickets, transport, culture, safety).
+   For anything else answer exactly: {decline}
+"""
+VOICE_LANG_RULE = {
+    "hi": "Reply in natural Hinglish written in Roman script (Hindi words in English letters).",
+    "en": "Reply in simple English.",
+}
+VOICE_DECLINE = {
+    "hi": "Main sirf aapki trip mein madad kar sakta hoon.",
+    "en": "I can only help with your trip.",
+}
+VOICE_NO_FACTS = {
+    "hi": "Abhi pakki jaankari nahi mil rahi.",
+    "en": "I couldn't find reliable info right now.",
+}
+# Shown as small text on screen with ungrounded answers; never spoken.
+VOICE_NOTE = {"hi": "Details badal sakti hain.", "en": "Details may vary."}
+VOICE_GEMINI_TIMEOUT = 4.0
+VOICE_GROQ_TIMEOUT = 4.0
+GROUNDING_COOLDOWN_SECONDS = 600  # after a quota error, don't spend ~0.5 s per question on a call that fails
+
+# Questions whose answer must come from grounded search (timings, hours, prices, fees, tickets).
+_FACT_WORDS = re.compile(
+    r"\b(timing|timings|hours?|open|opening|close|closing|khul\w*|band\b|price|prices|cost|costs|fee|fees|"
+    r"ticket|tickets|entry|kitne|kitna|kitni|rate|charges?|kab tak|kab se|baje)\b", re.IGNORECASE)
+
+_MARKDOWN = re.compile(r"(\*\*|__|`|#+\s|^\s*[-*•]\s+|\[\d+\])", re.MULTILINE)
+_grounding_off_until = 0.0
+
+
+def is_fact_question(question: str) -> bool:
+    return bool(_FACT_WORDS.search(question or ""))
+
+
+def _clean_spoken(raw: str) -> str:
+    """Drop chips/cards/markdown/links so the text can be spoken."""
+    text, _, _ = parse_blocks(raw or "")
+    text = re.sub(r"https?://\S+", "", text)
+    text = _MARKDOWN.sub("", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _first_sentences(text: str, limit: int) -> str:
+    parts = re.split(r"(?<=[.!?।])\s+", text.strip())
+    return " ".join(parts[:limit]).strip()
+
+
+def _gemini_rest(question: str, system_prompt: str, grounded: bool) -> Tuple[Optional[str], Optional[str]]:
+    """
+    One Gemini call over REST (first model). grounded=True attaches Google Search (the `google_search` tool used
+    by current Gemini models) and only accepts an answer that actually cites search results.
+    Returns (text, error_code); error_code is e.g. "http_429", "timeout", "not_grounded".
+    """
+    global _grounding_off_until
+    import time as _time
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not key or not MODEL_CANDIDATES:
+        return None, "no_key"
+    if grounded and _time.time() < _grounding_off_until:
+        return None, "grounding_cooldown"
+    body: Dict[str, Any] = {
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": question}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300},
+    }
+    if grounded:
+        body["tools"] = [{"google_search": {}}]
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_CANDIDATES[0]}:generateContent"
+    try:
+        res = requests.post(url, json=body, headers={"x-goog-api-key": key}, timeout=VOICE_GEMINI_TIMEOUT)
+    except requests.Timeout:
+        return None, "timeout"
+    except requests.RequestException as e:
+        return None, type(e).__name__
+    if res.status_code != 200:
+        if grounded and res.status_code == 429:
+            _grounding_off_until = _time.time() + GROUNDING_COOLDOWN_SECONDS
+        return None, f"http_{res.status_code}"
+    try:
+        cand = (res.json().get("candidates") or [{}])[0]
+        parts = (cand.get("content") or {}).get("parts") or []
+        text = " ".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    except (ValueError, AttributeError):
+        return None, "bad_response"
+    if not text:
+        return None, "empty"
+    if grounded and not ((cand.get("groundingMetadata") or {}).get("groundingChunks")):
+        return text, "not_grounded"
+    return text, None
+
+
+def _voice_groq(question: str, system_prompt: str) -> Optional[str]:
+    try:
+        from groq_client import groq_chat
+        return groq_chat([{"role": "system", "content": system_prompt}, {"role": "user", "content": question}],
+                         temperature=0.3, timeout=VOICE_GROQ_TIMEOUT, max_completion_tokens=400, reasoning_effort="low")
+    except Exception as e:
+        log.warning("[voice answer] groq failed: %s", type(e).__name__)
+        return None
+
+
+def voice_answer(question: str, lang: str = "hi", user_id: Optional[str] = None,
+                 trip_id: Optional[str] = None, place: Optional[str] = None, facts: Optional[bool] = None) -> Dict[str, Any]:
+    """
+    Short spoken answer to a travel question (at most 2 sentences).
+      1. Cost guard (fails closed, as for every paid answer).
+      2. Gemini with Google Search grounding.
+      3. Timings / hours / prices / fees: ONLY a grounded answer is used; else "Abhi pakki jaankari nahi mil rahi."
+         Other questions: plain Gemini, then Groq; these carry a `note` ("Details badal sakti hain") that the app
+         shows as small text and never speaks.
+    The question and the answer are saved to the user's Guide chat (mode "voice").
+    Returns {status: ok|declined|no_facts|failed, spoken, full, note, source: gemini_grounded|gemini|groq|None,
+             fallback_code}. Never raises. Logs carry outcomes and error codes, never the question or the answer.
+    """
+    lang = lang if lang in VOICE_LANG_RULE else "hi"
+    q = (question or "").strip()[:500]
+    if place and place.strip() and place.strip().lower() not in q.lower():
+        q = f"{q} ({place.strip()[:120]})"
+    empty = {"spoken": None, "full": None, "note": None, "source": None, "fallback_code": None}
+    if not q:
+        return {**empty, "status": "failed"}
+    facts = is_fact_question(q) if facts is None else (facts or is_fact_question(q))
+
+    allowed, gate, _reply = evaluate_cost_guards(q)
+    if not allowed:
+        log.info("[voice answer] cost guard refused (%s)", gate)
+        return {**empty, "status": "declined", "spoken": VOICE_DECLINE[lang]}
+
+    system_prompt = VOICE_ANSWER_PROMPT.format(lang_rule=VOICE_LANG_RULE[lang], decline=VOICE_DECLINE[lang])
+    raw, code = _gemini_rest(q, system_prompt, grounded=True)
+    source, note, fallback_code = "gemini_grounded", None, None
+    if code is not None:
+        fallback_code = code
+        log.warning("[voice answer] grounded gemini not used: %s (facts=%s)", code, facts)
+        if facts:
+            # Never guess timings or prices: an ungrounded answer to a fact question is not used.
+            return {**empty, "status": "no_facts", "spoken": VOICE_NO_FACTS[lang], "fallback_code": code}
+        raw, code2 = (raw, None) if code == "not_grounded" else _gemini_rest(q, system_prompt, grounded=False)
+        source, note = "gemini", VOICE_NOTE[lang]
+        if not raw:
+            log.warning("[voice answer] plain gemini failed: %s", code2)
+            raw, source = _voice_groq(q, system_prompt), "groq"
+    full = _first_sentences(_clean_spoken(raw or ""), 2)
+    if not full:
+        return {**empty, "status": "failed", "fallback_code": fallback_code}
+
+    if user_id and not _is_guest(user_id):
+        try:
+            persist_message(user_id, "user", q, "voice", trip_id, {"via": "voice"})
+            persist_message(user_id, "assistant", full, "voice", trip_id, {"via": "voice", "source": source})
+        except Exception as e:
+            log.warning("[voice answer] history save failed: %s", type(e).__name__)
+    return {"status": "ok", "spoken": full, "full": full, "note": note, "source": source, "fallback_code": fallback_code}

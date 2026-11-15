@@ -19,6 +19,11 @@ class GroqError(RuntimeError):
     """Groq call failed (missing key, HTTP error, empty or cut-off answer)."""
 
 
+class GroqTransient(GroqError):
+    """Worth one retry: the model's tool call failed Groq's validation (HTTP 400 tool_use_failed),
+    a 5xx, a timeout, or a malformed answer."""
+
+
 class GroqRateLimited(GroqError):
     """Groq returned 429: the account's free-tier limit was hit."""
 
@@ -117,12 +122,19 @@ def groq_chat_tools(
             timeout=timeout,
         )
     except requests.RequestException as exc:
-        raise GroqError(f"Groq request failed: {type(exc).__name__}") from exc
+        raise GroqTransient(f"Groq request failed: {type(exc).__name__}") from exc
 
     if res.status_code == 429:
         raise GroqRateLimited("Groq rate limit reached")
     if res.status_code != 200:
-        raise GroqError(f"Groq HTTP {res.status_code}")
+        code = ""
+        try:  # the error code only (e.g. tool_use_failed); never the message, which can quote the user
+            code = str((res.json().get("error") or {}).get("code") or "")[:40]
+        except Exception:
+            pass
+        if res.status_code >= 500 or code == "tool_use_failed":
+            raise GroqTransient(f"Groq HTTP {res.status_code} {code}".strip())
+        raise GroqError(f"Groq HTTP {res.status_code} {code}".strip())
 
     try:
         choice = res.json()["choices"][0]
@@ -139,7 +151,7 @@ def groq_chat_tools(
         try:
             args = _json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
         except (ValueError, TypeError) as exc:
-            raise GroqError("Groq tool call had malformed arguments") from exc
+            raise GroqTransient("Groq tool call had malformed arguments") from exc
         if not isinstance(args, dict):
             raise GroqError("Groq tool call arguments were not an object")
         calls.append({"name": fn.get("name") or "", "arguments": args})

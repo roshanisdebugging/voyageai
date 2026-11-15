@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Calendar, Clock, Sparkles, Check, Loader2, MapPin } from 'lucide-react';
+import { Portal } from '../common/Portal';
 
 export interface ItineraryDayOption {
   id: string;
@@ -117,7 +118,10 @@ export const AddToItineraryModal: React.FC<AddToItineraryModalProps> = ({
     }
   };
 
+  // Portal: inside an animated page (e.g. the place details page) the dialog would otherwise sit under the
+  // bottom nav, which then catches the "Add to Day" tap.
   return (
+    <Portal>
     <div
       role="dialog"
       aria-modal="true"
@@ -286,5 +290,6 @@ export const AddToItineraryModal: React.FC<AddToItineraryModalProps> = ({
         </div>
       </div>
     </div>
+    </Portal>
   );
 };

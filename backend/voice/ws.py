@@ -66,7 +66,7 @@ def _resolve_session(token: str) -> Optional[Tuple[str, str]]:
 
 
 def _resolve_trip(trip_id: Optional[str], user_id: str) -> Optional[pipeline.TripInfo]:
-    """The open trip for the agent, only if it is the user's own. Title and dates only."""
+    """The open trip for the agent, only if it is the user's own. Title, dates and its (checked) ID."""
     if not trip_id:
         return None
     import database
@@ -76,7 +76,8 @@ def _resolve_trip(trip_id: Optional[str], user_id: str) -> Optional[pipeline.Tri
             trip = find_owned_trip(db, str(trip_id)[:80], user_id)
             if not trip:
                 return None
-            return pipeline.TripInfo(title=(trip.title or "")[:120], start_date=trip.start_date, end_date=trip.end_date)
+            return pipeline.TripInfo(title=(trip.title or "")[:120], start_date=trip.start_date, end_date=trip.end_date,
+                                     id=trip.id)
     except Exception:
         return None
 
@@ -113,13 +114,16 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
         else:
             payload = m.error(result.error_code or m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id)
         await _send(ws, payload)
-        total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop -> transcript sent
+        total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop -> transcript sent (no reply: STT failed)
 
         # Step 1b: the spoken reply follows the transcript. A TTS failure never breaks the turn.
         if result.ok:
             await run_in_threadpool(pipeline.make_reply, ctx, result)
             await _send(ws, m.reply(ctx.turn_id, result.reply_text or "", result.reply_audio_b64,
-                                    result.reply_mime, result.tts_ms, result.ui_actions, result.action, result.llm_ms))
+                                    result.reply_mime, result.tts_ms, result.ui_actions, result.action, result.llm_ms,
+                                    result.tool_ms, result.note))
+            total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop received -> reply sent
+            logger.info("[VOICE] turn=%s total_ms=%s action=%s", ctx.turn_id, total_ms, result.action)
             if result.tts_error and result.tts_error != "tts_disabled":
                 await _send(ws, m.error(m.ErrorCode.TTS_FAILED, turn_id=ctx.turn_id))
     except Exception as err:
