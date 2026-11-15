@@ -1,10 +1,21 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useStore } from 'react-redux';
 import type { Trip, TripDraft, CreateTripPayload, TripStatus, Itinerary, ItineraryStatus, TripStay, TripTransport, TripExpense } from './types';
 import { tripRepository } from './tripRepository';
 import { useAuth } from '../../auth/AuthContext';
 import { wsClient } from '../../services/wsClient';
 import { useSyncRevalidation } from '../../utils/useSyncRevalidation';
-import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders } from '../../config/apiConfig';
+import { getApiBaseUrl, fetchWithAuth } from '../../config/apiConfig';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import type { RootState } from '../../store/store';
+import { fetchUserTrips, setTrips, upsertTrip, invalidateTrips } from '../../store/reducers/tripsSlice';
+import {
+  fetchTripDetail,
+  fetchTripPackage,
+  upsertTripDetail,
+  selectTripDetail,
+  type TripDetail,
+} from '../../store/reducers/tripDetailsSlice';
 
 interface TripContextType {
   trips: Trip[];
@@ -49,178 +60,107 @@ export interface ItineraryReadyNotice {
 
 const TripContext = createContext<TripContextType | undefined>(undefined);
 
+// Stable references so consumers don't re-render when a trip has no package data yet.
+const NO_STAYS: TripStay[] = [];
+const NO_TRANSPORTS: TripTransport[] = [];
+const NO_EXPENSES: TripExpense[] = [];
+
+const withActivityDone = (itinerary: Itinerary, activityId: string, isDone: boolean): Itinerary => ({
+  ...itinerary,
+  days: itinerary.days.map(d => ({
+    ...d,
+    activities: d.activities.map(a => (a.id === activityId ? { ...a, isDone } : a)),
+  })),
+});
+
+/**
+ * Trip state lives in Redux (`trips`, `tripDetails` slices: cached, persisted, TTL-revalidated).
+ * This provider keeps the public `useTrip()` API and owns only UI-level state: the selected trip,
+ * the draft, the ready notice and the itinerary status.
+ */
 export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { userProfile, userPreferences, authUser, isAuthenticated } = useAuth();
+  const { authUser, isAuthenticated } = useAuth();
+  const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
 
-  const [trips, setTrips] = useState<Trip[]>([]);
+  const trips = useAppSelector(s => s.trips.data);
+  const tripsInitialized = useAppSelector(s => s.trips.isInitialized);
+
   const [currentTripId, setCurrentTripIdState] = useState<string | null>(null);
-  const [currentItinerary, setCurrentItinerary] = useState<Itinerary | null>(null);
   const [itineraryStatus, setItineraryStatus] = useState<ItineraryStatus>('READY');
-
-  const [stays, setStays] = useState<TripStay[]>([]);
-  const [transports, setTransports] = useState<TripTransport[]>([]);
-  const [expenses, setExpenses] = useState<TripExpense[]>([]);
-
   const [draft, setDraftState] = useState<TripDraft | null>(null);
   const [readyNotice, setReadyNotice] = useState<ItineraryReadyNotice | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [bootstrapped, setBootstrapped] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const userId = authUser?.id;
 
-  // Refetch itinerary helper function
+  const detail = useAppSelector(s => selectTripDetail(s, currentTripId));
+  const currentItinerary = detail?.itinerary ?? null;
+  const stays = detail?.stays ?? NO_STAYS;
+  const transports = detail?.transports ?? NO_TRANSPORTS;
+  const expenses = detail?.expenses ?? NO_EXPENSES;
+
+  const tripsRef = useRef(trips);
+  tripsRef.current = trips;
+
+  // Mirror the server-reported itinerary status.
+  useEffect(() => {
+    if (currentItinerary?.status) setItineraryStatus(currentItinerary.status);
+  }, [currentItinerary]);
+
   const refetchItinerary = useCallback(async (targetTripId?: string) => {
     const tid = targetTripId || currentTripId;
     if (!tid) return;
-    try {
-      const data: Itinerary = await wsClient.sendRequest('trips:get_itinerary', { trip_id: tid });
-      if (data) {
-        setCurrentItinerary(data);
-        if (data.status) setItineraryStatus(data.status);
-      }
-    } catch (err) {
-      console.warn('WebSocket failed to refetch itinerary, trying HTTP fallback...', err);
-      try {
-        const baseUrl = getApiBaseUrl();
-        const res = await fetch(`${baseUrl}/api/trips/${tid}/itinerary`, {
-          ...DEFAULT_FETCH_OPTIONS
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data) {
-            setCurrentItinerary(data);
-            if (data.status) setItineraryStatus(data.status);
-          }
-        }
-      } catch (httpErr) {
-        console.error('HTTP refetch itinerary fallback failed:', httpErr);
-      }
-    }
-  }, [currentTripId]);
+    // Callers invoke this after changing an itinerary, so list-level data (progress, counts) is stale too.
+    dispatch(invalidateTrips());
+    await dispatch(fetchTripDetail({ tripId: tid, force: true }));
+  }, [currentTripId, dispatch]);
 
-  // Load user-specific trips when user session changes
+  const fetchPackageData = useCallback(async (tripId: string) => {
+    if (!tripId) return;
+    await dispatch(fetchTripPackage({ tripId, force: true }));
+  }, [dispatch]);
+
+  // Load the trip list when the user session changes. Cached data (hydrated from localStorage)
+  // is shown immediately; the thunk only hits the network when the cache is stale.
   useEffect(() => {
     if (!isAuthenticated || !userId) {
-      setTrips([]);
       setCurrentTripIdState(null);
-      setCurrentItinerary(null);
-      setStays([]);
-      setTransports([]);
-      setExpenses([]);
       setDraftState(null);
-      setIsLoading(false);
+      setBootstrapped(false);
       return;
     }
+    let cancelled = false;
+    dispatch(fetchUserTrips({})).finally(() => {
+      if (!cancelled) setBootstrapped(true);
+    });
+    return () => { cancelled = true; };
+  }, [isAuthenticated, userId, dispatch]);
 
-    setIsLoading(true);
+  // Keep the selection valid as the list changes (first load, deletion, a purge).
+  useEffect(() => {
+    if (!isAuthenticated || !userId) return;
+    if (trips.length === 0) {
+      if (tripsInitialized && currentTripId) setCurrentTripIdState(null);
+      return;
+    }
+    if (currentTripId && trips.some(t => t.id === currentTripId)) return;
+    const preferredId = tripRepository.getCurrentTripId(userId);
+    setCurrentTripIdState(tripRepository.selectCurrentTripId(trips, preferredId));
+  }, [trips, tripsInitialized, currentTripId, isAuthenticated, userId]);
 
-    const applyTrips = (fetchedTrips: Trip[]) => {
-      if (fetchedTrips && Array.isArray(fetchedTrips) && fetchedTrips.length > 0) {
-        setTrips(fetchedTrips);
-        const preferredId = tripRepository.getCurrentTripId(userId);
-        const selectedId = tripRepository.selectCurrentTripId(fetchedTrips, preferredId);
-        setCurrentTripIdState(selectedId);
-        return true;
-      }
-      return false;
-    };
-
-    // 1. Immediately request trips via HTTP REST API (/api/trips)
-    const baseUrl = getApiBaseUrl();
-    fetch(`${baseUrl}/api/trips`, {
-      ...DEFAULT_FETCH_OPTIONS,
-      credentials: 'include',
-      headers: {
-        ...getAuthHeaders(),
-        'Accept': 'application/json',
-      }
-    })
-      .then(async (res) => {
-        if (res.ok) {
-          const restTrips = await res.json();
-          if (applyTrips(restTrips)) {
-            setIsLoading(false);
-          }
-        }
-      })
-      .catch((err) => {
-        console.warn('[HTTP TRIPS] REST fetch /api/trips error:', err);
-      });
-
-    // 2. Fetch and synchronize user trips over WebSocket
-    wsClient.sendRequest('trips:list', {})
-      .then((fetchedTrips: Trip[]) => {
-        if (!applyTrips(fetchedTrips)) {
-          setTrips([]);
-          setCurrentTripIdState(null);
-        }
-      })
-      .catch((err) => {
-        console.warn('[WS TRIPS] trips:list error:', err);
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
-  }, [isAuthenticated, userId]);
-
-  // Derived currentTrip state
   const currentTrip = useMemo(() => {
     if (!currentTripId) return null;
     return trips.find(t => t.id === currentTripId) ?? null;
   }, [trips, currentTripId]);
 
-  // Fetch package dimensions (stays, transports, expenses) purely from Backend (WS + REST fallback, ZERO localStorage)
-  const fetchPackageData = useCallback(async (tripId: string) => {
-    if (!tripId) return;
-
-    try {
-      const [fetchedStays, fetchedTransports, fetchedExpenses] = await Promise.all([
-        wsClient.sendRequest('trips:get_stays', { trip_id: tripId }),
-        wsClient.sendRequest('trips:get_transports', { trip_id: tripId }),
-        wsClient.sendRequest('trips:get_expenses', { trip_id: tripId }),
-      ]);
-
-      if (Array.isArray(fetchedStays)) {
-        setStays(fetchedStays);
-      }
-      if (Array.isArray(fetchedTransports)) {
-        setTransports(fetchedTransports);
-      }
-      if (Array.isArray(fetchedExpenses)) {
-        setExpenses(fetchedExpenses);
-      }
-    } catch (err) {
-      console.warn('[PACKAGE DATA] WebSocket fetch error, falling back to HTTP REST:', err);
-      try {
-        const baseUrl = getApiBaseUrl();
-        const res = await fetch(`${baseUrl}/api/trips/${tripId}`, {
-          ...DEFAULT_FETCH_OPTIONS,
-          credentials: 'include',
-          headers: {
-            ...getAuthHeaders(),
-            'Accept': 'application/json'
-          }
-        });
-        if (res.ok) {
-          const tripDetail = await res.json();
-          if (Array.isArray(tripDetail.stays)) setStays(tripDetail.stays);
-          if (Array.isArray(tripDetail.transports)) setTransports(tripDetail.transports);
-          if (Array.isArray(tripDetail.expenses)) setExpenses(tripDetail.expenses);
-        }
-      } catch (httpErr) {
-        console.error('[PACKAGE DATA] HTTP fallback error:', httpErr);
-      }
-    }
-  }, []);
-
+  // Load itinerary + package data for the selected trip (TTL-gated; instant when cached).
   useEffect(() => {
-    if (currentTripId) {
-      fetchPackageData(currentTripId);
-    } else {
-      setStays([]);
-      setTransports([]);
-      setExpenses([]);
-    }
-  }, [currentTripId, fetchPackageData]);
+    if (!currentTripId) return;
+    dispatch(fetchTripDetail({ tripId: currentTripId }));
+    dispatch(fetchTripPackage({ tripId: currentTripId }));
+  }, [currentTripId, dispatch]);
 
   // ── "Itinerary ready" notice: for any of the user's trips, wherever they are in the app ──
   useEffect(() => {
@@ -229,39 +169,38 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const tripId = payload?.trip_id || payload?.tripId;
       if (!tripId) return;
       const status: 'READY' | 'FAILED' = payload?.status === 'FAILED' ? 'FAILED' : 'READY';
-      setTrips(prev => prev.map(t => (t.id === tripId ? { ...t, itineraryStatus: status } : t)));
-      setReadyNotice(prev => {
-        const title = trips.find(t => t.id === tripId)?.title || prev?.tripTitle || 'Your trip';
-        return { tripId, tripTitle: title, status };
-      });
+      const trip = tripsRef.current.find(t => t.id === tripId);
+      if (trip) dispatch(upsertTrip({ ...trip, itineraryStatus: status }));
+      setReadyNotice(prev => ({
+        tripId,
+        tripTitle: trip?.title || prev?.tripTitle || 'Your trip',
+        status,
+      }));
     };
     return wsClient.on('ITINERARY_READY', handleReadyNotice);
-  }, [isAuthenticated, trips]);
+  }, [isAuthenticated, dispatch]);
 
   const dismissReadyNotice = useCallback(() => setReadyNotice(null), []);
 
-  // ── Reactive WebSocket Event Listeners (No 3-Second Polling) ──
+  // ── Reactive WebSocket event listeners for the selected trip ──
   useEffect(() => {
     if (!currentTripId) return;
-
-    // Fetch initial itinerary on selection
-    refetchItinerary(currentTripId);
 
     const handleItineraryReady = (payload: any) => {
       const payloadTripId = payload?.trip_id || payload?.tripId || payload?.id;
       if (!payloadTripId || payloadTripId === currentTripId) {
-        // The worker reports READY or FAILED.
         const finalStatus = payload?.status === 'FAILED' ? 'FAILED' : 'READY';
         setItineraryStatus(finalStatus);
-        setTrips(prev => prev.map(t => t.id === currentTripId ? { ...t, itineraryStatus: finalStatus } : t));
-        if (finalStatus === 'READY') refetchItinerary(currentTripId);
+        const trip = tripsRef.current.find(t => t.id === currentTripId);
+        if (trip) dispatch(upsertTrip({ ...trip, itineraryStatus: finalStatus }));
+        if (finalStatus === 'READY') dispatch(fetchTripDetail({ tripId: currentTripId, force: true }));
       }
     };
 
     const handleTripUpdated = (payload: any) => {
       const payloadTripId = payload?.trip_id || payload?.tripId || payload?.id;
       if (!payloadTripId || payloadTripId === currentTripId) {
-        refetchItinerary(currentTripId);
+        dispatch(fetchTripDetail({ tripId: currentTripId, force: true }));
       }
     };
 
@@ -274,17 +213,16 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubscribeUpdated();
       unsubscribeGenCompleted();
     };
-  }, [currentTripId, refetchItinerary]);
+  }, [currentTripId, dispatch]);
 
-  // ── Debounced Window Focus Revalidation Stability Shield ──
+  // ── Debounced window-focus revalidation of the selected itinerary ──
   useEffect(() => {
     let timeoutId: any;
     const onFocus = () => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
         if (!isAuthenticated || !userId || !currentTripId) return;
-        console.log('[FOCUS STABILITY] Refreshing itinerary after 1s focus stability...');
-        refetchItinerary(currentTripId);
+        dispatch(fetchTripDetail({ tripId: currentTripId, force: true }));
       }, 1000);
     };
 
@@ -293,66 +231,39 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       window.removeEventListener('focus', onFocus);
       clearTimeout(timeoutId);
     };
-  }, [isAuthenticated, userId, currentTripId, refetchItinerary]);
+  }, [isAuthenticated, userId, currentTripId, dispatch]);
 
-  // ── Window Focus & Cross-Tab Storage Revalidation (Throttled to 30s) ──
+  // ── Window focus revalidation of the trip list (throttled to 30s) ──
   useSyncRevalidation({
     throttleMs: 30000,
     onFocus: useCallback(() => {
       if (!isAuthenticated || !userId) return;
-      console.log('[REVALIDATION] Window focused, refreshing trips & active itinerary...');
-      
-      const baseUrl = getApiBaseUrl();
-      fetch(`${baseUrl}/api/trips`, {
-        ...DEFAULT_FETCH_OPTIONS,
-        credentials: 'include',
-        headers: {
-          ...getAuthHeaders(),
-          'Accept': 'application/json'
-        }
-      })
-        .then(async (res) => {
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data) && data.length > 0) {
-              setTrips(data);
-            }
-          }
-        })
-        .catch(() => {});
-
-      wsClient.sendRequest('trips:list', {})
-        .then((fetchedTrips: Trip[]) => {
-          if (fetchedTrips && Array.isArray(fetchedTrips) && fetchedTrips.length > 0) {
-            setTrips(fetchedTrips);
-          }
-        })
-        .catch(err => console.warn('[REVALIDATION FOCUS ERROR]', err));
-
-      if (currentTripId) {
-        refetchItinerary(currentTripId);
-      }
-    }, [isAuthenticated, userId, currentTripId, refetchItinerary]),
-
-    onStorageChange: useCallback((key: string | null) => {
-      if (!userId) return;
-      if (!key || key.includes('voyageai_user_trips') || key.includes('voyageai_current_trip_id')) {
-        console.log('[REVALIDATION] Cross-tab storage change detected, syncing trips...');
-        const stored = tripRepository.getStoredTrips(userId);
-        if (stored.length > 0) {
-          setTrips(stored);
-        }
-        const preferredId = tripRepository.getCurrentTripId(userId);
-        if (preferredId && preferredId !== currentTripId) {
-          setCurrentTripIdState(preferredId);
-        }
-      }
-    }, [userId, currentTripId])
+      dispatch(fetchUserTrips({ force: true }));
+    }, [isAuthenticated, userId, dispatch]),
   });
+
+  /** Re-fetch the selected trip's package data after a stay/transport/expense is saved. */
+  const reconcilePackage = useCallback((tripId: string) => {
+    dispatch(fetchTripPackage({ tripId, force: true }));
+  }, [dispatch]);
+
+  const prependToDetail = useCallback((
+    tripId: string,
+    key: 'stays' | 'transports' | 'expenses',
+    item: TripStay | TripTransport | TripExpense,
+  ) => {
+    const existing = selectTripDetail(store.getState(), tripId);
+    const list = (existing?.[key] as Array<TripStay | TripTransport | TripExpense> | undefined) ?? [];
+    dispatch(upsertTripDetail({
+      fetchedAt: 0,
+      ...existing,
+      tripId,
+      [key]: [item, ...list],
+    } as TripDetail));
+  }, [dispatch, store]);
 
   const addStay = useCallback(async (payload: Partial<TripStay>): Promise<TripStay> => {
     if (!currentTripId) throw new Error('No active trip selected');
-
     let newStay: TripStay;
     try {
       newStay = await wsClient.sendRequest('trips:add_stay', { ...payload, trip_id: currentTripId });
@@ -360,14 +271,13 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Could not save stay:', err);
       throw err instanceof Error ? err : new Error('Could not save stay. Please try again.');
     }
-
-    setStays(prev => [newStay, ...prev]);
+    prependToDetail(currentTripId, 'stays', newStay);
+    reconcilePackage(currentTripId);
     return newStay;
-  }, [currentTripId]);
+  }, [currentTripId, prependToDetail, reconcilePackage]);
 
   const addTransport = useCallback(async (payload: Partial<TripTransport>): Promise<TripTransport> => {
     if (!currentTripId) throw new Error('No active trip selected');
-
     let newTransport: TripTransport;
     try {
       newTransport = await wsClient.sendRequest('trips:add_transport', { ...payload, trip_id: currentTripId });
@@ -375,14 +285,13 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Could not save transport:', err);
       throw err instanceof Error ? err : new Error('Could not save transport. Please try again.');
     }
-
-    setTransports(prev => [newTransport, ...prev]);
+    prependToDetail(currentTripId, 'transports', newTransport);
+    reconcilePackage(currentTripId);
     return newTransport;
-  }, [currentTripId]);
+  }, [currentTripId, prependToDetail, reconcilePackage]);
 
   const addExpense = useCallback(async (payload: Partial<TripExpense>): Promise<TripExpense> => {
     if (!currentTripId) throw new Error('No active trip selected');
-
     let newExpense: TripExpense;
     try {
       newExpense = await wsClient.sendRequest('trips:add_expense', { ...payload, trip_id: currentTripId });
@@ -390,10 +299,10 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Could not save expense:', err);
       throw err instanceof Error ? err : new Error('Could not save expense. Please try again.');
     }
-
-    setExpenses(prev => [newExpense, ...prev]);
+    prependToDetail(currentTripId, 'expenses', newExpense);
+    reconcilePackage(currentTripId);
     return newExpense;
-  }, [currentTripId]);
+  }, [currentTripId, prependToDetail, reconcilePackage]);
 
   const setCurrentTripId = useCallback((id: string | null) => {
     setCurrentTripIdState(id);
@@ -411,67 +320,68 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [userId]);
 
   const createTrip = useCallback(async (payload: CreateTripPayload): Promise<Trip> => {
-    setIsLoading(true);
     const clientRequestId = payload.clientRequestId || `req_${Date.now()}`;
 
     const todayStr = new Date().toISOString().split('T')[0];
     if (payload.startDate < todayStr) {
-      setIsLoading(false);
       throw new Error('Trip start date cannot be in the past.');
     }
     if (payload.endDate < payload.startDate) {
-      setIsLoading(false);
       throw new Error('Trip end date cannot be earlier than start date.');
     }
 
+    setCreating(true);
     let createdTrip: Trip;
 
     try {
-      createdTrip = await wsClient.sendRequest('trips:create', { ...payload, clientRequestId });
-    } catch (wsErr) {
-      console.warn('WebSocket trip creation failed, retrying over HTTP.', wsErr);
       try {
-        const res = await fetch(`${getApiBaseUrl()}/api/trips`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: getAuthHeaders(),
-          body: JSON.stringify({ ...payload, clientRequestId }),
-        });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || 'Could not create the trip. Please try again.');
+        createdTrip = await wsClient.sendRequest('trips:create', { ...payload, clientRequestId });
+      } catch (wsErr) {
+        console.warn('WebSocket trip creation failed, retrying over HTTP.', wsErr);
+        try {
+          const res = await fetchWithAuth(`${getApiBaseUrl()}/api/trips`, {
+            method: 'POST',
+            body: JSON.stringify({ ...payload, clientRequestId }),
+          });
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.detail || 'Could not create the trip. Please try again.');
+          }
+          createdTrip = await res.json();
+        } catch (httpErr) {
+          throw httpErr instanceof Error ? httpErr : new Error('Could not create the trip. Please try again.');
         }
-        createdTrip = await res.json();
-      } catch (httpErr) {
-        setIsLoading(false);
-        throw httpErr instanceof Error ? httpErr : new Error('Could not create the trip. Please try again.');
       }
+
+      // Reconcile: show the new trip now, then confirm against the server in the background.
+      const existing = store.getState().trips.data.filter(t => t.id !== createdTrip.id);
+      dispatch(setTrips([createdTrip, ...existing]));
+      setCurrentTripIdState(createdTrip.id);
+      tripRepository.setCurrentTripId(createdTrip.id, userId);
+      discardDraft();
+      dispatch(fetchUserTrips({ force: true }));
+
+      return createdTrip;
+    } finally {
+      setCreating(false);
     }
-
-    const updatedTrips = [createdTrip, ...trips];
-    setTrips(updatedTrips);
-    setCurrentTripIdState(createdTrip.id);
-    tripRepository.saveStoredTrips(updatedTrips, userId);
-    tripRepository.setCurrentTripId(createdTrip.id, userId);
-    discardDraft();
-    setIsLoading(false);
-
-    return createdTrip;
-  }, [userId, userProfile, userPreferences, trips, discardDraft]);
+  }, [userId, dispatch, store, discardDraft]);
 
   const regenerateItinerary = useCallback(async (tripId: string) => {
     setItineraryStatus('GENERATING');
-    setTrips(prev => prev.map(t => t.id === tripId ? { ...t, itineraryStatus: 'GENERATING' } : t));
+    const trip = store.getState().trips.data.find(t => t.id === tripId);
+    if (trip) dispatch(upsertTrip({ ...trip, itineraryStatus: 'GENERATING' }));
 
     try {
       await wsClient.sendRequest('trips:regenerate_itinerary', { trip_id: tripId, instruction: 'Re-generate package itinerary' });
     } catch (err) {
       console.warn('WebSocket regeneration request failed:', err);
     }
-  }, []);
+  }, [dispatch, store]);
 
+  // Status changes are local-only (there is no backend endpoint for them).
   const updateTripStatus = useCallback(async (tripId: string, status: TripStatus) => {
-    const existing = trips.find(t => t.id === tripId);
+    const existing = store.getState().trips.data.find(t => t.id === tripId);
     if (!existing) return;
 
     if (!tripRepository.validateStatusTransition(existing.status, status)) {
@@ -479,40 +389,37 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    const updatedTrips = trips.map(t =>
-      t.id === tripId ? { ...t, status, updatedAt: new Date().toISOString() } : t
-    );
-
-    setTrips(updatedTrips);
-    tripRepository.saveStoredTrips(updatedTrips, userId);
-  }, [trips, userId]);
+    dispatch(upsertTrip({ ...existing, status, updatedAt: new Date().toISOString() }));
+  }, [dispatch, store]);
 
   const deleteTrip = useCallback(async (tripId: string) => {
+    const previous = store.getState().trips.data;
+    if (!previous.some(t => t.id === tripId)) return;
+
+    // Optimistic removal; restored if the server rejects it.
+    dispatch(setTrips(previous.filter(t => t.id !== tripId)));
+
     try {
-      await wsClient.sendRequest('trips:delete', { trip_id: tripId });
-    } catch (err) {
-      console.warn('WebSocket trips:delete failed, trying HTTP fallback...', err);
       try {
-        const baseUrl = getApiBaseUrl();
-        await fetch(`${baseUrl}/api/trips/${tripId}`, {
-          ...DEFAULT_FETCH_OPTIONS,
-          method: 'DELETE',
-        });
-      } catch (httpErr) {
-        console.error('Failed to delete trip from backend database:', httpErr);
+        await wsClient.sendRequest('trips:delete', { trip_id: tripId });
+      } catch (wsErr) {
+        console.warn('WebSocket trips:delete failed, trying HTTP fallback...', wsErr);
+        const res = await fetchWithAuth(`${getApiBaseUrl()}/api/trips/${tripId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Could not delete the trip. Please try again.');
       }
+    } catch (err) {
+      console.error('Failed to delete trip from backend database:', err);
+      // Only restore if the store still belongs to this session (a purge would have emptied it).
+      if (store.getState().trips.isInitialized) dispatch(setTrips(previous));
+      throw err instanceof Error ? err : new Error('Could not delete the trip. Please try again.');
     }
 
-    const updatedTrips = trips.filter(t => t.id !== tripId);
-    setTrips(updatedTrips);
-    tripRepository.saveStoredTrips(updatedTrips, userId);
-
+    // The selection effect picks the next trip if the deleted one was selected.
     if (currentTripId === tripId) {
-      const nextId = tripRepository.selectCurrentTripId(updatedTrips, null);
-      setCurrentTripIdState(nextId);
-      tripRepository.setCurrentTripId(nextId, userId);
+      tripRepository.setCurrentTripId(null, userId);
+      setCurrentTripIdState(null);
     }
-  }, [trips, currentTripId, userId]);
+  }, [currentTripId, userId, dispatch, store]);
 
   const cancelTrip = useCallback(async (tripId: string) => {
     await updateTripStatus(tripId, 'CANCELLED');
@@ -521,6 +428,12 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const archiveTrip = useCallback(async (tripId: string) => {
     await updateTripStatus(tripId, 'ARCHIVED');
   }, [updateTripStatus]);
+
+  /** After an itinerary-changing mutation: refresh the itinerary and mark the trip list stale. */
+  const reconcileItinerary = useCallback(async (tripId: string) => {
+    dispatch(invalidateTrips());
+    await dispatch(fetchTripDetail({ tripId, force: true }));
+  }, [dispatch]);
 
   const swapActivity = useCallback(async (
     tripId: string,
@@ -532,9 +445,7 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (wsErr) {
       console.warn('WebSocket swap_activity failed, trying HTTP PATCH fallback...', wsErr);
       try {
-        const baseUrl = getApiBaseUrl();
-        await fetch(`${baseUrl}/api/trips/${tripId}/itinerary/activities/${activityId}`, {
-          ...DEFAULT_FETCH_OPTIONS,
+        await fetchWithAuth(`${getApiBaseUrl()}/api/trips/${tripId}/itinerary/activities/${activityId}`, {
           method: 'PATCH',
           body: JSON.stringify(payload),
         });
@@ -542,14 +453,14 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error('HTTP swap_activity fallback failed:', httpErr);
       }
     }
-    await refetchItinerary(tripId);
-  }, [refetchItinerary]);
+    await reconcileItinerary(tripId);
+  }, [reconcileItinerary]);
 
   const optimizeDayItinerary = useCallback(async (tripId: string, dayId: string, goal: string = 'MINIMIZE_TRAVEL_TIME'): Promise<any> => {
     const data = await wsClient.sendRequest('trips:optimize_day', { trip_id: tripId, day_id: dayId, goal });
-    await refetchItinerary(tripId);
+    await reconcileItinerary(tripId);
     return data;
-  }, [refetchItinerary]);
+  }, [reconcileItinerary]);
 
   const optimizeBudget = useCallback(async (tripId: string): Promise<any> => {
     return wsClient.sendRequest('trips:optimize_budget', { trip_id: tripId });
@@ -560,24 +471,43 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const setActivityDone = useCallback(async (tripId: string, activityId: string, done: boolean): Promise<void> => {
-    const res = await wsClient.sendRequest('trips:set_activity_done', { trip_id: tripId, activity_id: activityId, done });
-    setCurrentItinerary(prev => prev && {
-      ...prev,
-      days: prev.days.map(d => ({
-        ...d,
-        activities: d.activities.map(a => (a.id === activityId ? { ...a, isDone: Boolean(res?.isDone) } : a)),
-      })),
-    });
-    if (res?.progress) {
-      setTrips(prev => prev.map(t => (t.id === tripId ? { ...t, progress: res.progress } : t)));
+    const before = selectTripDetail(store.getState(), tripId);
+    // Optimistic toggle; reverted below if the server call fails.
+    if (before?.itinerary) {
+      dispatch(upsertTripDetail({ ...before, itinerary: withActivityDone(before.itinerary, activityId, done) }));
     }
-  }, []);
+
+    let res: any;
+    try {
+      res = await wsClient.sendRequest('trips:set_activity_done', { trip_id: tripId, activity_id: activityId, done });
+    } catch (err) {
+      const current = selectTripDetail(store.getState(), tripId);
+      if (before?.itinerary && current) {
+        dispatch(upsertTripDetail({ ...current, itinerary: before.itinerary }));
+      }
+      throw err;
+    }
+
+    // Server is the source of truth for the final value and the trip's progress.
+    const current = selectTripDetail(store.getState(), tripId);
+    if (current?.itinerary && typeof res?.isDone === 'boolean' && res.isDone !== done) {
+      dispatch(upsertTripDetail({ ...current, itinerary: withActivityDone(current.itinerary, activityId, res.isDone) }));
+    }
+    const trip = store.getState().trips.data.find(t => t.id === tripId);
+    if (trip && res?.progress) {
+      dispatch(upsertTrip({ ...trip, progress: res.progress }));
+    } else {
+      dispatch(invalidateTrips());
+    }
+  }, [dispatch, store]);
 
   const executeRefinement = useCallback(async (tripId: string, actions: any[]): Promise<any> => {
     const data = await wsClient.sendRequest('trips:refine', { trip_id: tripId, actions });
-    await refetchItinerary(tripId);
+    await reconcileItinerary(tripId);
     return data;
-  }, [refetchItinerary]);
+  }, [reconcileItinerary]);
+
+  const isLoading = creating || (isAuthenticated && !bootstrapped && trips.length === 0);
 
   return (
     <TripContext.Provider value={{

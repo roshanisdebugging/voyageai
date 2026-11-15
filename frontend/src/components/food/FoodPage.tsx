@@ -4,6 +4,8 @@ import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { UtensilsCrossed, ArrowLeft, Star, MapPin, Sparkles, Car, Navigation, Compass, RefreshCw } from 'lucide-react';
 import { wsClient } from '../../services/wsClient';
+import { memoize } from '../../services/memoCache';
+import { CACHE_TTL } from '../../store/cache/cacheTypes';
 
 /** A restaurant as returned by the backend place search. Only fields Google actually provides. */
 interface NearbyRestaurant {
@@ -42,7 +44,11 @@ export const FoodPage: React.FC = () => {
     let isMounted = true;
     setIsLoading(true);
     setLoadError(null);
-    wsClient.sendRequest('places:nearby', { lat, lng, category: 'restaurant' })
+    memoize<NearbyRestaurant[]>(
+      `places:nearby:restaurant:${lat.toFixed(3)},${lng.toFixed(3)}`,
+      CACHE_TTL.nearby,
+      () => wsClient.sendRequest('places:nearby', { lat, lng, category: 'restaurant' }),
+    )
       .then((data: NearbyRestaurant[]) => {
         if (isMounted) setRestaurants(Array.isArray(data) ? data : []);
       })

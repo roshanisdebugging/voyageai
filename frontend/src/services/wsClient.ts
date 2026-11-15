@@ -4,6 +4,7 @@
  */
 
 import { getAuthToken } from '../config/apiConfig';
+import { notifySessionExpired } from '../auth/sessionExpiry';
 
 export interface WsRequestFrame {
   id?: string;
@@ -180,6 +181,12 @@ class WebSocketClient {
         (typeof frame.status === 'number' && frame.status >= 400) ||
         Boolean(frame.error);
       if (isError) {
+        // The server reports HTTPException(401) as status 401. `auth:*` actions use 401 for
+        // bad credentials, which is not a session expiry.
+        const sentAction = pending.frame.action || pending.frame.reqname || '';
+        if (frame.status === 401 && !sentAction.startsWith('auth:')) {
+          notifySessionExpired();
+        }
         pending.reject(new Error(frame.error || 'WebSocket request failed'));
       } else {
         pending.resolve(frame.data);

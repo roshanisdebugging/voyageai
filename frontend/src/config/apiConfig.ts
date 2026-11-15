@@ -7,6 +7,9 @@
  * Test mode: everything runs on http://localhost:8000.
  */
 
+import axios from 'axios';
+import { isAuthEndpoint, notifySessionExpired } from '../auth/sessionExpiry';
+
 export const DEFAULT_BACKEND_URL = 'http://localhost:8000';
 
 /**
@@ -97,4 +100,39 @@ export const getDefaultFetchOptions = (): RequestInit => ({
   credentials: 'include',
   headers: getAuthHeaders(),
 });
+
+/**
+ * fetch() with credentials + auth headers attached, and central 401 handling:
+ * a 401 from any non-auth endpoint tells the app the session is gone (caches are purged,
+ * user returns to login). Caller-supplied headers win over the defaults.
+ */
+export const fetchWithAuth = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+  const res = await fetch(input, {
+    credentials: 'include',
+    ...init,
+    headers: { ...getAuthHeaders(), ...((init.headers as Record<string, string> | undefined) ?? {}) },
+  });
+  if (res.status === 401) {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (!isAuthEndpoint(url)) notifySessionExpired();
+  }
+  return res;
+};
+
+let axiosInterceptorInstalled = false;
+
+/** Same 401 handling for every axios call (the Redux thunks). Idempotent. */
+export const installAxiosAuthInterceptor = (): void => {
+  if (axiosInterceptorInstalled) return;
+  axiosInterceptorInstalled = true;
+  axios.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error?.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
+        notifySessionExpired();
+      }
+      return Promise.reject(error);
+    },
+  );
+};
 

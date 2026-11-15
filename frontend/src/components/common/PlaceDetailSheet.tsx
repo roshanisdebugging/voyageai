@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useToast } from './UndoToast';
 import { useApp } from '../../context/AppContext';
 import { MapPin, Star, Navigation, Sparkles, X, Car, Heart, Check, Loader2 } from 'lucide-react';
-import { checkPlaceSaved, savePlace, removeSavedPlace } from '../../services/savedPlacesApi';
+import { checkPlaceSaved } from '../../services/savedPlacesApi';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { fetchSavedPlaces, savePlaceThunk, unsavePlaceThunk, selectIsPlaceSaved } from '../../store/reducers/savedPlacesSlice';
 
 export interface PlaceDetailItem {
   id: string;
@@ -35,7 +37,13 @@ export const PlaceDetailSheet: React.FC<PlaceDetailSheetProps> = ({ item, onClos
 const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => void }> = ({ item, onClose }) => {
   const { openInAppNavigation, openCabModal, openAiAssistant } = useApp();
 
-  const [isSaved, setIsSaved] = useState<boolean>(false);
+  const dispatch = useAppDispatch();
+  // undefined until the saved-places slice has loaded; then checkPlaceSaved() is the fallback.
+  const sliceSaved = useAppSelector((s) => selectIsPlaceSaved(s, item.id));
+  const [fallbackSaved, setFallbackSaved] = useState<boolean>(false);
+  const isSaved = sliceSaved ?? fallbackSaved;
+  const sliceLoadedRef = React.useRef(false);
+  sliceLoadedRef.current = sliceSaved !== undefined;
   const { showToast } = useToast();
   const handleToggleSaveRef = React.useRef<(fromUndo?: boolean) => Promise<void>>(async () => {});
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -43,17 +51,18 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
 
   useEffect(() => {
     let active = true;
-    if (item.id) {
+    dispatch(fetchSavedPlaces({})); // TTL-gated
+    if (item.id && !sliceLoadedRef.current) {
       checkPlaceSaved(item.id).then((saved) => {
-        if (active) setIsSaved(saved);
+        if (active) setFallbackSaved(saved);
       });
     } else {
-      setIsSaved(false);
+      setFallbackSaved(false);
     }
     return () => {
       active = false;
     };
-  }, [item.id]);
+  }, [item.id, dispatch]);
 
   const hasCoordinates = typeof item.latitude === 'number' && typeof item.longitude === 'number' && !isNaN(item.latitude) && !isNaN(item.longitude);
 
@@ -62,11 +71,12 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
     setIsSaving(true);
     const previous = isSaved;
     const nextState = !previous;
-    setIsSaved(nextState);
+    setFallbackSaved(nextState);
 
     try {
+      // The thunks update the slice optimistically and restore it if the request fails.
       if (nextState) {
-        await savePlace({
+        await dispatch(savePlaceThunk({
           place_id: item.id,
           title: item.name,
           category: item.category,
@@ -78,15 +88,15 @@ const PlaceDetailSheetBody: React.FC<{ item: PlaceDetailItem; onClose: () => voi
           duration_text: item.durationText,
           cost_text: item.estimatedCost == null ? undefined : item.estimatedCost > 0 ? `₹${item.estimatedCost}` : 'Free',
           description: item.description,
-        });
+        })).unwrap();
         if (!fromUndo) showToast({ message: 'Saved to your places', undo: () => handleToggleSaveRef.current(true) });
       } else {
-        await removeSavedPlace(item.id);
+        await dispatch(unsavePlaceThunk(item.id)).unwrap();
         if (!fromUndo) showToast({ message: 'Removed from saved places', undo: () => handleToggleSaveRef.current(true) });
       }
     } catch (err: any) {
-      setIsSaved(previous);
-      setToastMessage(err.message || 'Action failed. Please try again.');
+      setFallbackSaved(previous);
+      setToastMessage(typeof err === 'string' ? err : err?.message || 'Action failed. Please try again.');
     } finally {
       setIsSaving(false);
       setTimeout(() => setToastMessage(null), 3000);

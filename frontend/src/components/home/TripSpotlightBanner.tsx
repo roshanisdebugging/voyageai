@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { Calendar, MapPin, Plus, Check, Loader2, Clock, AlertCircle } from 'lucide-react';
-import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders } from '../../config/apiConfig';
+import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders, fetchWithAuth } from '../../config/apiConfig';
 import { MONTHS, formatDateRange, parseISODate, tripStatus } from './tripDates';
 import { isMockPayload } from '../../utils/mockIndicator';
 import { MockCardAlert } from '../common/MockCardAlert';
@@ -246,7 +246,7 @@ export const TripSpotlightBanner: React.FC<{
 
     const baseUrl = getApiBaseUrl();
     try {
-      const res = await fetch(`${baseUrl}/api/trips/itinerary/add`, {
+      const res = await fetchWithAuth(`${baseUrl}/api/trips/itinerary/add`, {
         ...DEFAULT_FETCH_OPTIONS,
         method: 'POST',
         headers: {

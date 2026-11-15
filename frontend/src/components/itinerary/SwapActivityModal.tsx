@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Portal } from '../common/Portal';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
-import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS } from '../../config/apiConfig';
+import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, fetchWithAuth } from '../../config/apiConfig';
 import { Sparkles, RefreshCw, X, Clock, MapPin, Check, AlertCircle } from 'lucide-react';
 import { isMockPayload } from '../../utils/mockIndicator';
 import { MockCardAlert } from '../common/MockCardAlert';
@@ -95,7 +95,7 @@ export const SwapActivityModal: React.FC = () => {
     setSwappingId(selectedOption.id);
     try {
       const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/trips/itinerary/swap-execute`, {
+      const res = await fetchWithAuth(`${baseUrl}/api/trips/itinerary/swap-execute`, {
         ...DEFAULT_FETCH_OPTIONS,
         method: 'POST',
         body: JSON.stringify({

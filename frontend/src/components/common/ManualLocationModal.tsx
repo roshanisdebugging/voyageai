@@ -3,6 +3,8 @@ import { Portal } from './Portal';
 import { useApp } from '../../context/AppContext';
 import { Search, MapPin, Navigation, AlertTriangle, CheckCircle2, X, Loader2, Crosshair } from 'lucide-react';
 import { wsClient } from '../../services/wsClient';
+import { memoize } from '../../services/memoCache';
+import { CACHE_TTL } from '../../store/cache/cacheTypes';
 
 interface LocationSearchResult {
   id: string;
@@ -42,7 +44,11 @@ export const ManualLocationModal: React.FC = () => {
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const data = await wsClient.sendRequest('location:search', { query: searchQuery });
+        const data = await memoize(
+          `location:search:${searchQuery.trim().toLowerCase()}`,
+          CACHE_TTL.placesSearch,
+          () => wsClient.sendRequest('location:search', { query: searchQuery }),
+        );
         if (Array.isArray(data)) {
           setSearchResults(data);
         }

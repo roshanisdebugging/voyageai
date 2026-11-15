@@ -16,21 +16,10 @@ export const isPastTrip = (trip: Trip, today: string = todayInIndia()): boolean 
 const isCurrentOrUpcoming = (trip: Trip, today: string): boolean =>
   !CLOSED_STATUSES.has((trip.status || '').toUpperCase()) && !isPastTrip(trip, today);
 
-const inMemoryTrips: Record<string, Trip[]> = {};
 const inMemoryCurrentTripId: Record<string, string | null> = {};
 const inMemoryDrafts: Record<string, TripDraft | null> = {};
 
 export const tripRepository = {
-  getStoredTrips(userId?: string): Trip[] {
-    const key = userId || 'default';
-    return inMemoryTrips[key] || [];
-  },
-
-  saveStoredTrips(trips: Trip[], userId?: string) {
-    const key = userId || 'default';
-    inMemoryTrips[key] = trips;
-  },
-
   getCurrentTripId(userId?: string): string | null {
     const key = userId || 'default';
     return inMemoryCurrentTripId[key] || null;

@@ -1,92 +1,71 @@
-import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
+import { createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
 import axios from 'axios';
 import { getApiBaseUrl, getAuthHeaders } from '../../config/apiConfig';
+import { wsClient } from '../../services/wsClient';
+import type { Trip as FeatureTrip, TripStatus } from '../../features/trip/types';
+import { createCacheSlice } from '../cache/createCacheSlice';
+import { CACHE_TTL, shouldFetch, type CacheState } from '../cache/cacheTypes';
+import { STALE, getCacheEpoch } from '../cache/epoch';
 
-export interface Trip {
-  id: string;
-  userId?: string;
-  title: string;
-  status: 'PLANNING' | 'CONFIRMED' | 'COMPLETED' | 'ARCHIVED';
-  itineraryStatus?: string;
-  startDate: string;
-  endDate: string;
-  totalDays?: number;
-  destination?: {
-    name: string;
-    city?: string;
-    state?: string;
-    country?: string;
-    latitude?: number;
-    longitude?: number;
-  };
-  coverMedia?: {
-    url: string;
-    alt?: string;
-  };
-  progress?: {
-    completedActivitiesCount: number;
-    totalActivitiesCount: number;
-  };
-  [key: string]: any;
-}
+export type Trip = FeatureTrip;
 
-export interface TripsState {
-  trips: Trip[];
+export interface TripsExtra {
   activeTab: 'active' | 'upcoming' | 'completed' | 'archived';
-  loading: boolean;
-  isInitialized: boolean;
-  error: string | null;
+}
+export type TripsState = CacheState<Trip> & TripsExtra;
+
+export interface FetchUserTripsArg {
+  force?: boolean;
 }
 
-const initialState: TripsState = {
-  trips: [],
-  activeTab: 'active',
-  loading: false,
-  isInitialized: false,
-  error: null,
-};
-
-export const fetchUserTrips = createAsyncThunk(
+export const fetchUserTrips = createAsyncThunk<
+  Trip[],
+  FetchUserTripsArg | undefined,
+  { state: { trips: TripsState }; rejectValue: string }
+>(
   'trips/fetchUserTrips',
-  async (_force: boolean = false, { rejectWithValue }) => {
+  async (_arg, { rejectWithValue }) => {
+    const epoch = getCacheEpoch();
     try {
-      const baseUrl = getApiBaseUrl();
-      const url = `${baseUrl}/api/trips`;
-      const res = await axios.get(url, {
+      const res = await axios.get(`${getApiBaseUrl()}/api/trips`, {
         withCredentials: true,
-        headers: getAuthHeaders(),
+        headers: { ...getAuthHeaders(), Accept: 'application/json' },
       });
+      if (epoch !== getCacheEpoch()) return rejectWithValue(STALE);
       const data = res.data;
-      return Array.isArray(data) ? data : data.trips || [];
-    } catch (err: any) {
-      return rejectWithValue(err.response?.data?.detail || 'Failed to fetch user trips');
+      return (Array.isArray(data) ? data : data?.trips || []) as Trip[];
+    } catch (httpErr: any) {
+      // A 401 is handled globally by the auth interceptor; do not mask it with a WS retry.
+      if (httpErr?.response?.status === 401) {
+        return rejectWithValue('Session expired');
+      }
+      try {
+        const wsTrips = await wsClient.sendRequest<Trip[]>('trips:list', {});
+        if (epoch !== getCacheEpoch()) return rejectWithValue(STALE);
+        if (Array.isArray(wsTrips)) return wsTrips;
+        return rejectWithValue('Failed to fetch user trips');
+      } catch {
+        return rejectWithValue(httpErr?.response?.data?.detail || 'Failed to fetch user trips');
+      }
     }
   },
   {
-    condition: (force, { getState }: any) => {
-      if (force) return true;
-      const { trips } = getState() as { trips: TripsState };
-      if (trips.isInitialized || trips.loading) return false;
-      return true;
-    },
-  }
+    condition: (arg, { getState }) =>
+      shouldFetch(getState().trips, CACHE_TTL.trips, arg?.force),
+  },
 );
 
-export const tripsSlice = createSlice({
+const { slice } = createCacheSlice<Trip, TripsExtra>()({
   name: 'trips',
-  initialState,
+  selectId: (t) => t.id,
+  extraInitialState: { activeTab: 'active' },
   reducers: {
-    setActiveTab: (state, action: PayloadAction<TripsState['activeTab']>) => {
+    setActiveTab(state: TripsState, action: PayloadAction<TripsExtra['activeTab']>) {
       state.activeTab = action.payload;
     },
-    updateTripStatusLocally: (state, action: PayloadAction<{ tripId: string; status: Trip['status'] }>) => {
-      const trip = state.trips.find(t => t.id === action.payload.tripId);
+    updateTripStatusLocally(state: TripsState, action: PayloadAction<{ tripId: string; status: TripStatus }>) {
+      const trip = state.data.find((t) => t.id === action.payload.tripId);
       if (trip) trip.status = action.payload.status;
-    },
-    clearTrips: (state) => {
-      state.trips = [];
-      state.isInitialized = false;
-      state.error = null;
     },
   },
   extraReducers: (builder) => {
@@ -95,18 +74,29 @@ export const tripsSlice = createSlice({
         state.loading = true;
         state.error = null;
       })
-      .addCase(fetchUserTrips.fulfilled, (state, action: PayloadAction<Trip[]>) => {
+      .addCase(fetchUserTrips.fulfilled, (state, action) => {
         state.loading = false;
         state.isInitialized = true;
-        state.trips = action.payload;
+        state.data = action.payload;
         state.error = null;
+        state.lastFetchedAt = Date.now();
       })
-      .addCase(fetchUserTrips.rejected, (state, action: any) => {
+      .addCase(fetchUserTrips.rejected, (state, action) => {
+        if (action.payload === STALE) return; // a purge happened mid-flight; state is already reset
         state.loading = false;
         state.error = action.payload || 'Failed to fetch user trips';
       });
   },
 });
 
-export const { setActiveTab, updateTripStatusLocally, clearTrips } = tripsSlice.actions;
-export default tripsSlice.reducer;
+export const tripsSlice = slice;
+export const {
+  set: setTrips,
+  upsert: upsertTrip,
+  remove: removeTrip,
+  clear: clearTrips,
+  invalidate: invalidateTrips,
+  setActiveTab,
+  updateTripStatusLocally,
+} = slice.actions;
+export default slice.reducer;

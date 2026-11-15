@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Search, MapPin, Loader2, AlertCircle, X } from 'lucide-react';
 import type { DestinationReference } from '../types';
 import { wsClient } from '../../../services/wsClient';
+import { memoize } from '../../../services/memoCache';
+import { CACHE_TTL } from '../../../store/cache/cacheTypes';
 
 /** India-only place search used for the destination and the starting city. */
 
@@ -43,7 +45,11 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
     setError(null);
     const timer = setTimeout(async () => {
       try {
-        const data: DestinationReference[] = await wsClient.sendRequest('places:search', { query: query.trim() });
+        const data: DestinationReference[] = await memoize(
+          `places:search:${query.trim().toLowerCase()}`,
+          CACHE_TTL.placesSearch,
+          () => wsClient.sendRequest('places:search', { query: query.trim() }),
+        );
         const india = Array.isArray(data) ? data.filter(isInIndia) : [];
         if (Array.isArray(data) && data.length > 0 && india.length === 0) {
           setError('Cruiser supports places in India only. Pick a city or region in India.');

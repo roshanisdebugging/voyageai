@@ -2,6 +2,7 @@ import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/tool
 import axios from 'axios';
 import { getApiBaseUrl, getAuthHeaders } from '../../config/apiConfig';
 import { calculateDistanceKm } from './nearbySlice';
+import { resetAllCaches } from '../cache/globalActions';
 
 export interface MapNearbyParams {
   lat: number;
@@ -102,6 +103,7 @@ export const mapPlacesSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
+      .addCase(resetAllCaches, () => initialState)
       .addCase(fetchMapNearbyPlaces.pending, (state) => {
         state.loading = true;
         state.error = null;

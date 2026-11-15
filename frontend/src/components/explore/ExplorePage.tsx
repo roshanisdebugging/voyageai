@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useToast } from '../common/UndoToast';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { useNavigation } from '../../context/NavigationContext';
-import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders } from '../../config/apiConfig';
+import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders, fetchWithAuth } from '../../config/apiConfig';
 import {
   Compass, MapPin, Sparkles, Plus, Check, Calendar,
   Clock, Tag, Star, Navigation, Layers, Bookmark, AlertCircle
@@ -14,7 +14,8 @@ import { AddToItineraryModal, type ItineraryDayOption } from '../itinerary/AddTo
 import { sanitizeLocationName } from '../../utils/locationSanitizer';
 import { isMockPayload } from '../../utils/mockIndicator';
 import { MockCardAlert } from '../common/MockCardAlert';
-import { getSavedPlaces, savePlace, removeSavedPlace } from '../../services/savedPlacesApi';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { fetchSavedPlaces, savePlaceThunk, unsavePlaceThunk } from '../../store/reducers/savedPlacesSlice';
 
 export const ExplorePage: React.FC = () => {
   const navigate = useNavigate();
@@ -51,40 +52,24 @@ export const ExplorePage: React.FC = () => {
   const [addedItemDays, setAddedItemDays] = useState<Map<string, number>>(new Map());
 
   // Saved Places Management State & Handlers
-  const [savedPlaceIds, setSavedPlaceIds] = useState<Set<string>>(new Set());
+  const dispatch = useAppDispatch();
+  const savedPlaces = useAppSelector((s) => s.savedPlaces.data);
+  const savedPlaceIds = useMemo(() => new Set(savedPlaces.map((p) => p.place_id)), [savedPlaces]);
 
+  // TTL-gated: a no-op while the cached list is fresh.
   useEffect(() => {
-    let active = true;
-    const fetchSavedPlaces = async () => {
-      try {
-        const data = await getSavedPlaces();
-        if (active && Array.isArray(data)) {
-          setSavedPlaceIds(new Set(data.map((p) => p.place_id)));
-        }
-      } catch (err) {
-        console.warn('[FETCH SAVED PLACES WARN]', err);
-      }
-    };
-    fetchSavedPlaces();
-    return () => {
-      active = false;
-    };
-  }, []);
+    dispatch(fetchSavedPlaces({}));
+  }, [dispatch]);
 
   const handleToggleSave = async (item: ActivityItem, fromUndo = false) => {
     const isSaved = savedPlaceIds.has(item.id);
-    setSavedPlaceIds(prev => {
-      const next = new Set(prev);
-      if (isSaved) next.delete(item.id);
-      else next.add(item.id);
-      return next;
-    });
 
     try {
+      // The thunks update the slice optimistically and restore it if the request fails.
       if (isSaved) {
-        await removeSavedPlace(item.id);
+        await dispatch(unsavePlaceThunk(item.id)).unwrap();
       } else {
-        await savePlace({
+        await dispatch(savePlaceThunk({
           place_id: item.id,
           title: item.title,
           category: item.category,
@@ -95,7 +80,7 @@ export const ExplorePage: React.FC = () => {
           cost_text: item.cost ? `₹${item.cost}` : undefined,
           duration_text: item.duration,
           description: item.description,
-        });
+        })).unwrap();
       }
       if (!fromUndo) {
         showToast({
@@ -105,12 +90,6 @@ export const ExplorePage: React.FC = () => {
       }
     } catch (err) {
       console.warn('[SAVE PLACE ERROR]', err);
-      setSavedPlaceIds(prev => {
-        const next = new Set(prev);
-        if (isSaved) next.add(item.id);
-        else next.delete(item.id);
-        return next;
-      });
       showToast({ message: "Couldn't update saved places. Please try again.", tone: 'error' });
     }
   };
@@ -285,7 +264,7 @@ export const ExplorePage: React.FC = () => {
 
     try {
       const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/trips/itinerary/add`, {
+      const res = await fetchWithAuth(`${baseUrl}/api/trips/itinerary/add`, {
         ...DEFAULT_FETCH_OPTIONS,
         method: 'POST',
         headers: {
