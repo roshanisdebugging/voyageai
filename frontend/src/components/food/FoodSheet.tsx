@@ -6,7 +6,8 @@ import { useToast } from '../common/UndoToast';
 import type { RestaurantPlace } from '../../utils/destinationData';
 import { Star, MapPin, Navigation, Car, Heart, RefreshCw } from 'lucide-react';
 import { getApiBaseUrl, DEFAULT_HEADERS } from '../../config/apiConfig';
-import { getSavedPlaces, savePlace, removeSavedPlace } from '../../services/savedPlacesApi';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { fetchSavedPlaces, savePlaceThunk, unsavePlaceThunk } from '../../store/reducers/savedPlacesSlice';
 
 export const FoodSheet: React.FC = () => {
   const { isFoodSheetOpen, setIsFoodSheetOpen, openCabModal, openInAppNavigation, activeTrip, userLocation, userLocationName } = useApp();
@@ -23,38 +24,28 @@ export const FoodSheet: React.FC = () => {
   );
 
   // Saved state comes from the server (same store as Explore and Saved Places).
-  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const dispatch = useAppDispatch();
+  const savedPlaces = useAppSelector(s => s.savedPlaces.data);
+  const savedIds = useMemo(() => new Set(savedPlaces.map(p => p.place_id)), [savedPlaces]);
   const [savingId, setSavingId] = useState<string | null>(null);
   const toggleSaveRef = useRef<(r: RestaurantPlace, fromUndo?: boolean) => Promise<void>>(async () => {});
 
   useEffect(() => {
     if (!isFoodSheetOpen) return;
-    let active = true;
-    getSavedPlaces()
-      .then(list => {
-        if (active) setSavedIds(new Set(list.map(p => p.place_id)));
-      })
-      .catch(() => { /* not logged in or offline: hearts start empty */ });
-    return () => { active = false; };
-  }, [isFoodSheetOpen]);
+    // TTL-gated; failures (logged out / offline) leave the hearts as cached.
+    dispatch(fetchSavedPlaces({}));
+  }, [isFoodSheetOpen, dispatch]);
 
   const handleToggleSave = async (r: RestaurantPlace, fromUndo = false) => {
     if (savingId) return;
     const wasSaved = savedIds.has(r.id);
-    const flip = (on: boolean) =>
-      setSavedIds(prev => {
-        const next = new Set(prev);
-        if (on) next.add(r.id);
-        else next.delete(r.id);
-        return next;
-      });
     setSavingId(r.id);
-    flip(!wasSaved);
     try {
+      // The thunks update the slice optimistically and restore it if the request fails.
       if (wasSaved) {
-        await removeSavedPlace(r.id);
+        await dispatch(unsavePlaceThunk(r.id)).unwrap();
       } else {
-        await savePlace({
+        await dispatch(savePlaceThunk({
           place_id: r.id,
           title: r.name,
           category: 'food',
@@ -62,7 +53,7 @@ export const FoodSheet: React.FC = () => {
           location_name: r.location,
           coordinates: r.coordinates,
           distance_text: r.distanceKm != null ? `${r.distanceKm} km` : undefined,
-        });
+        })).unwrap();
       }
       if (!fromUndo) {
         showToast({
@@ -71,7 +62,6 @@ export const FoodSheet: React.FC = () => {
         });
       }
     } catch {
-      flip(wasSaved);
       showToast({ message: "Couldn't update saved places. Please try again.", tone: 'error' });
     } finally {
       setSavingId(null);

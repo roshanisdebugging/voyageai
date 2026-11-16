@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
-import { getApiBaseUrl, DEFAULT_HEADERS, getAuthHeaders } from '../../config/apiConfig';
+import { getApiBaseUrl, DEFAULT_HEADERS, getAuthHeaders, fetchWithAuth } from '../../config/apiConfig';
 import { sanitizeLocationName } from '../../utils/locationSanitizer';
 import type { ItineraryDayOption } from './AddToItineraryModal';
 
@@ -59,7 +59,7 @@ export function usePlaceItineraryAdd() {
       is_confirmed: true,
     };
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/trips/itinerary/add`, {
+      const res = await fetchWithAuth(`${getApiBaseUrl()}/api/trips/itinerary/add`, {
         method: 'POST',
         headers: { ...DEFAULT_HEADERS, ...getAuthHeaders() },
         body: JSON.stringify(payload),

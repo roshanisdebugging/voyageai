@@ -238,7 +238,7 @@ client.__enter__()
 
 def register(email):
     r = client.post("/api/auth/register", json={"name": "Voice Two", "email": email, "password": "secret123"})
-    return r.json()["token"], r.json()["user"]["id"]
+    return r.json()["token"], r.json()["authUser"]["id"]
 
 
 tok_a, uid_a = register("voice2a@example.com")

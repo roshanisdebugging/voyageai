@@ -47,9 +47,14 @@ export const MyTripsPage: React.FC = () => {
 
   const handleConfirmAction = async () => {
     const { tripId, actionType } = confirmActionModal;
-    if (actionType === 'DELETE') await deleteTrip(tripId);
-    else if (actionType === 'CANCEL') await cancelTrip(tripId);
-    else if (actionType === 'ARCHIVE') await archiveTrip(tripId);
+    try {
+      if (actionType === 'DELETE') await deleteTrip(tripId);
+      else if (actionType === 'CANCEL') await cancelTrip(tripId);
+      else if (actionType === 'ARCHIVE') await archiveTrip(tripId);
+    } catch (err) {
+      // deleteTrip restores the list itself; just keep the page from throwing.
+      console.error('Trip action failed:', err);
+    }
 
     setConfirmActionModal({ isOpen: false, tripId: '', tripTitle: '', actionType: 'DELETE' });
   };

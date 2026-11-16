@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { isPastTrip } from '../../features/trip/tripRepository';
-import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders } from '../../config/apiConfig';
+import { getApiBaseUrl, fetchWithAuth } from '../../config/apiConfig';
 import {
   MapPin, Navigation, Plus, ArrowUp,
   AlertTriangle, Compass, Clock, Check, Loader2,
@@ -19,7 +19,11 @@ const FONT_STACK = '"Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "
 
 
 import { useDispatch, useSelector } from 'react-redux';
-import { type RootState, type AppDispatch, fetchTourGuideHistory, appendGuideMessage } from '../../store';
+import {
+  type RootState, type AppDispatch,
+  fetchTourGuideHistory, appendGuideMessage, removeGuideMessage,
+  removeTripDetail, invalidateTrips,
+} from '../../store';
 import { useAuth } from '../../auth/AuthContext';
 
 export interface ActionCardData {
@@ -87,10 +91,9 @@ export const TourGuidePage: React.FC = () => {
   const userId = authUser?.id || userProfile?.userId;
 
   // 1. Redux Toolkit Slice: De-duplicated & Cached Tour Guide History
-  const { history: historyData, messages: reduxMessages, loading: isHistoryLoading } = useSelector(
+  const { data: activeHistory, loading: isHistoryLoading } = useSelector(
     (state: RootState) => state.tourGuide
   );
-  const activeHistory = (historyData && historyData.length > 0) ? historyData : (reduxMessages || []);
 
   useEffect(() => {
     if (userId) {
@@ -126,7 +129,8 @@ export const TourGuidePage: React.FC = () => {
           }
         };
       });
-      setMessages(parsedMsgs);
+      // Keep local-only error bubbles (they are never stored in Redux or on the server).
+      setMessages(prev => [...parsedMsgs, ...prev.filter(m => m.id?.startsWith('err_') || m.id?.startsWith('auth_err_'))]);
     } else if (!isHistoryLoading && (!activeHistory || activeHistory.length === 0) && messages.length === 0) {
       // Default Welcome Message if no history found
       setMessages([
@@ -193,16 +197,23 @@ export const TourGuidePage: React.FC = () => {
       mode: mode
     };
 
-    setMessages(prev => [...prev, userMsg]);
-    dispatch(appendGuideMessage(userMsg as any));
+    // A new send clears any previous transient error bubble.
+    setMessages(prev => [...prev.filter(m => !m.id?.startsWith('err_')), userMsg]);
+    // Optimistic: `pending` keeps it alive across a history refetch and out of localStorage.
+    dispatch(appendGuideMessage({ ...userMsg, pending: true }));
     if (!queryText) setInput('');
     setLoading(true);
 
+    // The server never saw this message: take it back out of the cache and give the text
+    // back to the composer so nothing the user typed is lost.
+    const revertUserMessage = () => {
+      dispatch(removeGuideMessage(userMsg.id!));
+      if (!queryText) setInput(prev => prev || textToSend);
+    };
+
     try {
       const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/tour-guide/chat`, {
-        ...DEFAULT_FETCH_OPTIONS,
-        headers: getAuthHeaders(),
+      const res = await fetchWithAuth(`${baseUrl}/api/tour-guide/chat`, {
         method: 'POST',
         body: JSON.stringify({
           message: textToSend,
@@ -230,8 +241,11 @@ export const TourGuidePage: React.FC = () => {
           }
         };
         setMessages(prev => [...prev, assistantMsg]);
+        // Confirm the user message (same id replaces the pending copy), then add the reply.
+        dispatch(appendGuideMessage({ ...userMsg, pending: false }));
         dispatch(appendGuideMessage(assistantMsg as any));
       } else {
+        revertUserMessage();
         setMessages(prev => [
           ...prev,
           {
@@ -247,6 +261,7 @@ export const TourGuidePage: React.FC = () => {
       }
     } catch (err) {
       console.error('[CONCIERGE CHAT ERROR]', err);
+      revertUserMessage();
       setMessages(prev => [
         ...prev,
         {
@@ -271,9 +286,7 @@ export const TourGuidePage: React.FC = () => {
 
     try {
       const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/trips/itinerary/add`, {
-        ...DEFAULT_FETCH_OPTIONS,
-        headers: getAuthHeaders(),
+      const res = await fetchWithAuth(`${baseUrl}/api/trips/itinerary/add`, {
         method: 'POST',
         body: JSON.stringify({
           trip_id: activeTrip.id,
@@ -287,6 +300,9 @@ export const TourGuidePage: React.FC = () => {
       });
 
       if (res.ok) {
+        // The itinerary changed server-side: drop the cached detail and mark the list stale.
+        dispatch(removeTripDetail(activeTrip.id));
+        dispatch(invalidateTrips());
         setAddedSuccessId(card.id);
         setTimeout(() => setAddedSuccessId(null), 3000);
         if (refetchItinerary) {

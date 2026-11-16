@@ -1,7 +1,16 @@
 import os
 from contextlib import contextmanager
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+import time as _t
+from sqlalchemy import create_engine, text, event
+from prometheus_client import Histogram
+
+DB_QUERY_DURATION = Histogram(
+    "db_query_duration_seconds",
+    "Duration of SQL statements executed against Postgres",
+    ["operation"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 load_dotenv(override=True)
@@ -37,6 +46,21 @@ engine = create_engine(
         "keepalives_count": 5
     }
 )
+
+# Instrument every SQL statement for Prometheus (duration by operation type).
+@event.listens_for(engine, "before_cursor_execute")
+def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    context._prom_start = _t.perf_counter()
+
+@event.listens_for(engine, "after_cursor_execute")
+def _after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    try:
+        dur = _t.perf_counter() - getattr(context, "_prom_start", _t.perf_counter())
+        op = (statement or "").strip().split()[:1]
+        op = op[0].upper() if op else "OTHER"
+        DB_QUERY_DURATION.labels(operation=op).observe(dur)
+    except Exception:
+        pass
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

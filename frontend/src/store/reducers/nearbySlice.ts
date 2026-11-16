@@ -1,6 +1,8 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import axios from 'axios';
 import { getApiBaseUrl, getAuthHeaders } from '../../config/apiConfig';
+import { CACHE_TTL } from '../cache/cacheTypes';
+import { resetAllCaches } from '../cache/globalActions';
 
 export interface Place {
   id: string;
@@ -66,7 +68,9 @@ export const fetchNearbyPlaces = createAsyncThunk(
           lat,
           lng
         );
-        if (distKm < 0.5) return false;
+        // Near the last center AND still fresh -> reuse. Stale data refetches even if the user hasn't moved.
+        const fresh = nearby.lastFetchedAt !== null && Date.now() - nearby.lastFetchedAt < CACHE_TTL.nearby;
+        if (distKm < 0.5 && fresh) return false;
       }
       return true;
     },
@@ -79,6 +83,7 @@ export interface NearbyState {
   radius_m: number;
   loading: boolean;
   error: string | null;
+  lastFetchedAt: number | null;
 }
 
 const initialState: NearbyState = {
@@ -87,6 +92,7 @@ const initialState: NearbyState = {
   radius_m: 5000,
   loading: false,
   error: null,
+  lastFetchedAt: null,
 };
 
 export const nearbySlice = createSlice({
@@ -97,15 +103,12 @@ export const nearbySlice = createSlice({
       state.places = [];
       state.center = null;
       state.error = null;
-    },
-    clearNearbyCache: (state) => {
-      state.places = [];
-      state.center = null;
-      state.error = null;
+      state.lastFetchedAt = null;
     },
   },
   extraReducers: (builder) => {
     builder
+      .addCase(resetAllCaches, () => initialState)
       .addCase(fetchNearbyPlaces.pending, (state) => {
         state.loading = true;
         state.error = null;
@@ -116,6 +119,7 @@ export const nearbySlice = createSlice({
         state.center = action.payload.center;
         state.radius_m = action.payload.radius_m;
         state.error = null;
+        state.lastFetchedAt = Date.now();
       })
       .addCase(fetchNearbyPlaces.rejected, (state, action: any) => {
         state.loading = false;
@@ -124,5 +128,5 @@ export const nearbySlice = createSlice({
   },
 });
 
-export const { clearNearby, clearNearbyCache } = nearbySlice.actions;
+export const { clearNearby } = nearbySlice.actions;
 export default nearbySlice.reducer;

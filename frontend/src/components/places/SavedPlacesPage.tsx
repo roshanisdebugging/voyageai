@@ -2,33 +2,30 @@ import React, { useState, useEffect } from 'react';
 import { useToast } from '../common/UndoToast';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Heart, MapPin, Star, Navigation, Trash2, Compass, Check, Loader2, ExternalLink } from 'lucide-react';
-import { getSavedPlaces, removeSavedPlace, savePlace, type SavedPlace } from '../../services/savedPlacesApi';
+import type { SavedPlace } from '../../services/savedPlacesApi';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { fetchSavedPlaces, savePlaceThunk, unsavePlaceThunk } from '../../store/reducers/savedPlacesSlice';
 
 export const SavedPlacesPage: React.FC = () => {
   const navigate = useNavigate();
+  const dispatch = useAppDispatch();
 
-  const [places, setPlaces] = useState<SavedPlace[]>([]);
+  const places = useAppSelector((s) => s.savedPlaces.data);
+  const isInitialized = useAppSelector((s) => s.savedPlaces.isInitialized);
+  const fetching = useAppSelector((s) => s.savedPlaces.loading);
   const { showToast } = useToast();
-  const [loading, setLoading] = useState<boolean>(true);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
 
-  const fetchPlaces = async () => {
-    setLoading(true);
-    try {
-      const data = await getSavedPlaces();
-      setPlaces(data);
-    } catch (err) {
-      console.warn('[SAVED PLACES LOAD ERROR]:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Full-page loader only when there is nothing cached to show; otherwise refresh in the background.
+  const loading = !isInitialized && places.length === 0 && fetching;
+  const refreshing = fetching && (isInitialized || places.length > 0);
 
+  // TTL-gated: a no-op while the cached list is fresh.
   useEffect(() => {
-    fetchPlaces();
-  }, []);
+    dispatch(fetchSavedPlaces({}));
+  }, [dispatch]);
 
   const handleRemoveConfirm = async () => {
     if (!confirmDeleteId || isDeleting) return;
@@ -38,20 +35,19 @@ export const SavedPlacesPage: React.FC = () => {
     const placeId = targetPlace?.place_id || confirmDeleteId;
 
     try {
-      await removeSavedPlace(placeId);
-      setPlaces(prev => prev.filter(p => p.place_id !== placeId && p.id !== placeId));
+      // Optimistic in the slice; restored automatically if the server rejects it.
+      await dispatch(unsavePlaceThunk(placeId)).unwrap();
       setConfirmDeleteId(null);
       if (targetPlace) {
         showToast({
           message: `Removed ${targetPlace.title || 'place'}`,
           undo: async () => {
-            await savePlace(targetPlace);
-            setPlaces(prev => [targetPlace, ...prev]);
+            await dispatch(savePlaceThunk(targetPlace)).unwrap();
           },
         });
       }
     } catch (err: any) {
-      setToastMessage(err.message || 'Failed to remove place');
+      setToastMessage(typeof err === 'string' ? err : err?.message || 'Failed to remove place');
     } finally {
       setIsDeleting(false);
       setTimeout(() => setToastMessage(null), 3000);
@@ -157,7 +153,12 @@ export const SavedPlacesPage: React.FC = () => {
         <div className="space-y-4">
           <div className="flex items-center justify-between text-xs font-bold text-[#5F6863] px-1">
             <span>{places.length} {places.length === 1 ? 'place' : 'places'} bookmarked</span>
-            <span>Atomic Cache (10m TTL)</span>
+            {refreshing && (
+              <span className="flex items-center gap-1.5">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Refreshing…
+              </span>
+            )}
           </div>
 
           <div className="space-y-3.5">

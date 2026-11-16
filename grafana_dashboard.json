@@ -1,0 +1,105 @@
+{
+  "title": "VoyageAI Performance",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request Rate (req/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [ { "expr": "rate(http_requests_total[1m])", "legendFormat": "{{handler}} {{status}}" } ]
+    },
+    {
+      "id": 2,
+      "title": "p95 Request Latency (s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [ { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler))", "legendFormat": "{{handler}}" } ]
+    },
+    {
+      "id": 3,
+      "title": "Session Cache Hit Ratio",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
+      "targets": [ { "expr": "rate(auth_session_cache_hits_total[5m]) / (rate(auth_session_cache_hits_total[5m]) + rate(auth_session_cache_misses_total[5m]))" } ]
+    },
+    {
+      "id": 4,
+      "title": "DB Query p95 by Operation (s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 8 },
+      "targets": [ { "expr": "histogram_quantile(0.95, sum(rate(db_query_duration_seconds_bucket[5m])) by (le, operation))", "legendFormat": "{{operation}}" } ]
+    },
+    {
+      "id": 5,
+      "title": "Requests by Status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [ { "expr": "sum(rate(http_requests_total[1m])) by (status)", "legendFormat": "{{status}}" } ]
+    },
+    {
+      "id": 6,
+      "title": "Top 5 Slowest DB Operations (avg s)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [ { "expr": "topk(5, db_query_duration_seconds_sum / clamp_min(db_query_duration_seconds_count, 1))", "legendFormat": "{{operation}}" } ]
+    },
+    {
+      "id": 7,
+      "title": "Error Rate (5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [ { "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))", "legendFormat": "error rate" } ]
+    },
+    {
+      "id": 8,
+      "title": "Onboarding Latency p95 (s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [ { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{handler=\"/api/user/onboarding\"}[5m])) by (le))", "legendFormat": "onboarding" } ]
+    },
+    {
+      "id": 9,
+      "title": "Cache Miss Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [ { "expr": "rate(auth_session_cache_misses_total[5m])", "legendFormat": "misses/s" } ]
+    },
+    {
+      "id": 10,
+      "title": "DB Pool - Checked Out",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 32 },
+      "targets": [ { "expr": "db_pool_checked_out" } ]
+    },
+    {
+      "id": 11,
+      "title": "DB Pool - Size / Overflow",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 32 },
+      "targets": [
+        { "expr": "db_pool_size", "legendFormat": "size" },
+        { "expr": "db_pool_overflow", "legendFormat": "overflow" }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Top Endpoints by Traffic",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "targets": [ { "expr": "topk(8, sum(rate(http_requests_total[5m])) by (handler))", "legendFormat": "{{handler}}" } ]
+    },
+    {
+      "id": 13,
+      "title": "Trips Created / Onboarding Completed",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "targets": [
+        { "expr": "trips_created_total", "legendFormat": "trips" },
+        { "expr": "onboarding_completed_total", "legendFormat": "onboarding done" }
+      ]
+    }
+  ]
+}

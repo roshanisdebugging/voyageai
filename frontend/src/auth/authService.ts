@@ -1,6 +1,7 @@
 import type { SessionData, LoginPayload, RegisterPayload, OnboardingUpdatePayload } from './types';
 import { wsClient } from '../services/wsClient';
 import { getApiBaseUrl, getAuthHeaders, setAuthToken, getAuthToken } from '../config/apiConfig';
+import { clearPersistedCache } from '../store/cache/persist';
 
 let inMemorySession: SessionData | null = null;
 
@@ -8,10 +9,9 @@ export const authService = {
   clearSessionCache() {
     inMemorySession = null;
     setAuthToken(null);
+    // Targeted: remove only the persisted Redux cache. Never wipe unrelated keys (e.g. the theme).
+    clearPersistedCache();
     try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.clear();
-      }
       if (typeof window !== 'undefined' && window.sessionStorage) {
         sessionStorage.clear();
       }
@@ -128,6 +128,26 @@ export const authService = {
     return null;
   },
 
+  /**
+   * Asks the server whether a session exists, telling "no session" apart from "server
+   * unreachable" (network error / 5xx). Callers purge caches only on 'anonymous'.
+   */
+  async probeSession(): Promise<'authenticated' | 'anonymous' | 'unreachable'> {
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/api/auth/me`, {
+        method: 'GET',
+        headers: this.getAuthHeaders(),
+        credentials: 'include',
+      });
+      if (response.status >= 500) return 'unreachable';
+      if (!response.ok) return 'anonymous';
+      const data = await response.json().catch(() => null);
+      return data && data.authenticated && data.authUser ? 'authenticated' : 'anonymous';
+    } catch {
+      return 'unreachable';
+    }
+  },
+
   async restoreSession(): Promise<SessionData | null> {
     const url = `${getApiBaseUrl()}/api/auth/me`;
     const cached = this.getCachedSession();
@@ -176,7 +196,10 @@ export const authService = {
       return cached;
     }
 
-    this.clearSessionCache();
+    // No session. Drop only the in-memory session; the caller probes the server and purges the
+    // persisted data cache only when the server confirms there is no session (not on an outage).
+    inMemorySession = null;
+    setAuthToken(null);
     return null;
   },
 

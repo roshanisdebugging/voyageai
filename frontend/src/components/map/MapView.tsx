@@ -18,6 +18,8 @@ import { getCanonicalCategory, type CanonicalCategoryKey } from './mapCategoryCo
 import { useTheme } from '../../context/ThemeContext';
 import { GOOGLE_MAP_DARK_STYLES } from '../../utils/googleMapStyles';
 import { wsClient } from '../../services/wsClient';
+import { memoize } from '../../services/memoCache';
+import { CACHE_TTL } from '../../store/cache/cacheTypes';
 import { isInIndia, placeSubtitle } from '../../features/trip/components/PlaceSearchField';
 import type { DestinationReference } from '../../features/trip/types';
 
@@ -361,7 +363,11 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const data: DestinationReference[] = await wsClient.sendRequest('places:search', { query: q });
+        const data: DestinationReference[] = await memoize(
+          `places:search:${q.trim().toLowerCase()}`,
+          CACHE_TTL.placesSearch,
+          () => wsClient.sendRequest('places:search', { query: q }),
+        );
         if (seq !== searchSeqRef.current) return;
         const india = Array.isArray(data) ? data.filter(isInIndia) : [];
         setSearchSuggestions(india);

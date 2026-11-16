@@ -6,9 +6,10 @@ uvicorn[standard]>=0.22.0       # [standard] brings websockets (for /ws/app, /ws
 pydantic>=2.0.0
 email-validator>=2.0.0          # pydantic EmailStr (registration)
 
-# Database (DATABASE_URL is postgresql://, which SQLAlchemy runs on psycopg2)
+# Database (DATABASE_URL is postgresql://, which SQLAlchemy 2.x runs on psycopg by default)
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
+psycopg[binary]>=3.1.0   # default driver for postgresql:// under SQLAlchemy 2.x
 
 # Cache, queue, rate limits (local Redis needs protocol=2, available from redis 5)
 redis>=5.0.0
@@ -26,6 +27,9 @@ google-generativeai>=0.3.0      # tour guide chat (Gemini SDK)
 
 # Config
 python-dotenv>=1.0.0
+
+# Monitoring
+prometheus-fastapi-instrumentator>=6.1.0
 
 # Optional: only for COST_GUARD_BACKEND=semantic (local embedding cost guard, see docs/COST_GUARD.md).
 # The default cost guard (groq) doesn't need them.
