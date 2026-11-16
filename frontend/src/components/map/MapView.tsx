@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { useNavigation } from '../../context/NavigationContext';
@@ -8,6 +9,7 @@ import {
 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import './mapView.css';
 import { getApiBaseUrl, DEFAULT_HEADERS, getAuthHeaders } from '../../config/apiConfig';
 import { useAudioGuide } from '../../hooks/useAudioGuide';
 import { createUserLocationIcon, createPoiIcon } from './mapIcons';
@@ -71,10 +73,6 @@ const formatDistance = (meters?: number) => {
   if (meters < 1000) return `${Math.round(meters)} m away`;
   return `${(meters / 1000).toFixed(1)} km away`;
 };
-
-// Fixed app chrome this page sits between — adjust to match the real header/bottom-nav height.
-const HEADER_HEIGHT = 64;
-const BOTTOM_NAV_HEIGHT = 72;
 
 export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
   const { userLocation, userLocationName, isFollowMode, setIsFollowMode } = useApp();
@@ -316,18 +314,27 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
 
   // ── MAP INITIALIZATION & CLEANUP ──
   useEffect(() => {
-    if (!mapContainerRef.current) return;
+    const container = mapContainerRef.current;
+    if (!container) return;
     if (mapInstanceRef.current) return; // Initialize once
 
     // Starts at the current location (or trip destination); otherwise all of India, so search still works.
     const [initialLat, initialLng] = activeCoords || INDIA_CENTER;
+    const hasResizeObserver = typeof ResizeObserver !== 'undefined';
 
-    const map = L.map(mapContainerRef.current, {
+    const map = L.map(container, {
       center: [initialLat, initialLng],
       zoom: activeCoords ? 15 : 5,
       zoomControl: false,
       attributionControl: false,
+      trackResize: !hasResizeObserver,
     });
+    L.control.attribution({ prefix: false }).addTo(map);
+
+    const resizeObserver = hasResizeObserver
+      ? new ResizeObserver(() => map.invalidateSize({ debounceMoveend: true }))
+      : null;
+    resizeObserver?.observe(container);
 
     const tileLayer = L.tileLayer(GOOGLE_MAPS_TILES.url, {
       maxZoom: GOOGLE_MAPS_TILES.maxZoom,
@@ -353,6 +360,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     map.on('dragstart', handleDragStart);
 
     return () => {
+      resizeObserver?.disconnect();
       map.off('dragstart', handleDragStart);
       markersLayer.clearLayers();
       searchMarkerRef.current = null;
@@ -608,16 +616,17 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
 
   return (
     <div
-      className="relative w-full overflow-hidden bg-[#EFF1ED] dark:bg-zinc-950 select-none transition-colors"
-      style={{ height: `calc(100dvh - ${HEADER_HEIGHT}px - ${BOTTOM_NAV_HEIGHT}px)` }}
+      className="map-view relative isolate w-full min-h-0 flex-1 overflow-hidden bg-[#EFF1ED] dark:bg-zinc-950 select-none transition-colors"
+      data-map-search-result={Boolean(searchResult) || undefined}
     >
       {/* Map */}
-      <div ref={mapContainerRef} className="w-full h-full z-0" />
+      <div ref={mapContainerRef} className="absolute inset-0 z-0" />
 
       {/* Top controls: back + recenter */}
-      <div className="absolute top-3 left-3 right-3 z-[500] flex items-center justify-between pointer-events-none">
+      <div className="map-overlay-controls absolute top-3 inset-x-3 z-[510] flex items-center justify-between pointer-events-none">
         <button
           type="button"
+          aria-label="Back to Explore"
           onClick={() => navigateToExplore()}
           className="pointer-events-auto min-h-[40px] px-3.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800 text-[#1F2522] dark:text-zinc-100 border border-gray-200 dark:border-zinc-800 shadow-sm font-semibold text-xs flex items-center gap-1.5 press-scale transition-colors"
         >
@@ -626,10 +635,11 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
         </button>
 
         <div className="pointer-events-auto relative flex-1 min-w-0 mx-2">
-          <div className="min-h-[40px] flex items-center gap-2 px-3 rounded-full bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-sm">
+          <div className="min-h-[40px] flex items-center gap-2 px-3 rounded-full bg-[var(--color-surface)] border border-[var(--color-text-tertiary)] shadow-sm outline-[var(--color-primary)] dark:outline-[var(--color-primary-light)] has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-3">
             {isSearching
-              ? <Loader2 className="w-4 h-4 shrink-0 animate-spin text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
-              : <Search className="w-4 h-4 shrink-0 text-gray-500 dark:text-zinc-400" aria-hidden="true" />}
+              ? <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none text-[color:var(--color-primary)] dark:text-[color:var(--color-primary-light)]" aria-hidden="true" />
+              : <Search className="w-4 h-4 shrink-0 text-[color:var(--color-text-secondary)]" aria-hidden="true" />}
+            <span className="sr-only" role="status">{isSearching ? 'Searching for places…' : ''}</span>
             <input
               type="search"
               value={searchQuery}
@@ -643,14 +653,14 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
               }}
               placeholder="Search a place in India"
               aria-label="Search a place on the map"
-              className="flex-1 min-w-0 bg-transparent text-sm text-[#1F2522] dark:text-zinc-100 placeholder:text-gray-400 outline-none [&::-webkit-search-cancel-button]:hidden"
+              className="flex-1 min-w-0 bg-transparent text-sm text-[color:var(--color-text-primary)] placeholder:text-[color:var(--color-text-secondary)] placeholder:opacity-100 caret-[var(--color-primary)] dark:caret-[var(--color-primary-light)] outline-none [&::-webkit-search-cancel-button]:hidden"
             />
             {(searchQuery || searchResult) && (
               <button
                 type="button"
                 onClick={clearSearch}
                 aria-label="Clear search"
-                className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-gray-500 hover:text-gray-900 dark:hover:text-zinc-100"
+                className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-[color:var(--color-text-secondary)] hover:bg-[var(--color-surface-elevated)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:focus-visible:outline-[var(--color-primary-light)]"
               >
                 <X className="w-4 h-4" aria-hidden="true" />
               </button>
@@ -666,17 +676,17 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                   role="option"
                   aria-selected={false}
                   onClick={() => selectSearchResult(s)}
-                  className="w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b last:border-b-0 border-gray-100 dark:border-zinc-800"
+                  className="w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b last:border-b-0 border-gray-100 dark:border-zinc-800 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:focus-visible:outline-[var(--color-primary-light)]"
                 >
                   <MapPin className="w-4 h-4 mt-0.5 shrink-0 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold text-[#1F2522] dark:text-zinc-100 truncate">{s.name}</span>
-                    <span className="block text-[11px] text-gray-500 dark:text-zinc-400 truncate">{(s as any).displayName || placeSubtitle(s)}</span>
+                    <span className="block text-[11px] text-[color:var(--color-text-secondary)] truncate">{(s as any).displayName || placeSubtitle(s)}</span>
                   </span>
                 </button>
               ))}
               {searchMessage && (
-                <div className="px-3.5 py-3 text-xs text-gray-500 dark:text-zinc-400">{searchMessage}</div>
+                <div className="px-3.5 py-3 text-xs text-[color:var(--color-text-secondary)]">{searchMessage}</div>
               )}
             </div>
           )}
@@ -697,24 +707,24 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       </div>
 
       {searchResult && (
-        <div className="absolute top-[60px] left-3 right-3 z-[500] pointer-events-auto rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-md p-3.5 flex items-start gap-3 animate-fadeIn" role="status">
+        <div className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] pointer-events-auto rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-md p-3.5 flex items-start gap-3 animate-fadeIn" role="status">
           <div className="w-9 h-9 rounded-xl bg-[#E8F0EE] dark:bg-emerald-950 text-[#1F5A3F] dark:text-emerald-400 flex items-center justify-center shrink-0">
             <MapPin className="w-4.5 h-4.5" aria-hidden="true" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-bold text-[#1F2522] dark:text-zinc-100 truncate">{searchResult.name}</div>
-            <div className="text-[11px] text-gray-500 dark:text-zinc-400 truncate">{(searchResult as any).displayName || placeSubtitle(searchResult)}</div>
+            <div className="text-[11px] text-[color:var(--color-text-secondary)] truncate">{(searchResult as any).displayName || placeSubtitle(searchResult)}</div>
             {searchDistanceMeters != null ? (
-              <div className="text-xs font-bold text-[#1F5A3F] dark:text-emerald-400 mt-1">{formatSearchDistance(searchDistanceMeters)} from you <span className="font-normal text-gray-500 dark:text-zinc-400">(straight line)</span></div>
+              <div className="text-xs font-bold tabular-nums text-[color:var(--color-text-secondary)] mt-1">{formatSearchDistance(searchDistanceMeters)} from you <span className="font-normal">(straight line)</span></div>
             ) : (
-              <div className="text-xs text-gray-500 dark:text-zinc-400 mt-1">Turn on location to see distance</div>
+              <div className="text-xs text-[color:var(--color-text-secondary)] mt-1">Turn on location to see distance</div>
             )}
           </div>
         </div>
       )}
 
       {!activeCoords && !searchResult && (
-        <div className="absolute top-[60px] left-3 right-3 z-[500] pointer-events-none flex justify-center">
+        <div className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] pointer-events-none flex justify-center">
           <span className="px-3 py-1.5 rounded-full bg-white/95 dark:bg-zinc-900/95 border border-gray-200 dark:border-zinc-800 text-[11px] font-medium text-gray-600 dark:text-zinc-300 shadow-sm">
             Turn on location to see places near you, or search above
           </span>
@@ -726,7 +736,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       <div
         role="group"
         aria-label="Filter places by category"
-        className="absolute top-[60px] left-3 right-3 z-[500] flex items-center gap-2 overflow-x-auto no-scrollbar pointer-events-auto py-1"
+        className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] flex items-center gap-2 overflow-x-auto no-scrollbar pointer-events-auto py-1"
       >
         {CATEGORY_FILTERS.map(({ key, label }) => {
           const count = categoryCounts[key] ?? 0;
@@ -762,7 +772,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       {sortedPlaces.length > 0 ? (
         <div
           ref={cardScrollRef}
-          className="absolute bottom-3 left-0 right-0 z-[500] flex gap-3 overflow-x-auto px-3 pb-1 snap-x snap-mandatory scrollbar-none pointer-events-auto animate-slideUp"
+          className="map-places-overlay absolute inset-x-0 z-[500] flex gap-3 px-3 pb-1 snap-x snap-mandatory pointer-events-auto animate-slideUp"
         >
           {sortedPlaces.map((place) => {
             const isSelected = selectedPlace?.id === place.id;
@@ -777,12 +787,13 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                 tabIndex={0}
                 onClick={() => focusPlace(place)}
                 onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     focusPlace(place);
                   }
                 }}
-                className={`w-[270px] sm:w-[300px] shrink-0 snap-center rounded-3xl bg-white dark:bg-zinc-900 border p-4 shadow-lg space-y-3 cursor-pointer transition-colors ${isSelected ? 'border-[#1F5A3F] dark:border-emerald-500 ring-2 ring-[#1F5A3F]/20 dark:ring-emerald-500/20' : 'border-gray-200 dark:border-zinc-800'
+                className={`w-[270px] sm:w-[300px] max-w-full shrink-0 snap-center rounded-3xl bg-white dark:bg-zinc-900 border p-4 shadow-lg space-y-3 cursor-pointer transition-colors ${isSelected ? 'border-[#1F5A3F] dark:border-emerald-500 ring-2 ring-[#1F5A3F]/20 dark:ring-emerald-500/20' : 'border-gray-200 dark:border-zinc-800'
                   }`}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -791,7 +802,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                       <span className="px-2 py-0.5 rounded-md bg-[#1F5A3F]/10 dark:bg-emerald-950/60 text-[#1F5A3F] dark:text-emerald-400 border border-[#1F5A3F]/20 dark:border-emerald-800/40 text-[10px] font-semibold uppercase">
                         {sentenceCase(place.category)}
                       </span>
-                      <span className="text-[11px] font-medium text-gray-400 dark:text-zinc-400">
+                      <span className="text-[11px] font-medium tabular-nums whitespace-nowrap text-[color:var(--color-text-secondary)]">
                         {formatDistance(place.distanceMeters)}
                       </span>
                     </div>
@@ -864,14 +875,14 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
           })}
         </div>
       ) : isLoadingPlaces ? (
-        <div className="absolute bottom-3 left-3 right-3 z-[500] pointer-events-auto animate-slideUp">
-          <div className="rounded-3xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-4 shadow-lg flex items-center justify-center gap-3">
-            <Loader2 className="w-5 h-5 text-[#1F5A3F] dark:text-emerald-400 animate-spin" />
+        <div className="map-places-overlay absolute inset-x-3 z-[500] pointer-events-auto animate-slideUp">
+          <div className="rounded-3xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-4 shadow-lg flex items-center justify-center gap-3" role="status">
+            <Loader2 className="w-5 h-5 text-[color:var(--color-primary)] dark:text-[color:var(--color-primary-light)] animate-spin motion-reduce:animate-none" aria-hidden="true" />
             <p className="text-sm font-medium text-gray-700 dark:text-zinc-300">Finding nearby places...</p>
           </div>
         </div>
       ) : (
-        <div className="absolute bottom-3 left-3 right-3 z-[500] pointer-events-auto animate-slideUp">
+        <div className="map-places-overlay absolute inset-x-3 z-[500] pointer-events-auto animate-slideUp">
           <div className="rounded-3xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-4 shadow-lg text-center">
             <p className="text-sm font-semibold text-gray-900 dark:text-zinc-100">
               {activeCategory !== 'all' ? `No ${activeCategory} found nearby` : 'No places found here yet'}
@@ -895,19 +906,22 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
       )}
 
       {/* Interactive Day Selection Modal */}
-      <AddToItineraryModal
-        isOpen={Boolean(selectedPlaceForModal)}
-        onClose={() => {
-          if (!isAddingToItinerary) setSelectedPlaceForModal(null);
-        }}
-        itemTitle={selectedPlaceForModal?.name || ''}
-        days={modalDays}
-        isSubmitting={isAddingToItinerary}
-        onConfirm={handleConfirmAddToItinerary}
-        category={selectedPlaceForModal?.category}
-        location={sanitizeLocationName(selectedPlaceForModal?.address || userLocationName)}
-        price={selectedPlaceForModal?.price_approx}
-      />
+      {selectedPlaceForModal && createPortal(
+        <AddToItineraryModal
+          isOpen
+          onClose={() => {
+            if (!isAddingToItinerary) setSelectedPlaceForModal(null);
+          }}
+          itemTitle={selectedPlaceForModal.name}
+          days={modalDays}
+          isSubmitting={isAddingToItinerary}
+          onConfirm={handleConfirmAddToItinerary}
+          category={selectedPlaceForModal.category}
+          location={sanitizeLocationName(selectedPlaceForModal.address || userLocationName)}
+          price={selectedPlaceForModal.price_approx}
+        />,
+        document.body,
+      )}
     </div>
   );
 };

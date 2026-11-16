@@ -1,0 +1,195 @@
+.concierge-drawer {
+  --concierge-action-text: #fff;
+  --concierge-control-border: #71837a;
+  --concierge-accent-surface: #e6f2ed;
+  --concierge-accent-text: #285a4c;
+  --concierge-success-surface: #e7f3ea;
+  --concierge-success-text: #255e3f;
+  --concierge-caution-surface: #fcebf0;
+  --concierge-caution-text: #7c3446;
+  --concierge-hover-surface: #e6f2ed;
+  --concierge-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom));
+  --concierge-available-height: calc(100dvh - var(--concierge-bottom) - max(12px, var(--safe-top)));
+}
+
+.dark .concierge-drawer {
+  --concierge-action-text: #09090b;
+  --concierge-control-border: #8c9a94;
+  --concierge-accent-surface: #14352c;
+  --concierge-accent-text: #a0efd1;
+  --concierge-success-surface: #18342b;
+  --concierge-success-text: #9aefb6;
+  --concierge-caution-surface: #45232d;
+  --concierge-caution-text: #ffabc0;
+  --concierge-hover-surface: #21342d;
+}
+
+.sheet-container.concierge-sheet {
+  bottom: var(--concierge-bottom);
+  padding-bottom: 0;
+  touch-action: auto;
+}
+
+.concierge-sheet-body {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.concierge-transcript {
+  scrollbar-color: var(--concierge-control-border) transparent;
+  touch-action: pan-y;
+}
+
+.concierge-drawer :is(button, input):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.concierge-suggestion,
+.concierge-secondary-action,
+.concierge-input {
+  background: var(--color-surface-elevated);
+  border-color: var(--concierge-control-border);
+}
+
+.concierge-suggestion {
+  min-height: 48px;
+}
+
+.concierge-suggestion:hover,
+.concierge-secondary-action:hover:not(:disabled) {
+  background: var(--concierge-hover-surface);
+}
+
+.concierge-message {
+  max-width: min(94%, 42rem);
+}
+
+.concierge-user-message,
+.concierge-primary-action {
+  background: var(--color-primary);
+  color: var(--concierge-action-text);
+}
+
+.concierge-primary-action,
+.concierge-secondary-action {
+  min-height: 44px;
+}
+
+.concierge-primary-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-primary), var(--concierge-action-text) 8%);
+}
+
+.concierge-primary-action:disabled,
+.concierge-secondary-action:disabled {
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+}
+
+.concierge-recommendation-reason {
+  background: var(--concierge-accent-surface);
+  color: var(--concierge-accent-text);
+}
+
+.concierge-success {
+  background: var(--concierge-success-surface);
+  color: var(--concierge-success-text);
+}
+
+.concierge-loading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 2px 4px;
+}
+
+.concierge-loading::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+
+.concierge-composer {
+  padding-bottom: max(10px, var(--safe-bottom));
+}
+
+.concierge-input,
+.concierge-composer button {
+  min-height: 52px;
+}
+
+.concierge-input {
+  caret-color: var(--color-primary);
+}
+
+.concierge-input:focus {
+  border-color: var(--color-primary);
+}
+
+.concierge-input::selection {
+  background: var(--concierge-accent-surface);
+  color: var(--concierge-accent-text);
+}
+
+.concierge-confirmation {
+  position: fixed;
+  inset: var(--concierge-visual-top, 0px) 0 var(--concierge-keyboard-inset, 0px);
+  width: min(28rem, calc(100% - 32px));
+  max-height: calc(var(--concierge-visual-height, 100dvh) - 32px);
+  margin: auto;
+  padding: clamp(16px, 5vw, 24px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 18px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.28);
+}
+
+.concierge-confirmation::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+
+.concierge-current-activity {
+  background: var(--concierge-caution-surface);
+  color: var(--concierge-caution-text);
+}
+
+@media (min-width: 1024px) {
+  .concierge-drawer {
+    --concierge-bottom: 0px;
+  }
+
+  .sheet-container.concierge-sheet {
+    inset-inline: max(20px, calc((100% - 48rem) / 2));
+  }
+}
+
+.concierge-drawer[data-keyboard-open] {
+  --concierge-bottom: var(--concierge-keyboard-inset);
+  --concierge-preferred-height: 100dvh;
+  --concierge-available-height: calc(var(--concierge-visual-height) - max(8px, var(--safe-top)));
+}
+
+.concierge-drawer[data-keyboard-open] .sheet-handle-zone {
+  display: none;
+}
+
+.concierge-drawer[data-keyboard-open] .sheet-handle-zone + div {
+  padding-block: 4px;
+}
+
+.concierge-drawer[data-keyboard-open] .concierge-composer {
+  padding-block: 8px;
+}
+
+@media (max-width: 1023px) and (max-height: 420px) {
+  .concierge-drawer {
+    --concierge-preferred-height: 100dvh;
+    --concierge-bottom: var(--safe-bottom);
+  }
+}

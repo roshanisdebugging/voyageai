@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { BottomSheet } from '../common/BottomSheet';
@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { wsClient } from '../../services/wsClient';
 import { FormattedText } from '../common/FormattedText';
 import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS } from '../../config/apiConfig';
+import './AIAssistantDrawer.css';
 
 interface SwapRecommendation {
   id: string;
@@ -64,7 +65,66 @@ export const AIAssistantSheet: React.FC = () => {
   } | null>(null);
   const [swapSuccessMessage, setSwapSuccessMessage] = useState<string | null>(null);
 
+  const drawerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const confirmationRef = useRef<HTMLDialogElement>(null);
+  const confirmationTitleId = useId();
+  const isConfirmingSwap = isAiOpen && pendingSwap !== null;
+
+  const closeDrawer = useCallback(() => {
+    setIsAiOpen(false);
+    setSwapContext(null);
+    setPendingSwap(null);
+  }, [setIsAiOpen, setSwapContext]);
+
+  useEffect(() => {
+    const drawer = drawerRef.current;
+    const viewport = window.visualViewport;
+    if (!isAiOpen || !drawer || !viewport) return;
+
+    const clearKeyboardInset = () => {
+      drawer.removeAttribute('data-keyboard-open');
+      drawer.style.removeProperty('--concierge-keyboard-inset');
+      drawer.style.removeProperty('--concierge-visual-height');
+      drawer.style.removeProperty('--concierge-visual-top');
+    };
+
+    const syncViewport = () => {
+      // Overlay keyboards resize the visual viewport while fixed elements stay in the layout viewport.
+      if (viewport.scale !== 1 || window.innerHeight - viewport.height <= 80) {
+        clearKeyboardInset();
+        return;
+      }
+
+      const bottomInset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      drawer.setAttribute('data-keyboard-open', '');
+      drawer.style.setProperty('--concierge-keyboard-inset', `${Math.ceil(bottomInset)}px`);
+      drawer.style.setProperty('--concierge-visual-height', `${Math.floor(viewport.height)}px`);
+      drawer.style.setProperty('--concierge-visual-top', `${Math.max(0, viewport.offsetTop)}px`);
+    };
+
+    syncViewport();
+    viewport.addEventListener('resize', syncViewport);
+    viewport.addEventListener('scroll', syncViewport);
+    window.addEventListener('resize', syncViewport);
+    return () => {
+      viewport.removeEventListener('resize', syncViewport);
+      viewport.removeEventListener('scroll', syncViewport);
+      window.removeEventListener('resize', syncViewport);
+      clearKeyboardInset();
+    };
+  }, [isAiOpen]);
+
+  useEffect(() => {
+    const confirmation = confirmationRef.current;
+    if (isConfirmingSwap && confirmation && !confirmation.open) confirmation.showModal();
+    if (!isConfirmingSwap && confirmation?.open) confirmation.close();
+  }, [isConfirmingSwap]);
+
+  useEffect(() => {
+    const transcript = scrollRef.current;
+    if (isAiOpen && transcript) transcript.scrollTop = transcript.scrollHeight;
+  }, [isAiOpen, messages, isSubmitting]);
 
   useEffect(() => {
     if (isAiOpen && aiPromptQuery) {
@@ -214,7 +274,6 @@ export const AIAssistantSheet: React.FC = () => {
       }]);
     } finally {
       setIsSubmitting(false);
-      setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }), 100);
     }
   };
 
@@ -277,40 +336,38 @@ export const AIAssistantSheet: React.FC = () => {
   };
 
   return (
-    <>
+    <div ref={drawerRef} className="concierge-drawer">
       <BottomSheet
         isOpen={isAiOpen}
-        onClose={() => {
-          setIsAiOpen(false);
-          setSwapContext(null);
-        }}
-        height={messages.length > 0 ? 'expanded' : 'half'}
+        onClose={closeDrawer}
+        className="concierge-sheet"
+        bodyClassName="concierge-sheet-body"
+        maxHeight={`min(var(--concierge-preferred-height, ${messages.length > 0 ? '85dvh' : '58dvh'}), var(--concierge-available-height))`}
         title={swapContext ? `Swap Activity: ${swapContext.activityName}` : "Cruiser Concierge"}
       >
-        <div className="flex flex-col h-full">
-          
+        <div className="flex min-h-0 w-full flex-col">
           {/* Success Banner */}
           {swapSuccessMessage && (
-            <div className="mx-4 mt-2 p-3 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-success)] text-xs font-bold flex items-center gap-2 animate-fadeIn">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <div role="status" className="concierge-success mx-4 mt-2 p-3 rounded-2xl text-[13px] font-bold flex shrink-0 items-center gap-2 animate-fadeIn">
+              <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span>{swapSuccessMessage}</span>
             </div>
           )}
 
           {/* Messages Body */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5 bg-[var(--color-surface)]">
+          <div ref={scrollRef} className="concierge-transcript min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 space-y-3.5">
             {messages.length === 0 ? (
               <div className="space-y-4">
-                <p className="text-xs text-[var(--color-text-secondary)] font-bold uppercase tracking-wider">How can I assist your trip right now?</p>
+                <p className="text-sm text-[var(--color-text-secondary)] font-bold">How can I assist your trip right now?</p>
                 <div className="space-y-2">
                   {suggestions.map(s => (
                     <button
                       key={s.label}
                       onClick={() => handleSend(s.query)}
-                      className="w-full press-scale flex items-center gap-3 p-3.5 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-left hover:border-[var(--color-primary)] transition-colors shadow-xs"
+                      className="concierge-suggestion w-full press-scale flex items-center gap-3 p-3.5 rounded-2xl border text-left transition-colors"
                     >
-                      <s.icon className="w-4 h-4 text-[var(--color-primary)] shrink-0" />
-                      <span className="text-xs font-bold text-[var(--color-text-primary)]">{s.label}</span>
+                      <s.icon className="w-4 h-4 text-[var(--color-primary)] shrink-0" aria-hidden="true" />
+                      <span className="text-[13px] font-bold text-[var(--color-text-primary)]">{s.label}</span>
                     </button>
                   ))}
                 </div>
@@ -318,10 +375,10 @@ export const AIAssistantSheet: React.FC = () => {
             ) : (
               messages.map(msg => (
                 <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[92%] wrap-anywhere p-3.5 rounded-2xl text-xs leading-relaxed space-y-2.5 shadow-xs ${
+                  <div className={`concierge-message wrap-anywhere p-3.5 rounded-2xl text-xs leading-relaxed space-y-2.5 ${
                     msg.role === 'user'
-                      ? 'bg-[#355F58] text-white font-bold rounded-br-none'
-                      : 'bg-[var(--color-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] font-medium rounded-bl-none'
+                      ? 'concierge-user-message font-bold rounded-br-none'
+                      : 'bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)] font-medium rounded-bl-none'
                   }`}>
                     <FormattedText content={msg.text} />
 
@@ -333,23 +390,23 @@ export const AIAssistantSheet: React.FC = () => {
                           return (
                             <div
                               key={rec.id}
-                              className={`p-3.5 rounded-2xl border transition-all space-y-2 text-[var(--color-text-primary)] ${
+                              className={`p-3.5 rounded-2xl bg-[var(--color-surface)] border space-y-2 text-[var(--color-text-primary)] ${
                                 isSelected
-                                  ? 'bg-[var(--color-surface-elevated)] border-[var(--color-primary)] ring-2 ring-[var(--color-primary-glow)]'
-                                  : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)]'
+                                  ? 'border-[var(--color-primary)]'
+                                  : 'border-[var(--color-border)]'
                               }`}
                             >
-                              <div className="flex items-center justify-between">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
                                 <h5 className="font-extrabold text-sm text-[var(--color-text-primary)]">{rec.name}</h5>
-                                <span className="px-2 py-0.5 rounded-md bg-[var(--color-surface-elevated)] text-[var(--color-primary)] text-[10px] font-extrabold border border-[var(--color-border)]">
+                                <span className="concierge-recommendation-reason px-2 py-0.5 rounded-md text-[11px] font-extrabold">
                                   {rec.reason}
                                 </span>
                               </div>
 
-                              <p className="text-[11px] text-[var(--color-text-secondary)] font-medium">{rec.description}</p>
+                              <p className="text-[13px] text-[var(--color-text-secondary)] font-medium">{rec.description}</p>
 
-                              <div className="flex items-center justify-between text-[11px] text-[var(--color-text-primary)] pt-1 border-t border-[var(--color-border)]">
-                                <span className="font-mono text-[var(--color-primary)] font-bold">
+                              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-[var(--color-text-primary)] pt-1 border-t border-[var(--color-border)]">
+                                <span className="tabular-nums text-[var(--color-primary)] font-bold">
                                   {rec?.startTime ?? '10:00 AM'} • {rec?.durationMinutes ?? 60} mins
                                 </span>
                                 <span className="font-extrabold text-[var(--color-text-primary)]">
@@ -357,41 +414,15 @@ export const AIAssistantSheet: React.FC = () => {
                                 </span>
                               </div>
 
-                              {isSelected ? (
-                                <div className="p-3 mt-2 rounded-xl bg-[var(--color-surface)] border border-[var(--color-primary)] space-y-2.5 animate-fadeIn shadow-xs">
-                                  <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--color-primary)]">
-                                    <AlertCircle className="w-4 h-4 text-[var(--color-primary)] shrink-0" />
-                                    <span>Swap with "{msg.currentActivityName || 'Current Activity'}"?</span>
-                                  </div>
-                                  <div className="flex items-center gap-2 pt-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => setPendingSwap(null)}
-                                      disabled={isSubmitting}
-                                      className="flex-1 py-2 rounded-xl bg-[var(--color-surface-elevated)] hover:bg-[var(--color-surface)] text-[var(--color-text-primary)] font-bold text-xs border border-[var(--color-border)] transition-all"
-                                    >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={handleConfirmSwap}
-                                      disabled={isSubmitting}
-                                      className="flex-1 py-2 rounded-xl bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs transition-all shadow-xs"
-                                    >
-                                      {isSubmitting ? 'Updating...' : 'Confirm Swap'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setPendingSwap({ recommendation: rec, messageContext: msg })}
-                                  className="w-full py-2.5 bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 mt-1"
-                                >
-                                  <Sparkles className="w-3.5 h-3.5" />
-                                  <span>Select Recommendation</span>
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => setPendingSwap({ recommendation: rec, messageContext: msg })}
+                                className="concierge-primary-action w-full px-2 py-2.5 font-extrabold text-[13px] rounded-xl flex items-center justify-center gap-1.5 mt-1"
+                                aria-haspopup="dialog"
+                              >
+                                <Sparkles className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                                <span>Select Recommendation</span>
+                              </button>
                             </div>
                           );
                         })}
@@ -405,7 +436,7 @@ export const AIAssistantSheet: React.FC = () => {
                           type="button"
                           disabled={applyingRefinement}
                           onClick={() => handleApplyRefinement(msg.tripId || currentTrip?.id || '', msg.refinementActions || [])}
-                          className="w-full py-2.5 bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2"
+                          className="concierge-primary-action w-full px-2 py-2.5 font-extrabold text-[13px] rounded-xl flex items-center justify-center gap-2"
                         >
                           <Sparkles className="w-4 h-4" />
                           <span>{applyingRefinement ? 'Applying Refinements...' : 'Apply Refinements to Itinerary'}</span>
@@ -417,7 +448,7 @@ export const AIAssistantSheet: React.FC = () => {
                     {msg.role === 'ai' && msg.actionType && (
                       <button
                         onClick={() => handleExecuteAction(msg.actionType, msg.actionPayload)}
-                        className="min-h-14 text-xs py-2 px-3 mt-1.5 w-full flex items-center justify-center gap-1.5 rounded-2xl bg-[#355F58] text-white dark:bg-[var(--color-primary)] dark:text-zinc-950 font-bold"
+                        className="concierge-primary-action text-[13px] py-2 px-3 mt-1.5 w-full flex items-center justify-center gap-1.5 rounded-2xl font-bold"
                       >
                         {msg.actionType === 'food' && <Utensils className="w-3.5 h-3.5" />}
                         {msg.actionType === 'cab' && <Car className="w-3.5 h-3.5" />}
@@ -430,60 +461,71 @@ export const AIAssistantSheet: React.FC = () => {
                 </div>
               ))
             )}
+            {isSubmitting && !isConfirmingSwap && (
+              <p role="status" className="concierge-loading text-[13px] text-[var(--color-text-secondary)]">Concierge is working…</p>
+            )}
           </div>
 
           {/* Input Bar */}
           <form
             onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-            className="px-4 py-3 border-t border-[var(--color-border)] shrink-0 bg-[var(--color-surface)]"
-            style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))' }}
+            className="concierge-composer px-3.5 py-3 border-t border-[var(--color-border)] shrink-0 bg-[var(--color-surface)]"
           >
             <div className="flex items-center gap-2">
               <input
                 type="text"
+                aria-label="Message Cruiser Concierge"
+                enterKeyHint="send"
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 placeholder={swapContext ? `Refine options (e.g. 'something cheaper')...` : "Ask Copilot anything..."}
-                className="w-full bg-[var(--color-surface-elevated)] border border-[var(--color-border)] focus:border-[var(--color-primary)] rounded-2xl px-3.5 py-3 text-xs font-semibold text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] outline-none focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] min-w-0 flex-1"
-                disabled={isSubmitting}
+                className="concierge-input w-full rounded-[14px] border px-3.5 py-3 text-base font-semibold text-[var(--color-text-primary)] placeholder:text-[var(--color-text-secondary)] min-w-0 flex-1"
               />
               <button
                 type="submit"
                 disabled={!input.trim() || isSubmitting}
-                className="touch-target press-scale p-3 rounded-2xl bg-[#355F58] text-white dark:bg-[var(--color-primary)] dark:text-zinc-950 disabled:bg-[var(--color-surface-elevated)] disabled:text-[var(--color-text-tertiary)] flex items-center justify-center"
+                className="concierge-primary-action touch-target shrink-0 press-scale p-3 rounded-[14px] flex items-center justify-center"
                 aria-label="Send message"
               >
-                <Send className="w-4 h-4" />
+                <Send className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           </form>
         </div>
       </BottomSheet>
 
-      {/* Confirmation Dialog Modal for Activity Swap */}
-      {pendingSwap && (
-        <div className="fixed inset-0 z-[100000] bg-[#1F2522]/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl animate-scaleIn text-[var(--color-text-primary)]">
-            <div className="flex items-center gap-2 text-[var(--color-primary)] font-extrabold text-sm uppercase tracking-wider">
-              <AlertCircle className="w-4 h-4 text-[var(--color-primary)]" />
-              <span>Replace Activity?</span>
-            </div>
+      <dialog
+        ref={confirmationRef}
+        className="concierge-confirmation space-y-4 wrap-anywhere"
+        aria-labelledby={confirmationTitleId}
+        onKeyDown={event => { if (event.key === 'Escape') event.stopPropagation(); }}
+        onCancel={event => {
+          event.preventDefault();
+          if (!isSubmitting) setPendingSwap(null);
+        }}
+      >
+        {pendingSwap && (
+          <>
+            <h4 id={confirmationTitleId} className="flex items-center gap-2 text-[var(--color-primary)] font-extrabold text-sm uppercase tracking-wider">
+              <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
+              Replace Activity?
+            </h4>
 
             <div className="space-y-3 py-2 border-y border-[var(--color-border)]">
-              <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 text-xs">
-                <span className="text-[10px] uppercase font-bold text-rose-700 dark:text-rose-300 tracking-wider">Replacing Current Activity</span>
+              <div className="concierge-current-activity p-3 rounded-2xl text-xs">
+                <span className="text-[11px] uppercase font-bold tracking-wider">Replacing Current Activity</span>
                 <h5 className="font-bold text-[var(--color-text-primary)] text-sm mt-0.5">{pendingSwap.messageContext.currentActivityName || 'Current Activity'}</h5>
               </div>
 
               <div className="flex justify-center">
-                <ArrowRight className="w-5 h-5 text-[var(--color-primary)] rotate-90" />
+                <ArrowRight className="w-5 h-5 text-[var(--color-primary)] rotate-90" aria-hidden="true" />
               </div>
 
               <div className="p-3 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] text-xs">
-                <span className="text-[10px] uppercase font-bold text-[var(--color-primary)] tracking-wider">With Selected Alternative</span>
+                <span className="text-[11px] uppercase font-bold text-[var(--color-primary)] tracking-wider">With Selected Alternative</span>
                 <h5 className="font-bold text-[var(--color-text-primary)] text-sm mt-0.5">{pendingSwap.recommendation.name}</h5>
                 <p className="text-[var(--color-text-secondary)] mt-1 font-medium">{pendingSwap?.recommendation?.startTime ?? '10:00 AM'} • {pendingSwap?.recommendation?.estimatedCost ? `₹${pendingSwap.recommendation.estimatedCost}` : 'Free'}</p>
-                <p className="text-[var(--color-text-secondary)] text-[11px] font-medium">{pendingSwap.recommendation.locationName}</p>
+                <p className="text-[var(--color-text-secondary)] font-medium">{pendingSwap.recommendation.locationName}</p>
               </div>
             </div>
 
@@ -494,7 +536,7 @@ export const AIAssistantSheet: React.FC = () => {
                 type="button"
                 onClick={() => setPendingSwap(null)}
                 disabled={isSubmitting}
-                className="flex-1 py-3 rounded-2xl bg-[var(--color-surface-elevated)] hover:bg-[var(--color-surface)] text-[var(--color-text-primary)] font-bold text-xs border border-[var(--color-border)] transition-all"
+                className="concierge-secondary-action flex-1 py-3 rounded-2xl font-bold text-xs border transition-colors"
               >
                 Cancel
               </button>
@@ -503,15 +545,15 @@ export const AIAssistantSheet: React.FC = () => {
                 type="button"
                 onClick={handleConfirmSwap}
                 disabled={isSubmitting}
-                className="flex-1 py-3 rounded-2xl bg-[#355F58] hover:bg-[#2C504A] text-white dark:bg-[var(--color-primary)] dark:hover:bg-[var(--color-primary-light)] dark:text-zinc-950 font-extrabold text-xs transition-all shadow-xs"
+                className="concierge-primary-action flex-1 py-3 rounded-2xl font-extrabold text-xs"
               >
                 {isSubmitting ? 'Updating...' : 'Confirm Swap'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-    </>
+          </>
+        )}
+      </dialog>
+    </div>
   );
 };
 

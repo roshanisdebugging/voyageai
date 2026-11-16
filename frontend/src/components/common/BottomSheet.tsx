@@ -6,8 +6,10 @@ interface BottomSheetProps {
   onClose: () => void;
   children: React.ReactNode;
   height?: 'peek' | 'half' | 'expanded' | 'full';
+  maxHeight?: string;
   showHandle?: boolean;
   className?: string;
+  bodyClassName?: string;
   title?: string;
 }
 
@@ -23,8 +25,10 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   onClose,
   children,
   height = 'half',
+  maxHeight,
   showHandle = true,
   className = '',
+  bodyClassName = '',
   title,
 }) => {
   const titleId = useId();
@@ -99,7 +103,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
         ref={sheetRef}
         className={`sheet-container ${isOpen ? 'open' : ''} ${className}`}
         style={{
-          maxHeight: heightMap[height],
+          maxHeight: maxHeight ?? heightMap[height],
           transform: isOpen ? `translateY(${dragY}px)` : 'translateY(100%)',
           transition: isDragging ? 'none' : 'transform 0.3s cubic-bezier(0.32, 0.72, 0, 1)',
         }}
@@ -136,7 +140,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
         )}
 
         {/* Scrollable Content Body */}
-        <div className="flex-1 overflow-y-auto overscroll-contain">
+        <div className={`flex-1 overflow-y-auto overscroll-contain ${bodyClassName}`}>
           {children}
         </div>
       </div>

@@ -4,7 +4,7 @@ import { Sparkles } from 'lucide-react';
 
 import { useLocation } from 'react-router-dom';
 
-export const FloatingAIButton: React.FC = () => {
+export const FloatingAIButton: React.FC<{ inFlow?: boolean }> = ({ inFlow = false }) => {
   const { openAiAssistant, aiContextLabel, isAiOpen, isCabModalOpen } = useApp();
   const location = useLocation();
 
@@ -16,8 +16,8 @@ export const FloatingAIButton: React.FC = () => {
   return (
     <button
       onClick={() => openAiAssistant()}
-      className="fixed z-30 right-4 press-scale animate-scaleIn"
-      style={{ bottom: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 12px)' }}
+      className={inFlow ? 'min-h-11 press-scale' : 'fixed z-30 right-4 press-scale animate-scaleIn'}
+      style={inFlow ? undefined : { bottom: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 12px)' }}
       aria-label={`Ask Cruiser: ${aiContextLabel}`}
     >
       <div className="flex items-center gap-2 px-4 py-3 rounded-full bg-[#355F58] hover:bg-[#2C504A] text-white font-extrabold text-xs shadow-lg border border-[#D9DEDA] transition-all">

@@ -1,0 +1,72 @@
+.map-view {
+  --map-attribution-height: 1.25rem;
+  --map-controls-clearance: 6.5rem;
+}
+
+.map-view[data-map-search-result] {
+  --map-controls-clearance: 9rem;
+}
+
+.map-view .leaflet-container .leaflet-control-attribution {
+  display: flex;
+  align-items: center;
+  min-height: var(--map-attribution-height);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.map-overlay-controls > button {
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+}
+
+.map-overlay-controls input {
+  min-height: 2.625rem;
+}
+
+.map-overlay-controls [role="listbox"] {
+  max-height: min(34dvh, 14rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.map-places-overlay {
+  inset-block-end: var(--map-attribution-height);
+  max-block-size: max(4rem, calc(100% - var(--map-controls-clearance) - var(--map-attribution-height)));
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+@media (max-height: 30rem) {
+  .map-places-overlay [role="button"] {
+    padding: 0.5rem;
+  }
+
+  .map-places-overlay [role="button"] > div + div {
+    margin-block-start: 0.25rem;
+    padding-block-start: 0.25rem;
+  }
+}
+
+@media (orientation: landscape) and (min-width: 35rem) and (max-height: 30rem) {
+  .map-view,
+  .map-view[data-map-search-result] {
+    --map-controls-clearance: 3.75rem;
+    --map-places-width: clamp(17.5rem, 47vw, 22rem);
+  }
+
+  .map-secondary-overlay {
+    inset-inline-end: calc(var(--map-places-width) + 1rem);
+  }
+
+  .map-overlay-controls [role="listbox"] {
+    inset-inline-end: calc(var(--map-places-width) - 3rem);
+  }
+
+  .map-places-overlay {
+    inset-inline-start: auto;
+    inset-inline-end: 0.5rem;
+    inline-size: var(--map-places-width);
+  }
+}

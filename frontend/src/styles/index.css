@@ -518,6 +518,79 @@ h6 {
   overflow: hidden;
 }
 
+.map-app-shell {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.map-app-shell > header {
+  flex-shrink: 0;
+}
+
+.map-app-frame {
+  max-width: none;
+}
+
+.map-app-frame > aside {
+  flex-shrink: 0;
+  top: auto;
+  height: auto;
+  overflow-y: auto;
+}
+
+.map-app-tools {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+@media (min-width: 64rem) {
+  .map-app-tools {
+    padding-block-end: max(0.25rem, env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (max-height: 30rem) {
+  .map-app-shell > nav > div {
+    height: 3rem;
+  }
+
+  .map-app-shell > nav button {
+    padding-block: 0.125rem;
+  }
+
+  .map-app-tools {
+    padding-block-start: 0;
+  }
+}
+
+@media (orientation: landscape) and (min-width: 35rem) and (width < 64rem) and (max-height: 30rem) {
+  .map-app-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .map-app-shell > header,
+  .map-app-frame {
+    grid-column: 1 / -1;
+  }
+
+  .map-app-shell > nav {
+    grid-area: 3 / 1;
+  }
+
+  .map-app-tools {
+    grid-area: 3 / 2;
+    padding-block-end: max(0.25rem, env(safe-area-inset-bottom, 0px));
+  }
+}
+
 .guide-app-shell > header {
   flex-shrink: 0;
 }

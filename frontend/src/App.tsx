@@ -43,6 +43,16 @@ const MapView = React.lazy(() =>
   import('./components/map/MapView').then((mod) => ({ default: mod.MapView }))
 );
 
+const MapLoadingFallback = () => (
+  <div
+    className="flex min-h-0 flex-1 items-center justify-center p-12 text-[color:var(--color-primary)] dark:text-[color:var(--color-primary-light)]"
+    role="status"
+  >
+    <RefreshCw className="h-8 w-8 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+    <span className="sr-only">Loading map…</span>
+  </div>
+);
+
 const TripRouteRedirect: React.FC = () => {
   const { tripId } = useParams<{ tripId: string }>();
   const { setCurrentTripId, currentTripId } = useTrip();
@@ -119,7 +129,7 @@ const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement> }> = ({
 
   if ((navigationTarget || tripView === 'map') && (location.pathname === '/map' || location.pathname === '/trip/map' || location.pathname === '/')) {
     return (
-      <React.Suspense fallback={<div className="h-full min-h-[350px] flex items-center justify-center p-12 text-[#355F58]"><RefreshCw className="w-8 h-8 animate-spin" /></div>}>
+      <React.Suspense fallback={<MapLoadingFallback />}>
         <MapView />
       </React.Suspense>
     );
@@ -149,12 +159,12 @@ const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement> }> = ({
       <Route path="/:lang" element={<HomePage />} />
       <Route path="/:lang/*" element={<LocaleRedirect />} />
       <Route path="/map" element={
-        <React.Suspense fallback={<div className="h-full min-h-[350px] flex items-center justify-center p-12 text-[#355F58]"><RefreshCw className="w-8 h-8 animate-spin" /></div>}>
+        <React.Suspense fallback={<MapLoadingFallback />}>
           <MapView />
         </React.Suspense>
       } />
       <Route path="/trip/map" element={
-        <React.Suspense fallback={<div className="h-full min-h-[350px] flex items-center justify-center p-12 text-[#355F58]"><RefreshCw className="w-8 h-8 animate-spin" /></div>}>
+        <React.Suspense fallback={<MapLoadingFallback />}>
           <MapView />
         </React.Suspense>
       } />
@@ -181,9 +191,13 @@ const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement> }> = ({
 };
 const AppShell: React.FC = () => {
   const location = useLocation();
+  const { navigationTarget, tripView } = useApp();
   const isGuideView = /^\/(?:guide|tour-guide)\/?$/i.test(location.pathname);
+  const isMapView = /^\/(?:trip\/)?map\/?$/i.test(location.pathname)
+    || (location.pathname === '/' && (Boolean(navigationTarget) || tripView === 'map'));
   const shellRef = useRef<HTMLDivElement>(null);
   const [guideMicSlot, setGuideMicSlot] = useState<HTMLDivElement | null>(null);
+  const [mapMicSlot, setMapMicSlot] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -220,27 +234,32 @@ const AppShell: React.FC = () => {
   return (
     <div
       ref={shellRef}
-      className={`${isGuideView ? 'guide-app-shell' : 'min-h-dvh'} bg-[#F6F7F5] dark:bg-zinc-950 text-[#1F2522] dark:text-zinc-100 flex flex-col antialiased overflow-x-hidden w-full max-w-full transition-colors`}
+      className={`${isGuideView ? 'guide-app-shell' : isMapView ? 'map-app-shell' : 'min-h-dvh'} bg-[#F6F7F5] dark:bg-zinc-950 text-[#1F2522] dark:text-zinc-100 flex flex-col antialiased overflow-x-hidden w-full max-w-full transition-colors`}
     >
       {/* Mobile Lightweight Header */}
       <MobileHeader />
 
       {/* Main Layout Area */}
-      <div className={`${isGuideView ? 'guide-app-frame min-h-0' : ''} flex-1 flex max-w-7xl w-full mx-auto overflow-hidden`}>
+      <div className={`${isGuideView ? 'guide-app-frame min-h-0' : isMapView ? 'map-app-frame min-h-0' : ''} flex-1 flex max-w-7xl w-full mx-auto overflow-hidden`}>
         <DesktopSidebar />
 
-        <main className={`flex-1 min-w-0 flex flex-col max-w-full overflow-x-hidden ${isGuideView ? 'px-0 sm:px-4 py-0 sm:py-2 overflow-hidden' : 'px-4 lg:px-8 py-4 lg:py-6 overflow-y-auto'}`}>
+        <main className={`flex-1 min-w-0 flex flex-col max-w-full overflow-x-hidden ${isGuideView ? 'px-0 sm:px-4 py-0 sm:py-2 overflow-hidden' : isMapView ? 'min-h-0 overflow-hidden' : 'px-4 lg:px-8 py-4 lg:py-6 overflow-y-auto'}`}>
           <MainContent guideMicSlotRef={setGuideMicSlot} />
         </main>
       </div>
 
-      <MobileBottomNav inFlow={isGuideView} />
+      {isMapView && (
+        <div className="map-app-tools">
+          <FloatingAIButton inFlow />
+          <div ref={setMapMicSlot} />
+        </div>
+      )}
+      <MobileBottomNav inFlow={isGuideView || isMapView} />
 
-      {/* Floating Contextual AI Button (Omitted on Guide page) */}
-      {!isGuideView && <FloatingAIButton />}
+      {!isGuideView && !isMapView && <FloatingAIButton />}
 
       {/* Voice (step 1): floating mic, logged-in users only */}
-      <MicButton raised={!isGuideView} inlineTarget={guideMicSlot} />
+      <MicButton raised={!isGuideView} inlineTarget={isMapView ? mapMicSlot : guideMicSlot} />
 
       {/* Bottom Sheets & Modals */}
       <NotificationDrawer />
