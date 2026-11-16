@@ -654,7 +654,7 @@ def update_onboarding(
             from redis_client import redis_conn
             if redis_conn and token:
                 redis_conn.setex(
-                    f"session_user:{token}",
+                    auth.session_user_cache_key(token),
                     300,
                     json.dumps({
                         "user": current_user.model_dump(),

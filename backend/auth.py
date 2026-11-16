@@ -227,6 +227,12 @@ from prometheus_client import Counter as _PromCounter
 _AUTH_CACHE_HITS = _PromCounter("auth_session_cache_hits_total", "Session user cache hits")
 _AUTH_CACHE_MISSES = _PromCounter("auth_session_cache_misses_total", "Session user cache misses")
 
+
+def session_user_cache_key(token: str) -> str:
+    """Redis key for the cached session user. Keyed on the token hash so raw
+    tokens never appear in Redis key names; revoke_session deletes it."""
+    return f"session_user:{hash_token(token.strip())}"
+
 def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, UserPreferences]:
     if not token or not token.strip():
         raise ValueError("Missing session token")
@@ -236,7 +242,7 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
         from redis_client import redis_conn
         import json
         if redis_conn:
-            cached = redis_conn.get(f"session_user:{token}")
+            cached = redis_conn.get(session_user_cache_key(token))
             if cached:
                 data = json.loads(cached)
                 _AUTH_CACHE_HITS.inc()
@@ -342,7 +348,7 @@ def get_session_user(db: Session, token: str) -> Tuple[AuthUser, UserProfile, Us
         import json
         if redis_conn:
             redis_conn.setex(
-                f"session_user:{token}",
+                session_user_cache_key(token),
                 300,
                 json.dumps({
                     "user": _auth_user.model_dump(),
@@ -369,7 +375,7 @@ def revoke_session(db: Session, token: str):
     try:
         from redis_client import redis_conn
         if redis_conn:
-            redis_conn.delete(f"session_cache:{token}")
+            redis_conn.delete(f"session_cache:{token}", session_user_cache_key(token))
     except Exception:
         pass
 
