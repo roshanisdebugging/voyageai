@@ -44,14 +44,14 @@ interface SpotlightData {
 type AddState = 'idle' | 'adding' | 'added' | 'failed';
 
 const FOCUS =
-  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#355F58]';
+  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]';
 
 const AddButton: React.FC<{ title: string; state: AddState; onClick: () => void }> = ({ title, state, onClick }) => {
   const styles: Record<AddState, string> = {
-    idle: 'border border-[#355F58] text-[#355F58] hover:bg-[#E8F0EE]',
-    adding: 'border border-[#355F58] text-[#355F58]',
-    added: 'border border-[#355F58] bg-[#355F58] text-white',
-    failed: 'border border-[#B42318] text-[#B42318] hover:bg-[#FEF3F2]',
+    idle: 'border border-[var(--color-primary)] text-[var(--color-primary)] hover:bg-[var(--color-surface-elevated)]',
+    adding: 'border border-[var(--color-primary)] text-[var(--color-primary)]',
+    added: 'border border-[var(--color-primary)] bg-[#355F58] dark:bg-[var(--color-primary)] text-white dark:text-zinc-950',
+    failed: 'border border-[#B42318] text-[#B42318] hover:bg-[#FEF3F2] dark:border-rose-400 dark:text-rose-300 dark:hover:bg-rose-950',
   };
 
   return (
@@ -308,7 +308,7 @@ export const TripSpotlightBanner: React.FC<{
           {[0, 1].map((i) => (
             <div
               key={i}
-              className="h-36 w-60 shrink-0 rounded-2xl bg-[#E9ECE8] border border-[#D9DEDA] animate-pulse motion-reduce:animate-none"
+              className="h-36 w-60 shrink-0 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] animate-pulse motion-reduce:animate-none"
             />
           ))}
         </div>
@@ -394,24 +394,24 @@ export const TripSpotlightBanner: React.FC<{
 
           return (
             <li key={act.id} className="w-60 sm:w-64 shrink-0 snap-start">
-              <article className="h-full flex flex-col gap-3 rounded-2xl bg-white border border-[#D9DEDA] p-4 shadow-[0_2px_8px_rgba(31,37,34,0.06)]">
+              <article className="h-full flex flex-col gap-3 rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] p-4 shadow-[0_2px_8px_rgba(31,37,34,0.06)]">
                 <div>
-                  <p className="text-xs font-semibold text-[#355F58] truncate">{act.tag || 'Must visit'}</p>
-                  <h3 className="mt-1 min-h-[2.75rem] text-base font-bold leading-snug text-[#1F2522] line-clamp-2">
+                  <p className="text-xs font-semibold text-[var(--color-primary)] truncate">{act.tag || 'Must visit'}</p>
+                  <h3 className="mt-1 min-h-[2.75rem] text-base font-bold leading-snug text-[var(--color-text-primary)] line-clamp-2">
                     {act.title}
                   </h3>
                 </div>
 
-                <p className="flex items-center gap-1.5 text-xs text-[#5F6863]">
+                <p className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
                   <MapPin className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                   <span className="line-clamp-1">{act.location}</span>
                 </p>
 
-                <div className="mt-auto flex items-end justify-between gap-2 border-t border-[#E7EBE8] pt-3">
+                <div className="mt-auto flex items-end justify-between gap-2 border-t border-[var(--color-border)] pt-3">
                   <div>
-                    <p className="text-sm font-bold text-[#1F2522]">{act.cost === 0 ? 'Free' : `₹${act.cost}`}</p>
+                    <p className="text-sm font-bold text-[var(--color-text-primary)]">{act.cost === 0 ? 'Free' : `₹${act.cost}`}</p>
                     {act.duration && (
-                      <p className="mt-0.5 flex items-center gap-1 text-xs text-[#5F6863]">
+                      <p className="mt-0.5 flex items-center gap-1 text-xs text-[var(--color-text-secondary)]">
                         <Clock className="w-3 h-3 shrink-0" aria-hidden="true" />
                         {act.duration}
                       </p>
@@ -444,27 +444,27 @@ export const TripSpotlightBanner: React.FC<{
           const when = parseISODate(evt.date);
           return (
             <li key={evt.id} className="w-60 sm:w-64 shrink-0 snap-start">
-              <article className="h-full flex flex-col gap-3 rounded-2xl bg-white border border-[#D9DEDA] p-4 shadow-[0_2px_8px_rgba(31,37,34,0.06)]">
+              <article className="h-full flex flex-col gap-3 rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] p-4 shadow-[0_2px_8px_rgba(31,37,34,0.06)]">
                 <div className="flex items-start gap-3">
                   {when && (
                     <div
                       aria-hidden="true"
-                      className="shrink-0 w-11 rounded-lg bg-[#FBF3DF] py-1.5 text-center text-[#5A4210]"
+                      className="shrink-0 w-11 rounded-lg bg-[#FBF3DF] dark:bg-amber-950 py-1.5 text-center text-[#5A4210] dark:text-amber-200"
                     >
                       <div className="text-[11px] font-semibold leading-none">{MONTHS[when.getMonth()]}</div>
                       <div className="mt-1 text-lg font-bold leading-none">{when.getDate()}</div>
                     </div>
                   )}
                   <div className="min-w-0">
-                    <p className="text-xs font-semibold text-[#8A5A00]">Event</p>
-                    <h3 className="mt-1 text-base font-bold leading-snug text-[#1F2522] line-clamp-2">
+                    <p className="text-xs font-semibold text-[#8A5A00] dark:text-amber-300">Event</p>
+                    <h3 className="mt-1 text-base font-bold leading-snug text-[var(--color-text-primary)] line-clamp-2">
                       {when && <span className="sr-only">{evt.date}: </span>}
                       {evt.title}
                     </h3>
                   </div>
                 </div>
 
-                <div className="space-y-1 text-xs text-[#5F6863]">
+                <div className="space-y-1 text-xs text-[var(--color-text-secondary)]">
                   {!when && evt.date && (
                     <p className="flex items-center gap-1.5">
                       <Calendar className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -483,8 +483,8 @@ export const TripSpotlightBanner: React.FC<{
                   </p>
                 </div>
 
-                <div className="mt-auto flex items-center justify-between gap-2 border-t border-[#E7EBE8] pt-3">
-                  <p className="text-sm font-bold text-[#1F2522]">{evt.price === 0 ? 'Free' : `₹${evt.price}`}</p>
+                <div className="mt-auto flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
+                  <p className="text-sm font-bold text-[var(--color-text-primary)]">{evt.price === 0 ? 'Free' : `₹${evt.price}`}</p>
                   <AddButton
                     title={evt.title}
                     state={stateFor(evt.id)}

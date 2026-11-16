@@ -11,6 +11,7 @@ import {
   Sparkles, X
 } from 'lucide-react';
 import { FormattedText } from '../common/FormattedText';
+import './guide-theme.css';
 
 // To load the font, add this to index.html:
 // <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -56,7 +57,7 @@ export interface ChatMsg {
 const MAX_CHARS = 1000;
 const WARNING_THRESHOLD = 900;
 
-export const TourGuidePage: React.FC = () => {
+export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }> = ({ micSlotRef }) => {
   const dispatch = useDispatch();
   const location = useLocation();
   const { userLocation, userLocationName, activeContextMode, setActiveContextMode } = useApp();
@@ -77,7 +78,8 @@ export const TourGuidePage: React.FC = () => {
   const isExceeded = remaining < 0;
   const isNearLimit = input.length >= WARNING_THRESHOLD && !isExceeded;
 
-  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const keepLatestVisible = useRef(true);
 
   const activeTrip = selectedTripId
     ? trips.find(t => t.id === selectedTripId) || currentTrip
@@ -159,8 +161,19 @@ export const TourGuidePage: React.FC = () => {
 
   // Auto-scroll chat to bottom
   useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const conversation = conversationRef.current;
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
   }, [messages, loading]);
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (!conversation) return;
+    const observer = new ResizeObserver(() => {
+      if (keepLatestVisible.current) conversation.scrollTop = conversation.scrollHeight;
+    });
+    observer.observe(conversation);
+    return () => observer.disconnect();
+  }, []);
 
   const handleSend = async (queryText?: string) => {
     if (!queryText && isExceeded) {
@@ -317,67 +330,74 @@ export const TourGuidePage: React.FC = () => {
   };
 
   const lastIndex = messages.length - 1;
+  const contextDescription = mode === 'trip'
+    ? `Planning your trip to ${destinationName}`
+    : userLocationName
+      ? `Local tips near ${userLocationName}`
+      : 'Local tips near you';
 
   return (
     <div
-      className="flex flex-col h-[calc(100dvh-7.5rem)] sm:h-[calc(100dvh-6.5rem)] max-w-5xl w-full mx-auto bg-[#F4F5F2] text-[#16232B] overflow-hidden border border-[#DDE2DF] rounded-xl"
+      className="guide-theme flex flex-1 min-h-0 flex-col max-w-5xl w-full mx-auto overflow-hidden border border-[var(--guide-border)] rounded-xl"
       style={{ fontFamily: FONT_STACK }}
     >
       {/* Header: who you're talking to, and what it's anchored to */}
-      <header className="shrink-0 flex items-center justify-between gap-4 px-4 sm:px-6 py-3 bg-white border-b border-[#DDE2DF]">
+      <header className="guide-chat-header shrink-0 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2.5 px-4 sm:px-6 py-3 bg-[var(--guide-panel)] border-b border-[var(--guide-border)]">
         <div className="min-w-0">
           <h1 className="text-base font-semibold leading-tight">Jarvis</h1>
-          <p className="text-xs text-[#5B6B73] truncate">
-            {mode === 'trip'
-              ? `Planning your trip to ${destinationName}`
-              : userLocationName
-                ? `Local tips near ${userLocationName}`
-                : 'Local tips near you'}
+          <p className="text-xs text-[var(--guide-muted)] line-clamp-2 sm:line-clamp-1 wrap-anywhere" title={contextDescription}>
+            {contextDescription}
           </p>
         </div>
 
         <div
           role="group"
           aria-label="Guide mode"
-          className="flex shrink-0 rounded-lg bg-[#ECEEEA] p-0.5 text-xs font-medium"
+          className="flex shrink-0 rounded-lg bg-[var(--guide-raised)] p-0.5 text-xs font-medium"
         >
           <button
             type="button"
             onClick={() => setMode('local')}
             aria-pressed={mode === 'local'}
             title={userLocationName ? `Using your location: ${userLocationName}` : 'Using your live location'}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16232B] ${
-              mode === 'local' ? 'bg-[#16232B] text-white' : 'text-[#5B6B73] hover:text-[#16232B]'
-            }`}
+            className="guide-mode flex min-h-11 items-center gap-1.5 px-2.5 rounded-md transition-colors"
           >
             <MapPin className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-            <span className="max-w-[110px] truncate">{userLocationName || 'Near me'}</span>
+            <span>Local</span>
           </button>
           {activeTrip && (
             <button
               type="button"
               onClick={() => setMode('trip')}
               aria-pressed={mode === 'trip'}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16232B] ${
-                mode === 'trip' ? 'bg-[#16232B] text-white' : 'text-[#5B6B73] hover:text-[#16232B]'
-              }`}
+              title={activeTrip.destination?.name || activeTrip.title}
+              className="guide-mode flex min-h-11 items-center gap-1.5 px-2.5 rounded-md transition-colors"
             >
               <Compass className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-              <span className="max-w-[110px] truncate">
-                {activeTrip.destination?.name || activeTrip.title}
-              </span>
+              <span>Trip</span>
             </button>
           )}
         </div>
       </header>
 
       {/* Conversation */}
-      <div role="log" aria-live="polite" className="flex-1 overflow-y-auto">
+      <div
+        ref={conversationRef}
+        role="log"
+        aria-label="Conversation with Jarvis"
+        aria-live="polite"
+        tabIndex={0}
+        onScroll={(event) => {
+          const { scrollHeight, clientHeight, scrollTop } = event.currentTarget;
+          keepLatestVisible.current = scrollHeight - clientHeight - scrollTop < 48;
+        }}
+        className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain focus-visible:outline focus-visible:-outline-offset-2"
+      >
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 space-y-7">
           {messages.length === 0 && (
             <div className="py-16 max-w-md">
               <p className="text-base font-medium">Where to next?</p>
-              <p className="mt-1 text-sm text-[#5B6B73]">
+              <p className="mt-1 text-sm text-[var(--guide-muted)]">
                 Ask for local food, smart routes, or the places most visitors miss.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -386,7 +406,7 @@ export const TourGuidePage: React.FC = () => {
                     key={starter}
                     type="button"
                     onClick={() => handleSend(starter)}
-                    className="px-3 py-2 rounded-lg border border-[#C9D0CC] bg-white text-xs font-medium hover:bg-[#ECEEEA] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16232B]"
+                    className="px-3 py-2 rounded-lg guide-control text-xs font-medium transition-colors"
                   >
                     {starter}
                   </button>
@@ -404,22 +424,22 @@ export const TourGuidePage: React.FC = () => {
             return (
               <div key={m.id || i} className={isUser ? 'flex justify-end' : ''}>
                 {isUser ? (
-                  <div className="max-w-[85%] sm:max-w-[75%] rounded-xl rounded-br-sm bg-[#16232B] text-white px-4 py-2.5 text-sm leading-relaxed">
-                    <FormattedText content={textContent} isUserMessage />
+                  <div className="max-w-[85%] sm:max-w-[75%] rounded-xl rounded-br-sm bg-[var(--guide-outgoing)] text-[var(--guide-outgoing-ink)] px-4 py-2.5 text-sm leading-relaxed">
+                    <FormattedText content={textContent} />
                   </div>
                 ) : (
                   <div className="max-w-[94%] sm:max-w-[85%]">
-                    <div className="text-sm leading-relaxed text-[#16232B]">
-                      <FormattedText content={textContent} isUserMessage={false} />
+                    <div className="text-sm leading-relaxed">
+                      <FormattedText content={textContent} />
                     </div>
 
                     {/* Place card */}
                     {cardData && cardData.title && (
-                      <div className="mt-4 rounded-xl bg-white border border-[#DDE2DF] overflow-hidden">
+                      <div className="mt-4 rounded-xl bg-[var(--guide-panel)] border border-[var(--guide-border)] overflow-hidden">
                         <div className="p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-xs text-[#5B6B73]">{cardData.category || 'Sight'}</p>
+                              <p className="text-xs text-[var(--guide-muted)]">{cardData.category || 'Sight'}</p>
                               <h4 className="mt-0.5 text-lg font-semibold leading-snug">{cardData.title}</h4>
                             </div>
                             {cardData.cost !== undefined && (
@@ -428,7 +448,7 @@ export const TourGuidePage: React.FC = () => {
                           </div>
 
                           {(cardData.location || cardData.duration) && (
-                            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#5B6B73]">
+                            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--guide-muted)]">
                               {cardData.location && (
                                 <span className="flex items-center gap-1.5">
                                   <MapPin className="w-3.5 h-3.5" aria-hidden="true" />
@@ -445,8 +465,8 @@ export const TourGuidePage: React.FC = () => {
                           )}
 
                           {cardData.heads_up && (
-                            <div className="mt-3 flex items-start gap-2 rounded-md border-l-4 border-[#D9930D] bg-[#FBF3DF] px-3 py-2 text-xs text-[#5A4210]">
-                              <AlertTriangle className="w-4 h-4 shrink-0 mt-px text-[#B37A0A]" aria-hidden="true" />
+                            <div className="mt-3 flex items-start gap-2 rounded-md bg-[var(--guide-warning-panel)] px-3 py-2 text-xs text-[var(--guide-warning)]">
+                              <AlertTriangle className="w-4 h-4 shrink-0 mt-px" aria-hidden="true" />
                               <p>
                                 <span className="font-semibold">Check before you go: </span>
                                 {cardData.heads_up}
@@ -456,9 +476,9 @@ export const TourGuidePage: React.FC = () => {
                         </div>
 
                         {/* Perforated edge between details and actions */}
-                        <div className="relative border-t border-dashed border-[#C9D0CC]" aria-hidden="true">
-                          <span className="absolute -left-2 -top-2 w-4 h-4 rounded-full bg-[#F4F5F2] border border-[#DDE2DF]" />
-                          <span className="absolute -right-2 -top-2 w-4 h-4 rounded-full bg-[#F4F5F2] border border-[#DDE2DF]" />
+                        <div className="relative border-t border-dashed border-[var(--guide-border)]" aria-hidden="true">
+                          <span className="absolute -left-2 -top-2 w-4 h-4 rounded-full bg-[var(--guide-canvas)] border border-[var(--guide-border)]" />
+                          <span className="absolute -right-2 -top-2 w-4 h-4 rounded-full bg-[var(--guide-canvas)] border border-[var(--guide-border)]" />
                         </div>
 
                         <div className="px-4 py-3 flex flex-wrap gap-2">
@@ -467,7 +487,7 @@ export const TourGuidePage: React.FC = () => {
                               type="button"
                               onClick={() => handleAddToItinerary(cardData)}
                               disabled={addingCardId === cardData.id}
-                              className="flex-1 min-h-[40px] px-4 rounded-lg bg-[#16232B] text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-[#22343F] disabled:opacity-60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16232B]"
+                              className="flex-1 min-h-[40px] px-4 rounded-lg guide-control text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60 transition-colors"
                             >
                               {addingCardId === cardData.id ? (
                                 <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" aria-label="Adding" />
@@ -490,7 +510,7 @@ export const TourGuidePage: React.FC = () => {
                                 '_blank'
                               )
                             }
-                            className="min-h-[40px] px-4 rounded-lg border border-[#C9D0CC] bg-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-[#ECEEEA] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16232B]"
+                            className="min-h-[40px] px-4 rounded-lg guide-control text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
                           >
                             <Navigation className="w-3.5 h-3.5" aria-hidden="true" /> Open in Maps
                           </button>
@@ -506,7 +526,7 @@ export const TourGuidePage: React.FC = () => {
                             key={idx}
                             type="button"
                             onClick={() => handleSend(chip)}
-                            className="px-3 py-1.5 rounded-lg border border-[#C9D0CC] bg-white text-xs font-medium hover:bg-[#ECEEEA] hover:border-[#16232B]/40 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16232B]"
+                            className="px-3 py-1.5 rounded-lg guide-control text-xs font-medium transition-colors"
                           >
                             {chip}
                           </button>
@@ -520,12 +540,12 @@ export const TourGuidePage: React.FC = () => {
           })}
 
           {loading && (
-            <div role="status" className="flex items-center gap-2.5 text-xs text-[#5B6B73]">
+            <div role="status" className="flex items-center gap-2.5 text-xs text-[var(--guide-muted)]">
               <span className="flex gap-1" aria-hidden="true">
                 {[0, 150, 300].map((delay) => (
                   <span
                     key={delay}
-                    className="w-1.5 h-1.5 rounded-full bg-[#5B6B73] animate-pulse motion-reduce:animate-none"
+                    className="w-1.5 h-1.5 rounded-full bg-[var(--guide-muted)] animate-pulse motion-reduce:animate-none"
                     style={{ animationDelay: `${delay}ms` }}
                   />
                 ))}
@@ -533,12 +553,11 @@ export const TourGuidePage: React.FC = () => {
               Looking that up…
             </div>
           )}
-          <div ref={chatBottomRef} />
         </div>
       </div>
 
       {/* Composer */}
-      <div className="shrink-0 bg-white border-t border-[#DDE2DF]">
+      <div className="shrink-0 bg-[var(--guide-panel)] border-t border-[var(--guide-border)]">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -548,9 +567,9 @@ export const TourGuidePage: React.FC = () => {
             }
             handleSend();
           }}
-          className="max-w-3xl mx-auto flex items-center gap-2 p-3 sm:p-4"
+          className="guide-chat-composer max-w-3xl mx-auto flex items-center gap-2 p-3 sm:p-4"
         >
-          <div className="relative flex-1">
+          <div className="relative min-w-0 flex-1">
             <input
               type="text"
               value={input}
@@ -567,27 +586,25 @@ export const TourGuidePage: React.FC = () => {
                   ? `Ask about ${destinationName}`
                   : `Ask about places in ${userLocationName || 'your area'}`
               }
-              className={`w-full min-w-0 rounded-lg border bg-white pl-3.5 pr-14 py-2.5 text-sm placeholder:text-[#77858B] transition-all focus:outline-none ${
-                isExceeded
-                  ? 'border-rose-500 ring-1 ring-rose-500 focus:border-rose-500 focus:ring-rose-500'
-                  : 'border-[#C9D0CC] focus:border-[#16232B] focus:ring-2 focus:ring-[#16232B]/15'
-              }`}
+              aria-invalid={isExceeded}
+              className={`guide-input w-full min-w-0 min-h-11 rounded-lg pl-3.5 py-2.5 text-base transition-colors ${input.length > 0 ? 'pr-14' : 'pr-3.5'}`}
             />
             {input.length > 0 && (
               <span
                 aria-live="polite"
                 className={`absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none select-none tabular-nums ${
                   isExceeded
-                    ? 'text-rose-500 font-extrabold text-xs'
+                    ? 'text-[var(--guide-error)] font-extrabold text-xs'
                     : isNearLimit
-                    ? 'text-amber-500 font-semibold text-xs'
-                    : 'text-slate-400 text-xs'
+                    ? 'text-[var(--guide-warning)] font-semibold text-xs'
+                    : 'text-[var(--guide-muted)] text-xs'
                 }`}
               >
                 {remaining}
               </span>
             )}
           </div>
+          <div ref={micSlotRef} className="shrink-0 empty:hidden" />
           <button
             type="submit"
             onClick={(e) => {
@@ -598,11 +615,7 @@ export const TourGuidePage: React.FC = () => {
             }}
             disabled={!input.trim() || loading}
             aria-label="Send message"
-            className={`w-10 h-10 shrink-0 rounded-lg flex items-center justify-center transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#16232B] ${
-              isExceeded
-                ? 'bg-rose-500 hover:bg-rose-600 text-white shadow-sm cursor-pointer'
-                : 'bg-[#16232B] text-white hover:bg-[#22343F] disabled:bg-[#C9D0CC] disabled:cursor-not-allowed'
-            }`}
+            className={`guide-action guide-send size-11 shrink-0 rounded-lg flex items-center justify-center transition-colors ${isExceeded ? 'guide-send-over-limit' : ''}`}
           >
             <ArrowUp className="w-4 h-4" aria-hidden="true" />
           </button>
@@ -620,40 +633,41 @@ export const TourGuidePage: React.FC = () => {
           onClick={() => setShowUpgradeModal(false)}
         >
           <div
-            className="bg-slate-900 border border-slate-800 p-6 max-w-md w-full shadow-2xl text-center rounded-2xl relative"
+            className="guide-theme guide-limit-dialog p-6 max-w-md max-h-full overflow-y-auto w-full shadow-2xl text-center rounded-2xl relative"
+            style={{ fontFamily: FONT_STACK }}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close Button */}
             <button
               type="button"
               onClick={() => setShowUpgradeModal(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+              className="absolute top-4 right-4 text-[var(--guide-muted)] hover:text-[var(--guide-ink)] p-1 rounded-lg hover:bg-[var(--guide-raised)] transition-colors"
               aria-label="Close dialog"
             >
               <X className="w-4 h-4" />
             </button>
 
             {/* Icon / Badge */}
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold mb-3">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>⚡ Pro Feature</span>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--guide-warning-panel)] text-[var(--guide-warning)] text-xs font-semibold mb-3">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Pro Feature</span>
             </div>
 
             {/* Headline */}
-            <h3 id="upgrade-modal-title" className="text-xl font-bold text-white tracking-tight">
+            <h3 id="upgrade-modal-title" className="text-xl font-bold tracking-tight">
               Message Limit Exceeded
             </h3>
 
             {/* Body Copy */}
-            <p className="mt-2.5 text-slate-300 text-sm leading-relaxed">
+            <p className="mt-2.5 text-[var(--guide-muted)] text-sm leading-relaxed">
               Your message exceeds the 1,000 character limit for the standard tier. Please shorten your message or upgrade to Cruiser Pro for unlimited long-form travel planning and priority LLM routing.
             </p>
 
             {/* Character Overflow Info Box */}
             {isExceeded && (
-              <div className="mt-4 py-2.5 px-3.5 rounded-lg bg-slate-800/80 border border-slate-700/60 flex items-center justify-between text-xs text-slate-300">
+              <div className="mt-4 py-2.5 px-3.5 rounded-lg bg-[var(--guide-raised)] border border-[var(--guide-border)] flex flex-wrap items-center justify-between gap-1 text-xs text-[var(--guide-muted)]">
                 <span>Message character count:</span>
-                <span className="font-semibold text-rose-400 tabular-nums">
+                <span className="font-semibold text-[var(--guide-error)] tabular-nums">
                   {input.length} / {MAX_CHARS} ({remaining} characters)
                 </span>
               </div>
@@ -664,14 +678,14 @@ export const TourGuidePage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowUpgradeModal(false)}
-                className="w-full sm:flex-1 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-medium px-4 py-2.5 rounded-lg hover:brightness-110 transition-all shadow-md text-sm cursor-pointer"
+                className="w-full sm:flex-1 guide-action font-medium px-4 py-2.5 rounded-lg transition-colors text-sm cursor-pointer"
               >
                 Upgrade Plan
               </button>
               <button
                 type="button"
                 onClick={() => setShowUpgradeModal(false)}
-                className="w-full sm:flex-1 px-4 py-2.5 rounded-lg border border-slate-700 bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white transition-colors text-sm font-medium cursor-pointer"
+                className="w-full sm:flex-1 px-4 py-2.5 rounded-lg guide-control transition-colors text-sm font-medium cursor-pointer"
               >
                 Edit Message
               </button>

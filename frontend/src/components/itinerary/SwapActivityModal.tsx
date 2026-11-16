@@ -6,6 +6,7 @@ import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, fetchWithAuth } from '../../confi
 import { Sparkles, RefreshCw, X, Clock, MapPin, Check, AlertCircle } from 'lucide-react';
 import { isMockPayload } from '../../utils/mockIndicator';
 import { MockCardAlert } from '../common/MockCardAlert';
+import './itineraryDialog.css';
 
 export interface SwapOptionItem {
   id: string;
@@ -127,46 +128,53 @@ export const SwapActivityModal: React.FC = () => {
 
   return (
     <Portal>
-      <div className="fixed inset-0 z-[var(--z-modal)] flex items-center-safe justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn overflow-y-auto">
-      <div className="relative w-full max-w-lg rounded-3xl bg-slate-900 border border-white/10 p-5 shadow-2xl space-y-4 text-slate-100 max-h-[90vh] flex flex-col">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="swap-activity-title"
+      className="itinerary-dialog fixed inset-0 z-[var(--z-modal)] flex items-center-safe justify-center p-4 animate-fadeIn overflow-y-auto"
+    >
+      <div className="itinerary-dialog__panel relative w-full max-w-lg rounded-[20px] p-5 space-y-4 flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-white/10 pb-3">
-          <div className="space-y-0.5">
-            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-black uppercase flex items-center gap-1 w-fit">
-              <Sparkles className="w-3 h-3 text-emerald-400" /> AI Activity Swap
+        <div className="itinerary-dialog__divider flex shrink-0 items-center justify-between gap-3 border-b pb-3">
+          <div className="min-w-0 space-y-0.5">
+            <span className="itinerary-dialog__label px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase flex items-center gap-1 w-fit">
+              <Sparkles className="itinerary-dialog__accent w-3 h-3" /> AI Activity Swap
             </span>
-            <h2 className="text-base font-black text-white flex items-center gap-2">
+            <h2 id="swap-activity-title" className="text-base font-black tracking-tight wrap-anywhere">
               Replace "{targetTitle}"
             </h2>
-            <p className="text-xs text-slate-400 font-semibold">
-              Trip to <span className="text-emerald-400 font-extrabold">{destName}</span> • Day {dayNum}
+            <p className="itinerary-dialog__muted text-xs font-semibold wrap-anywhere">
+              Trip to <span className="itinerary-dialog__accent font-extrabold">{destName}</span> • Day {dayNum}
             </p>
           </div>
 
           <button
+            type="button"
             onClick={closeSwapAssistant}
-            className="p-2 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all press-scale"
+            aria-label="Close activity swap"
+            className="itinerary-dialog__button grid place-items-center min-w-11 shrink-0 rounded-full transition-colors press-scale"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+        <div className="itinerary-dialog__scroll flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
           {isLoading ? (
-            <div className="py-12 text-center space-y-3">
-              <RefreshCw className="w-7 h-7 text-emerald-400 animate-spin mx-auto" />
-              <p className="text-xs font-bold text-slate-300">
+            <div role="status" className="py-12 text-center space-y-3">
+              <RefreshCw className="itinerary-dialog__accent w-7 h-7 animate-spin mx-auto" />
+              <p className="itinerary-dialog__muted text-xs font-bold">
                 Finding authentic alternatives in {destName}...
               </p>
             </div>
           ) : errorMsg ? (
-            <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+            <div role="alert" className="itinerary-dialog__error p-4 rounded-2xl border text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{errorMsg}</span>
             </div>
           ) : alternatives.length === 0 ? (
-            <div className="py-8 text-center text-xs text-slate-400">
+            <div role="status" className="itinerary-dialog__muted py-8 text-center text-xs">
               No alternatives found for {destName}.
             </div>
           ) : (
@@ -178,6 +186,7 @@ export const SwapActivityModal: React.FC = () => {
                     title={opt.title}
                     location={opt.location}
                     headsUp={opt.description || 'MOCK: Gemini swap-options service unavailable'}
+                    className="itinerary-dialog__fallback"
                   />
                 );
               }
@@ -188,45 +197,43 @@ export const SwapActivityModal: React.FC = () => {
               return (
                 <div
                   key={opt.id}
-                  className="rounded-2xl bg-slate-950/80 border border-white/10 p-4 space-y-2.5 hover:border-emerald-500/40 transition-all shadow-md"
+                  className="itinerary-dialog__elevated rounded-2xl p-4 space-y-2.5"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-black border border-emerald-500/30 uppercase">
+                    <div className="min-w-0 wrap-anywhere">
+                      <span className="itinerary-dialog__label px-2 py-0.5 rounded-md text-[10px] font-black uppercase">
                         {opt.tag || opt.category || 'Alternative'}
                       </span>
-                      <h3 className="text-sm font-black text-white mt-1">
+                      <h3 className="text-sm font-black tracking-tight mt-1">
                         {opt.title}
                       </h3>
-                      <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
-                        <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                      <p className="itinerary-dialog__muted text-[11px] flex items-center gap-1 mt-0.5">
+                        <MapPin className="itinerary-dialog__accent w-3 h-3 shrink-0" />
                         <span className="truncate">{opt.location || destName}</span>
                       </p>
                     </div>
 
                     <div className="text-right shrink-0">
-                      <span className="text-xs font-black text-emerald-400 block">
+                      <span className="itinerary-dialog__accent text-xs font-black tabular-nums block">
                         {opt.cost > 0 ? `₹${opt.cost}` : 'Free'}
                       </span>
-                      <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1 mt-0.5 justify-end">
-                        <Clock className="w-3 h-3 text-slate-400" /> {opt.duration || '—'}
+                      <span className="itinerary-dialog__muted text-[11px] font-bold tabular-nums flex items-center gap-1 mt-0.5 justify-end">
+                        <Clock className="w-3 h-3 shrink-0" /> {opt.duration || '—'}
                       </span>
                     </div>
                   </div>
 
-                  <p className="text-xs text-slate-300 leading-relaxed font-medium">
+                  <p className="itinerary-dialog__muted text-[13px] leading-relaxed font-medium wrap-anywhere">
                     {opt.description}
                   </p>
 
-                  <div className="pt-2 border-t border-white/10 flex justify-end">
+                  <div className="itinerary-dialog__divider pt-2 border-t flex justify-end">
                     <button
+                      type="button"
                       onClick={() => handleExecuteSwap(opt)}
                       disabled={Boolean(swappingId)}
-                      className={`px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-all press-scale ${
-                        isSuccess
-                          ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/30'
-                          : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
-                      }`}
+                      aria-live="polite"
+                      className="itinerary-dialog__button itinerary-dialog__button--primary px-4 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-colors press-scale"
                     >
                       {isSwappingThis ? (
                         <>

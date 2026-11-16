@@ -111,6 +111,19 @@ Before getting started, ensure you have the following installed on your machine:
 
 ## ⚙️ Local Setup & Installation
 
+On Linux with Docker Compose, run `make dev` from the repo root once your
+`backend/.env`, `backend/.venv`, `frontend/.env`, and frontend dependencies are set up.
+It starts PostgreSQL and Redis in Docker, then runs FastAPI, the itinerary worker,
+and Vite locally. Open [the app](http://localhost:5173) or [API docs](http://localhost:8000/docs).
+To use the Compose database, point `DATABASE_URL` in `backend/.env` at local
+PostgreSQL using the database name and credentials configured for the `db` service.
+
+| Command | What it does |
+| --- | --- |
+| `make dev` | Starts the stack and streams labeled logs. Press Ctrl+C to stop the API, worker, and Vite. |
+| `make doctor` | Checks dependencies, local env files, Docker access, and ports 8000 and 5173. |
+| `make stop` | Stops the PostgreSQL and Redis containers and preserves their data. |
+
 ### 1. Database Configuration
 
 1. Start your PostgreSQL service.

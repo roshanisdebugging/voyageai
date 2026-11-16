@@ -77,15 +77,15 @@ export const EmergencyModal: React.FC = () => {
     >
       <div className="p-5 space-y-4">
         {/* Emergency Alert Banner */}
-        <div className="p-4 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-start gap-3">
-          <ShieldAlert className="w-6 h-6 text-rose-400 shrink-0 mt-0.5" />
+        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950 border border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-200 flex items-start gap-3">
+          <ShieldAlert className="w-6 h-6 text-rose-700 dark:text-rose-300 shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
-            <h4 className="font-extrabold text-sm text-rose-200">24/7 Tourist Emergency Services</h4>
-            <p className="text-xs text-rose-300/80 mt-0.5 truncate">
+            <h4 className="font-extrabold text-sm">24/7 Tourist Emergency Services</h4>
+            <p className="text-xs mt-0.5 wrap-anywhere">
               {activeDestCoords ? (
-                <>Live Location: <span className="font-mono font-bold text-white">{activeDestName} ({activeDestCoords[0].toFixed(4)}, {activeDestCoords[1].toFixed(4)})</span></>
+                <>Live Location: <span className="font-mono font-bold">{activeDestName} ({activeDestCoords[0].toFixed(4)}, {activeDestCoords[1].toFixed(4)})</span></>
               ) : (
-                <>Location: <span className="font-bold text-white">{activeDestName}</span></>
+                <>Location: <span className="font-bold">{activeDestName}</span></>
               )}
             </p>
           </div>
@@ -98,13 +98,13 @@ export const EmergencyModal: React.FC = () => {
               setHasCalled(true);
               setTimeout(() => setHasCalled(false), 4000);
             }}
-            className="w-full py-3.5 px-4 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-sm flex items-center justify-between shadow-lg shadow-rose-600/30 press-scale"
+            className="w-full py-3.5 px-4 rounded-2xl bg-rose-700 hover:bg-rose-800 text-white font-extrabold text-sm flex items-center justify-between gap-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] shadow-lg shadow-rose-600/30 press-scale"
           >
             <div className="flex items-center gap-2.5">
-              <PhoneCall className="w-5 h-5" />
+              <PhoneCall className="w-5 h-5 shrink-0" />
               <span>Call Tourist Helpline (112)</span>
             </div>
-            <span className="text-xs font-mono font-bold bg-black/30 px-2.5 py-1 rounded-lg">Toll Free</span>
+            <span className="shrink-0 text-xs font-mono font-bold bg-rose-950 px-2.5 py-1 rounded-lg">Toll Free</span>
           </button>
 
           <button
@@ -120,16 +120,16 @@ export const EmergencyModal: React.FC = () => {
                 alert(`Contacting ${policeStation?.name || 'Local Police'}: ${policeStation?.phone || '112'}`);
               }
             }}
-            className="w-full py-3 px-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 text-slate-200 font-semibold text-xs flex items-center justify-between press-scale"
+            className="w-full py-3 px-4 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] hover:border-[var(--color-primary)] text-[var(--color-text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] min-h-11 text-left font-semibold text-xs flex items-center justify-between press-scale"
           >
-            <div className="flex items-center gap-2.5 truncate">
-              <MapPin className="w-4 h-4 text-teal-400 shrink-0" />
-              <span className="truncate">{policeStation?.name || 'Nearest Police Station'}</span>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <MapPin className="w-4 h-4 text-[var(--color-primary)] shrink-0" />
+              <span className="min-w-0 wrap-anywhere">{policeStation?.name || 'Nearest Police Station'}</span>
             </div>
             {policeStation?.distanceKm !== undefined ? (
-              <span className="text-[11px] text-slate-400 font-mono shrink-0 ml-2">{policeStation.distanceKm} km away</span>
+              <span className="text-[11px] text-[var(--color-text-secondary)] font-mono shrink-0 ml-2">{policeStation.distanceKm} km away</span>
             ) : isLoadingServices ? (
-              <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin shrink-0 ml-2" />
+              <Loader2 className="w-3.5 h-3.5 text-[var(--color-primary)] animate-spin shrink-0 ml-2" />
             ) : null}
           </button>
 
@@ -146,23 +146,23 @@ export const EmergencyModal: React.FC = () => {
                 alert(`Navigating to ${hospital?.name || 'Nearest Emergency Medical Center'}`);
               }
             }}
-            className="w-full py-3 px-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 text-slate-200 font-semibold text-xs flex items-center justify-between press-scale"
+            className="w-full py-3 px-4 rounded-2xl bg-[var(--color-surface-elevated)] border border-[var(--color-border)] hover:border-[var(--color-primary)] text-[var(--color-text-primary)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] min-h-11 text-left font-semibold text-xs flex items-center justify-between press-scale"
           >
-            <div className="flex items-center gap-2.5 truncate">
-              <Hospital className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="truncate">{hospital?.name || 'Nearest Hospital / Medical Facility'}</span>
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Hospital className="w-4 h-4 text-amber-800 dark:text-amber-300 shrink-0" />
+              <span className="min-w-0 wrap-anywhere">{hospital?.name || 'Nearest Hospital / Medical Facility'}</span>
             </div>
             {hospital?.distanceKm !== undefined ? (
-              <span className="text-[11px] text-slate-400 font-mono shrink-0 ml-2">{hospital.distanceKm} km away</span>
+              <span className="text-[11px] text-[var(--color-text-secondary)] font-mono shrink-0 ml-2">{hospital.distanceKm} km away</span>
             ) : isLoadingServices ? (
-              <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin shrink-0 ml-2" />
+              <Loader2 className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 animate-spin shrink-0 ml-2" />
             ) : null}
           </button>
         </div>
 
         {hasCalled && (
-          <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium flex items-center gap-2 animate-fadeIn">
-            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+          <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs font-medium flex items-center gap-2 animate-fadeIn">
+            <Check className="w-4 h-4 shrink-0" />
             <span>Emergency signal dispatched to national helpline (112).</span>
           </div>
         )}

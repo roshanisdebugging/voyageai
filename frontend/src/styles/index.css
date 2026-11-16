@@ -23,6 +23,14 @@
   --color-text-secondary: #5F6863;
   --color-text-tertiary: #7C8580;
 
+  --itinerary-border: #cdd6d0;
+  --itinerary-control-border: #71837a;
+  --itinerary-muted: #4d5a53;
+  --itinerary-accent: #285a4c;
+  --itinerary-accent-surface: #e6f2ed;
+  --itinerary-error: #912440;
+  --itinerary-error-surface: #fcebf0;
+
   --bottom-nav-h: 64px;
   --header-h: 56px;
   --touch-target-min: 52px;
@@ -58,6 +66,14 @@
   --color-text-primary: #f4f4f5;
   --color-text-secondary: #a1a1aa;
   --color-text-tertiary: #71717a;
+
+  --itinerary-border: #414146;
+  --itinerary-control-border: #8c9a94;
+  --itinerary-muted: #bcc0bc;
+  --itinerary-accent: #79e6b7;
+  --itinerary-accent-surface: #14352c;
+  --itinerary-error: #ffabc0;
+  --itinerary-error-surface: #45232d;
 }
 
 /* Nighttime dark theme filter for Leaflet basemap tiles */
@@ -256,7 +272,7 @@ h6 {
   width: 40px;
   height: 5px;
   border-radius: 999px;
-  background: #C0C7C2;
+  background: var(--color-text-tertiary);
 }
 
 /* ── Custom Scrollbars ── */
@@ -519,4 +535,121 @@ h6 {
 }
 @media (prefers-reduced-motion: reduce) {
   .voice-wave-bar { animation: none; transform: scaleY(0.7); }
+}
+
+/* The Guide shares the shell height with navigation; only the conversation scrolls. */
+.guide-app-shell {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.map-app-shell {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.map-app-shell > header {
+  flex-shrink: 0;
+}
+
+.map-app-frame {
+  max-width: none;
+}
+
+.map-app-frame > aside {
+  flex-shrink: 0;
+  top: auto;
+  height: auto;
+  overflow-y: auto;
+}
+
+.map-app-tools {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+@media (min-width: 64rem) {
+  .map-app-tools {
+    padding-block-end: max(0.25rem, env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (max-height: 30rem) {
+  .map-app-shell > nav > div {
+    height: 3rem;
+  }
+
+  .map-app-shell > nav button {
+    padding-block: 0.125rem;
+  }
+
+  .map-app-tools {
+    padding-block-start: 0;
+  }
+}
+
+@media (orientation: landscape) and (min-width: 35rem) and (width < 64rem) and (max-height: 30rem) {
+  .map-app-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .map-app-shell > header,
+  .map-app-frame {
+    grid-column: 1 / -1;
+  }
+
+  .map-app-shell > nav {
+    grid-area: 3 / 1;
+  }
+
+  .map-app-tools {
+    grid-area: 3 / 2;
+    padding-block-end: max(0.25rem, env(safe-area-inset-bottom, 0px));
+  }
+}
+
+.guide-app-shell > header {
+  flex-shrink: 0;
+}
+
+.guide-app-frame > aside {
+  height: auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.guide-app-shell[data-guide-keyboard] {
+  position: fixed;
+  inset-inline: 0;
+  top: var(--guide-viewport-top);
+  height: var(--guide-viewport-height);
+}
+
+.guide-app-shell[data-guide-keyboard] .guide-app-nav,
+.guide-app-shell[data-guide-tight-viewport] > header {
+  display: none;
+}
+
+.guide-app-shell[data-guide-keyboard] .guide-app-frame > main {
+  padding-block: 0;
+}
+
+.guide-app-shell[data-guide-keyboard] .guide-chat-header,
+.guide-app-shell[data-guide-keyboard] .guide-chat-composer {
+  padding-block: 0.25rem;
+}
+
+@media (max-height: 400px) {
+  .guide-app-shell .guide-chat-header,
+  .guide-app-shell .guide-chat-composer {
+    padding-block: 0.25rem;
+  }
 }

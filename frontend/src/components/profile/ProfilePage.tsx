@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../auth/AuthContext';
 import { BottomSheet } from '../common/BottomSheet';
 import { Check, LogOut, ChevronRight, User, Sliders, Bell, Palette, Shield } from 'lucide-react';
@@ -8,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 export const ProfileSheet: React.FC = () => {
   const { isProfileOpen, setIsProfileOpen } = useApp();
   const { userProfile, userPreferences, authUser, signOut } = useAuth();
+  const { theme } = useTheme();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -30,36 +32,36 @@ export const ProfileSheet: React.FC = () => {
     { label: 'Account', icon: User, detail: emailOrPhone },
     { label: 'Preferences', icon: Sliders, detail: `${travelStyles.length} styles set` },
     { label: 'Notifications', icon: Bell, detail: 'On' },
-    { label: 'Appearance', icon: Palette, detail: 'Dark' },
+    { label: 'Appearance', icon: Palette, detail: theme === 'dark' ? 'Dark' : 'Light' },
     { label: 'Privacy', icon: Shield, detail: 'Encrypted' },
   ];
 
   return (
     <BottomSheet isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} height="expanded" title="Profile & Account">
-      <div className="px-5 py-4 space-y-6 bg-white">
+      <div className="mx-auto max-w-lg px-5 py-4 space-y-4">
 
         {/* Dynamic Profile Header */}
-        <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-[#F0F2EF] border border-[#D9DEDA]">
+        <div className="flex flex-col items-center gap-2 text-center">
           <img
             src={avatarUrl}
             alt={name}
-            className="w-14 h-14 rounded-full object-cover border-2 border-[#355F58]/40 shrink-0 bg-[#D9DEDA]"
+            className="w-14 h-14 rounded-full object-cover border-2 border-[var(--color-border)] shrink-0 bg-[var(--color-surface-elevated)]"
             loading="lazy"
             decoding="async"
           />
-          <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-black text-[#1F2522] truncate">{name}</h2>
-            <p className="text-xs text-[#5F6863] truncate font-medium">{emailOrPhone}</p>
+          <div className="min-w-0 max-w-full">
+            <h2 className="text-lg font-black text-[var(--color-text-primary)] truncate">{name}</h2>
+            <p className="text-xs text-[var(--color-text-secondary)] truncate font-medium">{emailOrPhone}</p>
           </div>
         </div>
 
         {/* Travel Preferences Chips */}
-        <div className="space-y-2">
-          <h3 className="text-xs uppercase font-extrabold tracking-wider text-[#5F6863]">Travel Style</h3>
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <h3 className="text-xs uppercase font-extrabold tracking-wider text-[var(--color-text-secondary)]">Travel Style</h3>
+          <div className="flex min-w-0 flex-wrap justify-center gap-2">
             {travelStyles.map((s, i) => (
-              <span key={i} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#E8F0EE] text-[#355F58] text-xs font-extrabold border border-[#D9DEDA]">
-                <Check className="w-3.5 h-3.5 text-[#355F58]" /> {s}
+              <span key={i} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--color-surface-elevated)] text-[var(--color-primary)] text-xs font-extrabold border border-[var(--color-border)]">
+                <Check className="w-3.5 h-3.5 text-[var(--color-primary)]" /> {s}
               </span>
             ))}
           </div>
@@ -71,15 +73,15 @@ export const ProfileSheet: React.FC = () => {
             <button
               key={s.label}
               type="button"
-              className="w-full press-scale flex items-center justify-between p-3.5 rounded-xl hover:bg-[#F0F2EF] transition-colors border-b border-[#D9DEDA] last:border-0"
+              className="w-full min-h-11 press-scale flex items-center justify-between gap-2 px-2 py-2 text-left rounded-lg hover:bg-[var(--color-surface-elevated)] focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] transition-colors border-b border-[var(--color-border)] last:border-0"
             >
               <div className="flex items-center gap-3">
-                <s.icon className="w-5 h-5 text-[#355F58]" />
-                <span className="text-sm font-bold text-[#1F2522]">{s.label}</span>
+                <s.icon className="w-5 h-5 text-[var(--color-primary)]" />
+                <span className="text-sm font-bold text-[var(--color-text-primary)]">{s.label}</span>
               </div>
-              <div className="flex items-center gap-1">
-                {s.detail && <span className="text-xs font-semibold text-[#5F6863] truncate max-w-[140px]">{s.detail}</span>}
-                <ChevronRight className="w-4 h-4 text-[#7C8580]" />
+              <div className="flex min-w-0 items-center gap-1">
+                {s.detail && <span className="text-xs font-semibold text-[var(--color-text-secondary)] truncate max-w-[140px]">{s.detail}</span>}
+                <ChevronRight className="w-4 h-4 shrink-0 text-[var(--color-text-secondary)]" />
               </div>
             </button>
           ))}
@@ -89,9 +91,9 @@ export const ProfileSheet: React.FC = () => {
         <button
           type="button"
           onClick={handleLogout}
-          className="w-full touch-target press-scale flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white text-sm font-extrabold shadow-sm transition-all border border-rose-700"
+          className="w-full touch-target press-scale flex items-center justify-center gap-2 py-3.5 rounded-2xl border border-rose-700 dark:border-rose-500 text-rose-800 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950 focus-visible:outline-2 focus-visible:outline-offset-2 text-sm font-extrabold transition-colors"
         >
-          <LogOut className="w-4 h-4 text-white" />
+          <LogOut className="w-4 h-4" aria-hidden="true" />
           <span>Sign Out</span>
         </button>
       </div>

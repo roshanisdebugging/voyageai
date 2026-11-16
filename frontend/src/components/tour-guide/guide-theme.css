@@ -1,0 +1,124 @@
+.guide-theme {
+  --guide-canvas: #f9faf8;
+  --guide-panel: #ffffff;
+  --guide-raised: #f0f1ee;
+  --guide-ink: #26332c;
+  --guide-muted: #505e55;
+  --guide-border: #d5dbd5;
+  --guide-control-border: #79867e;
+  --guide-focus: #355f58;
+  --guide-outgoing: #dcebe2;
+  --guide-outgoing-ink: #214638;
+  --guide-action: #355f58;
+  --guide-action-hover: #284a44;
+  --guide-action-ink: #ffffff;
+  --guide-warning: #784e0c;
+  --guide-warning-panel: #fff2d5;
+  --guide-error: #9f1239;
+  --guide-error-action-hover: #881337;
+  --guide-error-action-ink: #ffffff;
+  background: var(--guide-canvas);
+  color: var(--guide-ink);
+  scrollbar-color: var(--guide-control-border) var(--guide-canvas);
+}
+
+.dark .guide-theme {
+  --guide-canvas: #101412;
+  --guide-panel: #1b211d;
+  --guide-raised: #262e29;
+  --guide-ink: #eef4ef;
+  --guide-muted: #afbeb3;
+  --guide-border: #39463e;
+  --guide-control-border: #829087;
+  --guide-focus: #7eebbd;
+  --guide-outgoing: #244535;
+  --guide-outgoing-ink: #defff0;
+  --guide-action: #34d399;
+  --guide-action-hover: #6ee7b7;
+  --guide-action-ink: #08271c;
+  --guide-warning: #ffd58b;
+  --guide-warning-panel: #392b18;
+  --guide-error: #ffa9bc;
+  --guide-error-action-hover: #ffc4d1;
+  --guide-error-action-ink: #310e19;
+}
+
+.guide-limit-dialog {
+  background: var(--guide-panel);
+}
+
+.guide-theme ::selection {
+  background: var(--guide-outgoing);
+  color: var(--guide-outgoing-ink);
+}
+
+.guide-theme :is(button, input):focus-visible {
+  outline: 2px solid var(--guide-focus);
+  outline-offset: 2px;
+}
+
+.guide-mode {
+  color: var(--guide-muted);
+}
+
+.guide-mode:hover {
+  color: var(--guide-ink);
+}
+
+.guide-mode[aria-pressed='true'] {
+  background: var(--guide-panel);
+  color: var(--guide-ink);
+  box-shadow: inset 0 0 0 1px var(--guide-control-border);
+}
+
+.guide-control {
+  background: var(--guide-panel);
+  border: 1px solid var(--guide-control-border);
+  color: var(--guide-ink);
+}
+
+.guide-control:enabled:hover {
+  background: var(--guide-raised);
+}
+
+.guide-input {
+  background: var(--guide-panel);
+  border: 1px solid var(--guide-control-border);
+  caret-color: var(--guide-focus);
+}
+
+.guide-input::placeholder {
+  color: var(--guide-muted);
+}
+
+.guide-input[aria-invalid='true'] {
+  border-color: var(--guide-error);
+}
+
+.guide-theme .guide-input[aria-invalid='true']:focus-visible {
+  outline-color: var(--guide-error);
+}
+
+.guide-action {
+  background: var(--guide-action);
+  color: var(--guide-action-ink);
+}
+
+.guide-action:enabled:hover {
+  background: var(--guide-action-hover);
+}
+
+.guide-send:disabled {
+  background: var(--guide-raised);
+  color: var(--guide-muted);
+  cursor: not-allowed;
+}
+
+.guide-action.guide-send-over-limit:enabled {
+  background: var(--guide-error);
+  color: var(--guide-error-action-ink);
+}
+
+.guide-action.guide-send-over-limit:enabled:hover {
+  background: var(--guide-error-action-hover);
+}

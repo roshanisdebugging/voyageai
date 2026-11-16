@@ -19,7 +19,7 @@ const tabs: TabItem[] = [
   { id: 'more' as any, path: '/more', label: 'More', icon: Menu },
 ];
 
-export const MobileBottomNav: React.FC = () => {
+export const MobileBottomNav: React.FC<{ inFlow?: boolean }> = ({ inFlow = false }) => {
   const { setActiveTab, setTripView, setNavigationTarget } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -40,7 +40,7 @@ export const MobileBottomNav: React.FC = () => {
 
   return (
     <nav
-      className="fixed bottom-0 left-0 right-0 z-[var(--z-nav)] bg-white/95 dark:bg-zinc-900/95 backdrop-blur-lg border-t border-[#D9DEDA] dark:border-zinc-800 shadow-md lg:hidden transition-colors"
+      className={`${inFlow ? 'guide-app-nav shrink-0' : 'fixed bottom-0 left-0 right-0'} z-[var(--z-nav)] bg-white/95 dark:bg-zinc-900/95 backdrop-blur-lg border-t border-[#D9DEDA] dark:border-zinc-800 shadow-md lg:hidden transition-colors`}
       style={{ paddingBottom: 'max(6px, env(safe-area-inset-bottom, 0px))' }}
     >
       <div className="flex items-center justify-around h-16 max-w-lg mx-auto px-2">

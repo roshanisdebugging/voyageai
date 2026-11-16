@@ -1,0 +1,117 @@
+.itinerary-dialog {
+  --dialog-accent: var(--color-primary);
+  --dialog-on-accent: #fff;
+  --dialog-edge: #7b8780;
+  --dialog-divider: var(--color-border);
+  --dialog-selected: #e7f1eb;
+  --dialog-amber: #815000;
+  --dialog-amber-surface: #fff2d8;
+  --dialog-error: #9c2a3b;
+  --dialog-error-surface: #ffebee;
+  background: rgb(15 23 20 / 52%);
+}
+
+.dark .itinerary-dialog {
+  --dialog-accent: var(--color-primary-light);
+  --dialog-on-accent: #12261d;
+  --dialog-edge: #777981;
+  --dialog-divider: #3e4243;
+  --dialog-selected: #1d3a30;
+  --dialog-amber: #f9ca74;
+  --dialog-amber-surface: #413118;
+  --dialog-error: #fda4af;
+  --dialog-error-surface: #40252d;
+  background: rgb(0 0 0 / 73%);
+}
+
+.itinerary-dialog__panel {
+  max-height: 90vh;
+  max-height: 90dvh;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  box-shadow: 0 18px 58px rgb(13 30 24 / 24%);
+}
+
+@media (max-width: 639px) {
+  .itinerary-dialog__panel--sheet {
+    max-height: 92vh;
+    max-height: 92dvh;
+    padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
+  }
+}
+
+.itinerary-dialog__scroll {
+  scrollbar-color: var(--dialog-edge) var(--color-surface-elevated);
+}
+
+.itinerary-dialog__divider { border-color: var(--dialog-divider); }
+.itinerary-dialog__muted { color: var(--color-text-secondary); }
+.itinerary-dialog__accent { color: var(--dialog-accent); }
+.itinerary-dialog__elevated { background: var(--color-surface-elevated); }
+.itinerary-dialog__time { color: var(--dialog-amber); }
+
+.itinerary-dialog__label {
+  color: var(--dialog-accent);
+  background: var(--dialog-selected);
+}
+
+.itinerary-dialog__price,
+.itinerary-dialog__fallback {
+  color: var(--dialog-amber);
+  background: var(--dialog-amber-surface);
+}
+
+.itinerary-dialog__fallback :is(h4, p),
+.itinerary-dialog__fallback > div:last-child {
+  color: var(--dialog-amber);
+}
+
+.itinerary-dialog__fallback,
+.itinerary-dialog__fallback > div:last-child {
+  border-color: var(--dialog-amber);
+  background: var(--dialog-amber-surface);
+}
+
+.itinerary-dialog__error {
+  color: var(--dialog-error);
+  background: var(--dialog-error-surface);
+  border-color: var(--dialog-error);
+}
+
+.itinerary-dialog__button {
+  min-height: 44px;
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border: 1px solid var(--dialog-edge);
+}
+
+.itinerary-dialog__button:not(:disabled):hover {
+  background: var(--color-surface-elevated);
+  border-color: var(--dialog-accent);
+}
+
+.itinerary-dialog__button[aria-pressed='true'],
+.itinerary-dialog__button[aria-pressed='true']:hover {
+  background: var(--dialog-selected);
+  border-color: var(--dialog-accent);
+  box-shadow: inset 0 0 0 1px var(--dialog-accent);
+}
+
+.itinerary-dialog__button:focus-visible {
+  outline: 2px solid var(--dialog-accent);
+  outline-offset: -5px;
+}
+
+.itinerary-dialog__button--primary {
+  color: var(--dialog-on-accent);
+  background: var(--dialog-accent);
+  border-color: var(--dialog-accent);
+}
+
+.itinerary-dialog__button--primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--dialog-accent) 88%, var(--color-text-primary));
+}
+
+.itinerary-dialog__button--primary:focus-visible {
+  outline-color: var(--dialog-on-accent);
+}
