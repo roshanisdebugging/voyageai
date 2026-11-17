@@ -10,7 +10,7 @@
 import axios from 'axios';
 import { isAuthEndpoint, notifySessionExpired } from '../auth/sessionExpiry';
 
-export const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+export const DEFAULT_BACKEND_URL = 'http://localhost:80';
 
 /**
  * Returns the active HTTP/HTTPS API base URL.
