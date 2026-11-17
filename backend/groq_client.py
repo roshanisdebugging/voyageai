@@ -131,7 +131,7 @@ def groq_chat_tools(
         try:  # the error code only (e.g. tool_use_failed); never the message, which can quote the user
             code = str((res.json().get("error") or {}).get("code") or "")[:40]
         except Exception:
-            pass
+            code = "non_json_body"
         if res.status_code >= 500 or code == "tool_use_failed":
             raise GroqTransient(f"Groq HTTP {res.status_code} {code}".strip())
         raise GroqError(f"Groq HTTP {res.status_code} {code}".strip())

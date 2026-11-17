@@ -100,7 +100,13 @@ class GroqWhisperSTT:
         if res.status_code == 429:
             raise STTRateLimited("Groq rate limit (429)")
         if res.status_code >= 400:
-            raise STTError(f"Groq HTTP {res.status_code}")
+            code = ""
+            try:  # the provider's error code only (e.g. invalid_api_key); never the message
+                err_obj = res.json().get("error")
+                code = str((err_obj.get("code") if isinstance(err_obj, dict) else "") or "")[:40]
+            except Exception:
+                code = "non_json_body"
+            raise STTError(f"Groq HTTP {res.status_code} {code}".strip())
         try:
             body = res.json()
         except ValueError as err:

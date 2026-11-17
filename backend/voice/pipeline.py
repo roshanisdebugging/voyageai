@@ -69,7 +69,9 @@ class TurnResult:
     note: Optional[str] = None           # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
     pending_confirmation: Optional[Dict[str, Any]] = None  # step 4: {id, summary} -> the Confirm card
     reply_language: Optional[str] = None # "hi" / "en", from the reply text (TTS voice)
-    tts_error: Optional[str] = None      # None = reply audio ready
+    tts_error: Optional[str] = None      # None = reply audio ready; else why (e.g. "sarvam: http_429 <code>")
+    reply_error_code: Optional[str] = None    # the agent's failure code (sent to the app)
+    reply_error_detail: Optional[str] = None  # the agent's short failure reason (sent to the app)
 
 
 def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
@@ -90,8 +92,10 @@ def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
         result = TurnResult(turn_id=ctx.turn_id, ok=False, duration_ms=duration_ms,
                             error_code=ErrorCode.STT_FAILED, error_detail=str(err))
     except Exception as err:  # never let a turn crash the socket
+        logger.exception("[VOICE] turn=%s speech-to-text crashed", ctx.turn_id)
         result = TurnResult(turn_id=ctx.turn_id, ok=False, duration_ms=duration_ms,
-                            error_code=ErrorCode.STT_FAILED, error_detail=type(err).__name__)
+                            error_code=ErrorCode.STT_FAILED,
+                            error_detail=f"{type(err).__name__}: {str(err)[:200]}")
 
     logger.info(
         "[VOICE] turn=%s user=%s audio_ms=%s stt_ms=%s truncated=%s status=%s%s",
@@ -113,11 +117,14 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
                           screen=ctx.screen, trip=ctx.trip)
     except Exception as exc:  # run_agent doesn't raise, but a turn must never crash here
         from voice.agent import FALLBACK_REPLY
-        logger.warning("[VOICE] turn=%s agent crashed: %s", ctx.turn_id, type(exc).__name__)
+        logger.exception("[VOICE] turn=%s agent crashed", ctx.turn_id)
         result.reply_text, result.ui_actions, result.action, result.llm_ms = FALLBACK_REPLY, [], "error", 0
+        result.reply_error_code = type(exc).__name__
+        result.reply_error_detail = f"{type(exc).__name__}: {str(exc)[:200]}"
         return
     result.reply_text, result.ui_actions, result.action, result.llm_ms, result.tool_ms, result.note = (
         agent.reply_text, agent.ui_actions, agent.action, agent.llm_ms, agent.tool_ms, agent.note)
+    result.reply_error_code, result.reply_error_detail = agent.error_code, agent.error_detail
     result.pending_confirmation = agent.pending_confirmation
 
 
@@ -129,9 +136,13 @@ def make_reply(ctx: TurnContext, result: TurnResult) -> TurnResult:
     try:
         audio, mime, tts_ms, err = synthesize_reply(result.reply_text, result.reply_language)
     except Exception as exc:  # synthesize_reply doesn't raise, but a turn must never crash here
-        audio, mime, tts_ms, err = None, REPLY_MIME, 0, type(exc).__name__
+        logger.exception("[VOICE] turn=%s text-to-speech crashed", ctx.turn_id)
+        audio, mime, tts_ms, err = None, REPLY_MIME, 0, f"{type(exc).__name__}: {str(exc)[:200]}"
     result.reply_audio_b64, result.reply_mime, result.tts_ms, result.tts_error = audio, mime, tts_ms, err
-    logger.info("[VOICE] turn=%s tts_ms=%s tts_status=%s", ctx.turn_id, tts_ms, "ok" if not err else f"failed ({err})")
+    # tts_disabled / empty_text are settings, not failures; a real failure (Sarvam limit, key, network) is a warning.
+    is_failure = bool(err) and err not in ("tts_disabled", "empty_text")
+    logger.log(logging.WARNING if is_failure else logging.INFO, "[VOICE] turn=%s tts_ms=%s tts_status=%s",
+               ctx.turn_id, tts_ms, "ok" if not err else f"failed ({err})")
     return result
 
 
@@ -142,7 +153,7 @@ def after_turn(pcm: bytes, ctx: TurnContext, result: TurnResult, total_ms: int) 
     try:
         debug_store.save_speech(pcm, ctx, result, total_ms)
     except Exception as err:
-        logger.warning("[VOICE DEBUG STORE] save failed for turn=%s: %s", ctx.turn_id, type(err).__name__)
+        logger.warning("[VOICE DEBUG STORE] save failed for turn=%s: %s: %s", ctx.turn_id, type(err).__name__, str(err)[:200])
 
 
 def end_session(user_id: str, session_id: str, conversation_ids: Optional[List[str]] = None) -> None:
@@ -156,4 +167,4 @@ def end_session(user_id: str, session_id: str, conversation_ids: Optional[List[s
     try:
         debug_store.end_session(user_id, session_id)
     except Exception as err:
-        logger.warning("[VOICE DEBUG STORE] end_session failed for session=%s: %s", session_id, type(err).__name__)
+        logger.warning("[VOICE DEBUG STORE] end_session failed for session=%s: %s: %s", session_id, type(err).__name__, str(err)[:200])

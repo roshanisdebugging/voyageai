@@ -22,6 +22,20 @@ V3_SPEAKERS = {
     'mohit', 'kavitha', 'rehan', 'soham', 'rupali'
 }
 
+class SarvamTTSError(Exception):
+    """Why a Sarvam TTS call failed: a status/code, never the response message (it can echo the text)."""
+
+
+def _sarvam_error_code(response) -> str:
+    """The provider's error code only (e.g. insufficient_quota_error), max 40 chars."""
+    try:
+        err = response.json().get("error")
+        code = err.get("code") if isinstance(err, dict) else None
+        return str(code or "")[:40]
+    except Exception:
+        return ""
+
+
 def resolve_speaker(speaker: str) -> str:
     sp_lower = (speaker or 'ritu').lower().strip()
     if sp_lower in V3_SPEAKERS:
@@ -38,12 +52,15 @@ def synthesize_speech_sarvam(
     speaker: str = "ritu",               # 'ritu', 'priya', 'rahul', 'aditya', etc.
     poi_id: Optional[str] = None,
     use_cache: bool = True,
+    raise_errors: bool = False,
 ) -> Optional[str]:
     """
     Generates realistic speech via Sarvam AI (bulbul:v3) and returns Base64-encoded WAV audio.
     Employs sub-3ms Redis caching for 0ms latency on repeated POI narratives.
     use_cache=False skips the Redis cache entirely (no read, no write). Voice replies use it:
     they can contain the user's own words, which must never be stored.
+    raise_errors=True raises SarvamTTSError(reason) instead of returning None (voice uses it to
+    report why: no_api_key, http_429 <code>, no_audio_in_response, request_failed <Exc>).
     """
     if not text or not text.strip():
         return None
@@ -51,6 +68,8 @@ def synthesize_speech_sarvam(
     api_key = os.getenv("SARVAM_API_KEY") or SARVAM_API_KEY
     if not api_key:
         print("[SARVAM TTS WARN] SARVAM_API_KEY is not configured.", flush=True)
+        if raise_errors:
+            raise SarvamTTSError("no_api_key")
         return None
 
     resolved_spk = resolve_speaker(speaker)
@@ -93,12 +112,16 @@ def synthesize_speech_sarvam(
     }
 
     # 3. Call Sarvam TTS Endpoint
+    reason = ""
     try:
         response = requests.post(SARVAM_TTS_URL, json=payload, headers=headers, timeout=6.0)
         if response.status_code == 200:
             data = response.json()
             audios = data.get("audios", [])
-            if audios and isinstance(audios, list) and len(audios) > 0:
+            if not (audios and isinstance(audios, list) and len(audios) > 0):
+                reason = "no_audio_in_response"
+                print(f"[SARVAM TTS ERROR] {reason}", flush=True)
+            else:
                 base64_audio = audios[0]
                 
                 # Cache in Redis with 7-day TTL (never for use_cache=False)
@@ -111,9 +134,15 @@ def synthesize_speech_sarvam(
 
                 return base64_audio
         else:
-            # Status only: the response body can echo the input text.
-            print(f"[SARVAM TTS ERROR] HTTP {response.status_code}", flush=True)
+            # Status + the provider's error code only: the response body can echo the input text.
+            reason = f"http_{response.status_code} {_sarvam_error_code(response)}".strip()
+            print(f"[SARVAM TTS ERROR] {reason}", flush=True)
     except Exception as e:
+        # The server log keeps the full error; the reason sent to the app is the type only.
+        reason = f"request_failed {type(e).__name__}"
         print(f"[SARVAM TTS EXCEPTION]: {e}", flush=True)
+
+    if raise_errors:
+        raise SarvamTTSError(reason or "unknown")
 
     return None

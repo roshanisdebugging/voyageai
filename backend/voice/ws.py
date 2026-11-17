@@ -112,7 +112,8 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
             payload = m.transcript(ctx.turn_id, result.text, result.language, result.duration_ms,
                                    result.stt_ms, truncated=ctx.truncated)
         else:
-            payload = m.error(result.error_code or m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id)
+            payload = m.error(result.error_code or m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id,
+                              detail=result.error_detail)
         await _send(ws, payload)
         total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop -> transcript sent (no reply: STT failed)
 
@@ -121,14 +122,17 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
             await run_in_threadpool(pipeline.make_reply, ctx, result)
             await _send(ws, m.reply(ctx.turn_id, result.reply_text or "", result.reply_audio_b64,
                                     result.reply_mime, result.tts_ms, result.ui_actions, result.action, result.llm_ms,
-                                    result.tool_ms, result.note, result.pending_confirmation))
+                                    result.tool_ms, result.note, result.pending_confirmation,
+                                    error_code=result.reply_error_code, error_detail=result.reply_error_detail,
+                                    tts_error=result.tts_error if result.tts_error not in ("tts_disabled", "empty_text") else None))
             total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop received -> reply sent
             logger.info("[VOICE] turn=%s total_ms=%s action=%s", ctx.turn_id, total_ms, result.action)
             if result.tts_error and result.tts_error != "tts_disabled":
-                await _send(ws, m.error(m.ErrorCode.TTS_FAILED, turn_id=ctx.turn_id))
+                await _send(ws, m.error(m.ErrorCode.TTS_FAILED, turn_id=ctx.turn_id, detail=result.tts_error))
     except Exception as err:
-        logger.warning("[VOICE] turn=%s crashed: %s", ctx.turn_id, type(err).__name__)
-        await _send(ws, m.error(m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id))
+        logger.exception("[VOICE] turn=%s crashed", ctx.turn_id)
+        await _send(ws, m.error(m.ErrorCode.TURN_CRASHED, turn_id=ctx.turn_id,
+                                detail=f"{type(err).__name__}: {str(err)[:200]}"))
     finally:
         conn.processing = False
     # Last stage (test-only saving). The app already has its answer.

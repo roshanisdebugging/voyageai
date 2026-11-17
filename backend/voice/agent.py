@@ -245,7 +245,8 @@ class AgentResult:
     action: str = "reply"
     llm_ms: int = 0                   # the deciding Groq call(s)
     tool_ms: int = 0                  # the tool (answer: cost guard + Gemini/Groq; look-ups: Google/DB/Open-Meteo)
-    error_code: Optional[str] = None  # for logs only
+    error_code: Optional[str] = None  # logs, and sent to the app (reply.error_code) so a failure shows its reason
+    error_detail: Optional[str] = None  # short reason: status/code or "<Exc>: <message>", max 200 chars
     note: Optional[str] = None        # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
     pending_actions: List[Dict[str, Any]] = field(default_factory=list)
     pending_confirmation: Optional[Dict[str, Any]] = None   # {id, summary}: the app shows the Confirm card
@@ -331,7 +332,9 @@ def load_memory(redis_conn, user_id: str, conversation_id: str) -> List[Dict[str
             return []
         data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
         return [m for m in data if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
-    except Exception:
+    except Exception as err:
+        # The turn continues without memory; say why instead of silently dropping context.
+        logger.warning("[VOICE AGENT] memory load failed: %s: %s", type(err).__name__, str(err)[:200])
         return []
 
 
@@ -342,7 +345,7 @@ def save_turn(redis_conn, user_id: str, conversation_id: str, user_text: str, re
         history = history[-MEMORY_TURNS * 2:]
         redis_conn.setex(_mem_key(user_id, conversation_id), MEMORY_TTL_SECONDS, json.dumps(history))
     except Exception as err:
-        logger.warning("[VOICE AGENT] memory save failed: %s", type(err).__name__)
+        logger.warning("[VOICE AGENT] memory save failed: %s: %s", type(err).__name__, str(err)[:200])
 
 
 def clear_memory(redis_conn, user_id: str, conversation_id: Optional[str] = None) -> None:
@@ -358,7 +361,7 @@ def clear_memory(redis_conn, user_id: str, conversation_id: Optional[str] = None
                 for key in redis_conn.scan_iter(f"{prefix}:{user_id}:*"):
                     redis_conn.delete(key)
     except Exception as err:
-        logger.warning("[VOICE AGENT] memory clear failed: %s", type(err).__name__)
+        logger.warning("[VOICE AGENT] memory clear failed: %s: %s", type(err).__name__, str(err)[:200])
 
 
 def _pending_key(user_id: str, conversation_id: str) -> str:
@@ -369,7 +372,7 @@ def save_pending(redis_conn, user_id: str, conversation_id: str, actions: List[D
     try:
         redis_conn.setex(_pending_key(user_id, conversation_id), PENDING_TTL_SECONDS, json.dumps(actions))
     except Exception as err:
-        logger.warning("[VOICE AGENT] pending save failed: %s", type(err).__name__)
+        logger.warning("[VOICE AGENT] pending save failed: %s: %s", type(err).__name__, str(err)[:200])
 
 
 def pop_pending(redis_conn, user_id: str, conversation_id: str) -> List[Dict[str, Any]]:
@@ -380,8 +383,8 @@ def pop_pending(redis_conn, user_id: str, conversation_id: str) -> List[Dict[str
             redis_conn.delete(key)
             data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
             return [a for a in data if isinstance(a, dict) and a.get("type") in ("map_focus", "navigate")]
-    except Exception:
-        pass
+    except Exception as err:
+        logger.warning("[VOICE AGENT] pending pop failed: %s: %s", type(err).__name__, str(err)[:200])
     return []
 
 
@@ -503,7 +506,9 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
     call = next((c for c in tool_calls if c.get("name") in TOOL_NAMES), None)
     if call is None:
         if tool_calls:  # a tool we don't offer
-            return AgentResult(pages.WHICH_PAGE_REPLY[lang], action="reply", error_code="unknown_tool")
+            names = ",".join(str(tc.get("name")) for tc in tool_calls)[:100]
+            return AgentResult(pages.WHICH_PAGE_REPLY[lang], action="reply", error_code="unknown_tool",
+                               error_detail=f"model called a tool we don't offer: {names}")
         text = trim_sentences(content or "")
         # The model sometimes says the fixed lines as text instead of calling cant_help.
         if _norm_text(text) in {_norm_text(v) for v in DECLINE_REPLY.values()} or "sirf aapki trip" in text.lower():
@@ -514,7 +519,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 
     name, args = call["name"], call.get("arguments") or {}
     if not isinstance(args, dict):
-        return AgentResult(FALLBACK_REPLY, action="error", error_code="bad_tool_args")
+        return AgentResult(FALLBACK_REPLY, action="error", error_code="bad_tool_args",
+                           error_detail=f"tool {name}: arguments were not an object")
     if name == "navigate":
         return _navigate(args, lang, has_trip)
     if name == "cant_help":
@@ -524,7 +530,10 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 
     if name in ("update_trip_draft", "cancel_trip_draft"):
         if not user_id or not conversation_id or redis_conn is None:
-            return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user")
+            return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user",
+                               error_detail=f"trip draft needs a signed-in user, a conversation id and Redis "
+                                            f"(user={bool(user_id)} conversation={bool(conversation_id)} "
+                                            f"redis={redis_conn is not None})")
         if name == "cancel_trip_draft":
             return cancel_trip(redis_conn, user_id, conversation_id, lang)
         return update_draft(redis_conn, user_id, conversation_id, args, lang)
@@ -536,7 +545,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         return _from_tool(lookups.get_weather(args.get("place"), args.get("day"), lang, user_id=user_id,
                                               trip_id=trip.id if trip else None))
     if not user_id:
-        return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user")
+        return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user",
+                           error_detail=f"tool {name} needs a signed-in user; the voice socket had no user id")
     if name == "list_my_trips":
         return _from_tool(lookups.list_my_trips(user_id, lang, include_past=args.get("include_past") is True))
     if name == "open_trip":
@@ -554,7 +564,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         return AgentResult(ans["spoken"], action="decline", error_code="cost_guard")
     if ans["status"] == "no_facts":
         return AgentResult(ans["spoken"], action="answer", error_code=f"no_facts:{ans.get('fallback_code')}")
-    return AgentResult(ANSWER_FAILED[lang], action="answer", error_code=f"answer_failed:{ans.get('fallback_code')}")
+    return AgentResult(ANSWER_FAILED[lang], action="answer", error_code=f"answer_failed:{ans.get('fallback_code')}",
+                       error_detail=f"answer tool failed: status={ans.get('status')} code={ans.get('fallback_code')}")
 
 
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
@@ -627,14 +638,24 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                              user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn)
             if confirm_pending and not result.action.startswith("trip_"):
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
-        except GroqRateLimited:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="rate_limited")
-        except GroqTransient:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_transient_twice")
-        except GroqError:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_error")
+        # Groq errors carry status + provider code only (never the message, which can quote the user).
+        except GroqRateLimited as err:
+            logger.warning("[VOICE AGENT] Groq rate limit: %s", err)
+            result = AgentResult(FALLBACK_REPLY, action="error", error_code="rate_limited",
+                                 error_detail=str(err)[:200])
+        except GroqTransient as err:
+            logger.warning("[VOICE AGENT] Groq failed twice: %s", err)
+            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_transient_twice",
+                                 error_detail=str(err)[:200])
+        except GroqError as err:
+            logger.warning("[VOICE AGENT] Groq error: %s", err)
+            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_error",
+                                 error_detail=str(err)[:200])
         except Exception as err:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code=type(err).__name__)
+            # Unexpected (a bug, or a tool/lookup failing): the full traceback goes to the server log.
+            logger.exception("[VOICE AGENT] turn crashed in the agent")
+            result = AgentResult(FALLBACK_REPLY, action="error", error_code=type(err).__name__,
+                                 error_detail=f"{type(err).__name__}: {str(err)[:200]}")
     ended = time.perf_counter()
     result.llm_ms = int(((llm_done or ended) - started) * 1000) if used_llm else 0
     result.tool_ms = int((ended - llm_done) * 1000) if llm_done else (0 if used_llm else int((ended - started) * 1000))
@@ -643,9 +664,10 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
     if result.action != "error":
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
-    logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s", result.action,
+    logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s%s", result.action,
                 f" step={result.step}" if result.step else "",
                 f" missing={result.missing_count}" if result.missing_count is not None else "",
                 result.llm_ms, result.tool_ms, f" code={result.error_code}" if result.error_code else "",
+                f" detail={result.error_detail}" if result.error_detail else "",
                 f" google_calls={result.google_calls}" if result.google_calls is not None else "")
     return result

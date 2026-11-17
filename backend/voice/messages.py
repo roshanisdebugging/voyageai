@@ -20,7 +20,8 @@ Server -> app (text frames, JSON):
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
    "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
    "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null),
-   "pending_confirmation": {"id", "summary"} | null}      step 4: show the Confirm card
+   "pending_confirmation": {"id", "summary"} | null,      step 4: show the Confirm card
+   "error_code"?, "error_detail"?, "tts_error"?}          only when something failed: the reason (codes/status, no user text)
   {"type": "confirm_result", "pending_id", "ok", "reply_text", "ui_actions"}
                                                           answer to confirm / cancel (ok=false: nothing to confirm)
                                                           the agent's spoken reply (steps 1b + 2), after
@@ -53,6 +54,7 @@ class ErrorCode:
     STT_FAILED = "stt_failed"
     UNAVAILABLE = "unavailable"          # limiter/Redis down: fail closed
     TTS_FAILED = "tts_failed"            # the spoken reply couldn't be made (the turn still worked)
+    TURN_CRASHED = "turn_crashed"        # an unexpected exception while handling the turn
 
 
 # Messages the app can show as they are.
@@ -66,13 +68,17 @@ ERROR_MESSAGES = {
     ErrorCode.STT_FAILED: "Couldn't understand the audio right now. Please try again.",
     ErrorCode.UNAVAILABLE: "Voice is unavailable right now. Please try again shortly.",
     ErrorCode.TTS_FAILED: "Couldn't play the reply.",
+    ErrorCode.TURN_CRASHED: "Something went wrong. Please try again.",
 }
 
 
-def error(code: str, message: Optional[str] = None, turn_id: Optional[str] = None) -> Dict[str, Any]:
+def error(code: str, message: Optional[str] = None, turn_id: Optional[str] = None,
+          detail: Optional[str] = None) -> Dict[str, Any]:
     msg: Dict[str, Any] = {"type": "error", "code": code, "message": message or ERROR_MESSAGES.get(code, "Voice error.")}
     if turn_id:
         msg["turn_id"] = turn_id
+    if detail:
+        msg["detail"] = detail  # the technical reason (status/code/exception): for the console and test panel, not users
     return msg
 
 
@@ -87,8 +93,10 @@ def recording(turn_id: str) -> Dict[str, Any]:
 def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str, tts_ms: int,
           ui_actions: Optional[list] = None, action: str = "reply", llm_ms: int = 0,
           tool_ms: int = 0, note: Optional[str] = None,
-          pending_confirmation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return {
+          pending_confirmation: Optional[Dict[str, Any]] = None,
+          error_code: Optional[str] = None, error_detail: Optional[str] = None,
+          tts_error: Optional[str] = None) -> Dict[str, Any]:
+    msg = {
         "type": "reply",
         "turn_id": turn_id,
         "reply_text": reply_text,
@@ -102,6 +110,11 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
         "note": note,
         "pending_confirmation": pending_confirmation,
     }
+    # Why a turn went wrong, for the browser console and the test panel. Sent only when set.
+    for key, value in (("error_code", error_code), ("error_detail", error_detail), ("tts_error", tts_error)):
+        if value:
+            msg[key] = value
+    return msg
 
 
 def transcript(turn_id: str, text: str, language: Optional[str], duration_ms: int, latency_ms: int,
