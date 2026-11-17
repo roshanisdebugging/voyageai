@@ -28,6 +28,11 @@ export type VoiceServerMessage =
       note?: string | null;
       /** Step 4: show the Confirm card. */
       pending_confirmation?: { id: string; summary: string } | null;
+      /** Only when something failed: why (codes / HTTP status, never the user's words). */
+      error_code?: string;
+      error_detail?: string;
+      /** Why the spoken reply couldn't be made, e.g. "sarvam: http_429 insufficient_quota_error". */
+      tts_error?: string;
     }
   | {
       type: 'confirm_result';
@@ -36,7 +41,7 @@ export type VoiceServerMessage =
       reply_text: string;
       ui_actions?: Array<{ type: string; [key: string]: unknown }>;
     }
-  | { type: 'error'; code: string; message: string; turn_id?: string }
+  | { type: 'error'; code: string; message: string; turn_id?: string; detail?: string }
   | { type: 'closed'; code: number };
 
 type Listener = (msg: VoiceServerMessage) => void;
