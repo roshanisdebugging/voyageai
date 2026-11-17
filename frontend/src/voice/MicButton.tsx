@@ -26,7 +26,9 @@ const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slic
  * Streams 16 kHz PCM over /ws/voice, shows what Groq heard in the test panel, then plays the
  * spoken reply. Tapping while it speaks stops the reply and starts a new recording (barge-in).
  */
-const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | null }> = ({ raised, inlineTarget }) => {
+type MicPlace = 'shell' | 'wizard';
+
+const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | null; place: MicPlace }> = ({ raised, inlineTarget, place }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentTrip, trips, setCurrentTripId } = useTrip();
@@ -301,6 +303,10 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     : 'Start voice input';
 
   const inline = inlineTarget !== null;
+  // The wizard has no bottom nav: sit above its Proceed button, and above the Confirm card while it shows.
+  const micBottom = place === 'wizard'
+    ? `calc(env(safe-area-inset-bottom, 0px) + ${confirmCard ? 236 : 104}px)`
+    : `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px)`;
   const button = (
     <button
       type="button"
@@ -316,7 +322,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           ? 'bg-[#355F58] dark:bg-emerald-600 text-white ring-4 ring-[#355F58]/30 dark:ring-emerald-400/30'
           : 'bg-white dark:bg-zinc-900 text-[#355F58] dark:text-emerald-400 border border-[#D9DEDA] dark:border-zinc-700'
       }`}
-      style={inline ? undefined : { bottom: `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px)` }}
+      style={inline ? undefined : { bottom: micBottom }}
     >
       {phase === 'recording' ? (
         <>
@@ -341,14 +347,20 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     <>
       {SHOW_TEST_PANEL && <TestTranscriptPanel entries={entries} onClear={() => setEntries([])} />}
       {confirmCard && (
-        <ConfirmCard summary={confirmCard.summary} busy={confirmBusy} onConfirm={onConfirmTap} onCancel={onCancelTap} />
+        <ConfirmCard
+          summary={confirmCard.summary}
+          busy={confirmBusy}
+          onConfirm={onConfirmTap}
+          onCancel={onCancelTap}
+          bottom={place === 'wizard' ? 'calc(env(safe-area-inset-bottom, 0px) + 12px)' : undefined}
+        />
       )}
       {note && (
         <p
           role="status"
           data-voice-note
           className="fixed z-[var(--z-floating)] right-4 max-w-[220px] px-2.5 py-1 rounded-lg bg-white/95 dark:bg-zinc-900/95 border border-[#D9DEDA] dark:border-zinc-700 text-[11px] text-[#5F6863] dark:text-zinc-400 shadow-sm"
-          style={{ bottom: `calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + ${raised ? 80 : 12}px + 64px)` }}
+          style={{ bottom: `calc(${micBottom} + 64px)` }}
         >
           {note}
         </p>
@@ -358,8 +370,15 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   );
 };
 
-/** Only after login. `raised` stacks it above the floating AI button when that one is shown. */
-export const MicButton: React.FC<{ raised?: boolean; inlineTarget?: HTMLElement | null }> = ({ raised = true, inlineTarget = null }) => {
+/**
+ * Only after login. `raised` stacks it above the floating AI button when that one is shown; `place` is "wizard" on
+ * the full-screen trip wizard. Mounted once above the routes (see micLayout.tsx), so page changes keep the socket.
+ */
+export const MicButton: React.FC<{ raised?: boolean; inlineTarget?: HTMLElement | null; place?: MicPlace }> = ({
+  raised = true,
+  inlineTarget = null,
+  place = 'shell',
+}) => {
   const { isAuthenticated } = useAuth();
-  return isAuthenticated ? <MicButtonInner raised={raised} inlineTarget={inlineTarget} /> : null;
+  return isAuthenticated ? <MicButtonInner raised={raised} inlineTarget={inlineTarget} place={place} /> : null;
 };

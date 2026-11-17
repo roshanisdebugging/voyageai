@@ -1001,6 +1001,8 @@ Each checks the final prefill. Target: all 10.
 - Step 2/3 eval after the change: **39/40** and **32/32**.
 - Deciding Groq call: median 823 ms, average 859 ms. Code steps (draft checks, read-back, confirm) add only milliseconds; setting a destination adds the place search (~1.1 s).
 
+**Fix after the owner's first test (17 Nov 2026):** jumping to the review page cut the voice off. `/trips/new` is a route outside the main shell, and the mic button lived inside the shell, so the jump unmounted it: the reply audio stopped, the voice socket closed, the server ended the session (deleting the draft), and the wizard had no mic. The mic button is now mounted once above the routes (`voice/micLayout.tsx`, the shell sets its position with `useMicLayout`), so it survives page changes. On the wizard it sits above Proceed and above the Confirm card. Hidden on login and onboarding.
+
 **Not done in this step**
 - The spoken "Aapka Jaipur plan ready hai. Itinerary kholun?" on `ITINERARY_READY` (the visual notice stays).
 - The plan's 10 scripted multi-turn conversations with final-prefill checks (the 15-phrase decision eval and the unit tests cover the turns).

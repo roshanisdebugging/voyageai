@@ -9,9 +9,11 @@ import { Portal } from '../components/common/Portal';
 export const ConfirmCard: React.FC<{
   summary: string;
   busy?: boolean;
+  /** CSS bottom offset; defaults to just above the bottom nav. */
+  bottom?: string;
   onConfirm: () => void;
   onCancel: () => void;
-}> = ({ summary, busy = false, onConfirm, onCancel }) => (
+}> = ({ summary, busy = false, bottom, onConfirm, onCancel }) => (
   <Portal>
     <div
       role="dialog"
@@ -19,7 +21,7 @@ export const ConfirmCard: React.FC<{
       aria-labelledby="voice-confirm-title"
       data-confirm-card
       className="fixed left-3 right-3 sm:left-auto sm:right-6 sm:w-[380px] z-[var(--z-modal)] rounded-2xl bg-white dark:bg-zinc-900 border border-[#D9DEDA] dark:border-zinc-700 shadow-2xl p-4 space-y-3 animate-fadeIn"
-      style={{ bottom: 'calc(var(--bottom-nav-h, 72px) + env(safe-area-inset-bottom, 0px) + 12px)' }}
+      style={{ bottom: bottom ?? 'calc(var(--bottom-nav-h, 72px) + env(safe-area-inset-bottom, 0px) + 12px)' }}
     >
       <h2 id="voice-confirm-title" className="text-sm font-bold text-[#1F2522] dark:text-zinc-100">Create this trip?</h2>
       <p className="text-xs leading-relaxed text-[#5F6863] dark:text-zinc-400">{summary}</p>

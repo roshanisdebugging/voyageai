@@ -25,7 +25,8 @@ import { EmergencyModal } from './components/common/EmergencyModal';
 import { SwapActivityModal } from './components/itinerary/SwapActivityModal';
 import { ItineraryReadyNotice } from './components/trip/ItineraryReadyNotice';
 import { ToastProvider } from './components/common/UndoToast';
-import { MicButton } from './voice/MicButton';
+import { GlobalMicButton, MicLayoutProvider } from './voice/micLayout';
+import { useMicLayout } from './voice/micLayoutContext';
 
 import { HomePage } from './components/home/HomePage';
 import { MyTripsPage } from './components/trips/MyTripsPage';
@@ -204,6 +205,8 @@ const AppShell: React.FC = () => {
   const shellRef = useRef<HTMLDivElement>(null);
   const [guideMicSlot, setGuideMicSlot] = useState<HTMLDivElement | null>(null);
   const [mapMicSlot, setMapMicSlot] = useState<HTMLDivElement | null>(null);
+  // Voice: the mic button itself is mounted above the routes (it must survive the jump to /trips/new).
+  useMicLayout(!isGuideView, isMapView ? mapMicSlot : guideMicSlot);
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -264,9 +267,6 @@ const AppShell: React.FC = () => {
 
       {!isGuideView && !isMapView && <FloatingAIButton />}
 
-      {/* Voice (step 1): floating mic, logged-in users only */}
-      <MicButton raised={!isGuideView} inlineTarget={isMapView ? mapMicSlot : guideMicSlot} />
-
       {/* Bottom Sheets & Modals */}
       <NotificationDrawer />
       <AIAssistantSheet />
@@ -290,6 +290,7 @@ export default function App() {
               <TripProvider>
                 <AppProvider>
                   <ToastProvider>
+                  <MicLayoutProvider>
                   <Routes>
                     {/* Public Auth Route */}
                     <Route path="/login" element={<LoginScreen />} />
@@ -324,6 +325,9 @@ export default function App() {
                       }
                     />
                   </Routes>
+                  {/* Voice: one floating mic for every logged-in page, kept mounted across page changes */}
+                  <GlobalMicButton />
+                  </MicLayoutProvider>
                   </ToastProvider>
                 </AppProvider>
               </TripProvider>
