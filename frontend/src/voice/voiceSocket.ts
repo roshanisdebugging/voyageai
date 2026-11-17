@@ -28,6 +28,8 @@ export type VoiceServerMessage =
       note?: string | null;
       /** Step 4: show the Confirm card. */
       pending_confirmation?: { id: string; summary: string } | null;
+      /** Test mode only (VOICE_DEBUG_STORE=true): why the agent failed, e.g. "groq_transient_twice". */
+      error_code?: string;
     }
   | {
       type: 'confirm_result';

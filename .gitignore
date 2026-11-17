@@ -53,6 +53,7 @@ AGENTS.override.md
 
 # Voice test recordings (testing.md), local only
 test_audio_folder/
+backend/logs/
 
 # Redis persistence snapshots (runtime artifact)
 dump.rdb

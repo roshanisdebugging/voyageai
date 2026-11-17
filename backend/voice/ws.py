@@ -121,7 +121,8 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
             await run_in_threadpool(pipeline.make_reply, ctx, result)
             await _send(ws, m.reply(ctx.turn_id, result.reply_text or "", result.reply_audio_b64,
                                     result.reply_mime, result.tts_ms, result.ui_actions, result.action, result.llm_ms,
-                                    result.tool_ms, result.note, result.pending_confirmation))
+                                    result.tool_ms, result.note, result.pending_confirmation,
+                                    result.agent_error_code if debug_store.test_mode() else None))
             total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop received -> reply sent
             logger.info("[VOICE] turn=%s total_ms=%s action=%s", ctx.turn_id, total_ms, result.action)
             if result.tts_error and result.tts_error != "tts_disabled":
@@ -149,6 +150,7 @@ def _finish_recording(ws: WebSocket, conn: _Conn) -> Optional[str]:
         return m.ErrorCode.TOO_SHORT
     conn.processing = True
     conn.turns += 1
+    ctx.turn_number = conn.turns
     conn.task = asyncio.create_task(_process_turn(ws, conn, pcm, ctx, time.perf_counter()))
     return None
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from voice import debug_store
+from voice import debug_store, error_log
 from voice.messages import ErrorCode
 from voice.stt import STTError, STTRateLimited, get_stt, pcm_duration_ms
 from voice.agent import TripInfo, run_agent
@@ -41,6 +41,7 @@ class TurnContext:
     screen: Optional[str] = None
     trip: Optional[TripInfo] = None  # the open trip, already ownership-checked (title + dates only)
     truncated: bool = False          # cut at 30 s
+    turn_number: int = 0             # n-th recording on this connection (error log)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -65,6 +66,9 @@ class TurnResult:
     ui_actions: List[Dict[str, Any]] = field(default_factory=list)
     action: str = "reply"                # "navigate:<page>" | "reply" | "error"
     llm_ms: int = 0
+    agent_error_code: Optional[str] = None    # why the agent failed / fell back (logs, debug store, test panel)
+    agent_error_detail: Optional[str] = None  # status / code names only, never words (logs, debug store)
+    agent_error_info: Dict[str, Any] = field(default_factory=dict)
     tool_ms: int = 0                     # step 3: the tool after the deciding call (answer: cost guard + Gemini)
     note: Optional[str] = None           # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
     pending_confirmation: Optional[Dict[str, Any]] = None  # step 4: {id, summary} -> the Confirm card
@@ -112,18 +116,27 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
                           conversation_id=ctx.conversation_id or ctx.session_id,
                           screen=ctx.screen, trip=ctx.trip)
     except Exception as exc:  # run_agent doesn't raise, but a turn must never crash here
-        from voice.agent import FALLBACK_REPLY
+        from voice.agent import FALLBACK_REPLY, crash_error_info
         logger.warning("[VOICE] turn=%s agent crashed: %s", ctx.turn_id, type(exc).__name__)
         result.reply_text, result.ui_actions, result.action, result.llm_ms = FALLBACK_REPLY, [], "error", 0
+        result.agent_error_info = crash_error_info(exc)
+        result.agent_error_code, result.agent_error_detail = "agent_crashed", result.agent_error_info["detail"]
         return
     result.reply_text, result.ui_actions, result.action, result.llm_ms, result.tool_ms, result.note = (
         agent.reply_text, agent.ui_actions, agent.action, agent.llm_ms, agent.tool_ms, agent.note)
     result.pending_confirmation = agent.pending_confirmation
+    result.agent_error_code, result.agent_error_detail = agent.error_code, agent.error_detail
+    result.agent_error_info = dict(agent.error_info or {})
 
 
 def make_reply(ctx: TurnContext, result: TurnResult) -> TurnResult:
     """Stage 2: agent decision + Sarvam audio. Fills the reply fields; never raises."""
     decide_reply(ctx, result)
+    if result.action == "error" or result.agent_error_code:
+        info = result.agent_error_info or {}
+        attempt = f"{info['attempt']}/{info.get('attempts') or 2}" if info.get("attempt") else "-"
+        logger.warning("[VOICE] turn=%s agent_error=%s status=%s attempt=%s action=%s", ctx.turn_id,
+                       result.agent_error_code or "-", info.get("status") or "-", attempt, result.action)
     # The voice follows the reply's own words (Hinglish -> hi-IN, plain English -> en-IN), not Whisper's tag.
     result.reply_language = detect_lang(result.reply_text, result.language)
     try:
@@ -137,12 +150,17 @@ def make_reply(ctx: TurnContext, result: TurnResult) -> TurnResult:
 
 def after_turn(pcm: bytes, ctx: TurnContext, result: TurnResult, total_ms: int) -> None:
     """Last stage, after the app has its answer. Failures here are logged, never raised."""
-    if not debug_store.enabled():
-        return
-    try:
-        debug_store.save_speech(pcm, ctx, result, total_ms)
-    except Exception as err:
-        logger.warning("[VOICE DEBUG STORE] save failed for turn=%s: %s", ctx.turn_id, type(err).__name__)
+    turn_index: Optional[int] = None
+    if debug_store.enabled():
+        try:
+            turn_index = debug_store.save_speech(pcm, ctx, result, total_ms)
+        except Exception as err:
+            logger.warning("[VOICE DEBUG STORE] save failed for turn=%s: %s", ctx.turn_id, type(err).__name__)
+    if debug_store.test_mode() and error_log.should_log(result):
+        try:
+            error_log.append(ctx, result, total_ms, turn_index)
+        except Exception as err:  # the error log must never break a turn
+            logger.warning("[VOICE] error log write failed for turn=%s: %s", ctx.turn_id, type(err).__name__)
 
 
 def end_session(user_id: str, session_id: str, conversation_ids: Optional[List[str]] = None) -> None:

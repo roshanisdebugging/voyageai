@@ -20,7 +20,8 @@ Server -> app (text frames, JSON):
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
    "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
    "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null),
-   "pending_confirmation": {"id", "summary"} | null}      step 4: show the Confirm card
+   "pending_confirmation": {"id", "summary"} | null,      step 4: show the Confirm card
+   "error_code"?}                                         test mode only (VOICE_DEBUG_STORE=true): why the agent failed
   {"type": "confirm_result", "pending_id", "ok", "reply_text", "ui_actions"}
                                                           answer to confirm / cancel (ok=false: nothing to confirm)
                                                           the agent's spoken reply (steps 1b + 2), after
@@ -87,8 +88,8 @@ def recording(turn_id: str) -> Dict[str, Any]:
 def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str, tts_ms: int,
           ui_actions: Optional[list] = None, action: str = "reply", llm_ms: int = 0,
           tool_ms: int = 0, note: Optional[str] = None,
-          pending_confirmation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return {
+          pending_confirmation: Optional[Dict[str, Any]] = None, error_code: Optional[str] = None) -> Dict[str, Any]:
+    msg = {
         "type": "reply",
         "turn_id": turn_id,
         "reply_text": reply_text,
@@ -102,6 +103,9 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
         "note": note,
         "pending_confirmation": pending_confirmation,
     }
+    if error_code:   # test mode only (VOICE_DEBUG_STORE=true): the test panel shows why the agent failed
+        msg["error_code"] = error_code
+    return msg
 
 
 def transcript(turn_id: str, text: str, language: Optional[str], duration_ms: int, latency_ms: int,
