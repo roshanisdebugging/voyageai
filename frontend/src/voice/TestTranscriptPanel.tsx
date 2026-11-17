@@ -22,6 +22,10 @@ export interface PanelEntry {
   action?: string;  // "navigate:<page>" | "reply" | "error"
   llmMs?: number;
   navTo?: string;   // the route it navigated to
+  // Why it failed (only set on a failed turn): codes / HTTP status, never the user's words
+  errorCode?: string;
+  errorDetail?: string;
+  ttsError?: string;
   at: number;
 }
 
@@ -88,6 +92,14 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
                       <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
                         {e.action ? `→ ${actionLabel(e.action, e.navTo)} · ` : ''}{e.llmMs != null ? `LLM ${e.llmMs} ms · ` : ''}TTS {e.ttsMs} ms{e.totalMs != null ? ` · total ${e.totalMs} ms (tap → sound)` : ''}
                       </p>
+                      {(e.errorCode || e.errorDetail) && e.action === 'error' && (
+                        <p className="text-[10px] font-mono text-rose-700 dark:text-rose-400 break-words">
+                          ✖ {e.errorCode}{e.errorDetail ? ` · ${e.errorDetail}` : ''}
+                        </p>
+                      )}
+                      {e.ttsError && (
+                        <p className="text-[10px] font-mono text-rose-700 dark:text-rose-400 break-words">✖ TTS {e.ttsError}</p>
+                      )}
                     </>
                   )}
                 </div>

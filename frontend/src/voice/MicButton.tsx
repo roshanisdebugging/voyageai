@@ -124,7 +124,17 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         const update = (patch: Partial<PanelEntry>) =>
           setEntries((prev) => prev.map((e) => (e.id === turnId ? { ...e, ...patch } : e)));
         const navTo = (msg.ui_actions || []).find((a) => a.type === 'navigate')?.to;
-        update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
+        update({
+          replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo,
+          errorCode: msg.error_code, errorDetail: msg.error_detail, ttsError: msg.tts_error,
+        });
+        // Why a turn failed (LLM / tool / Sarvam): the reason is in the console, not just "error".
+        if (msg.action === 'error' || msg.tts_error) {
+          console.error('[voice] turn failed', {
+            turnId, action: msg.action, error_code: msg.error_code, error_detail: msg.error_detail,
+            tts_error: msg.tts_error, llm_ms: msg.llm_ms, tts_ms: msg.tts_ms,
+          });
+        }
         // Step 4: a reply with a pending confirmation shows the Confirm card; any other reply closes it.
         const pc = msg.pending_confirmation;
         setConfirmCard(pc && typeof pc.id === 'string' && typeof pc.summary === 'string' ? { id: pc.id, summary: pc.summary.slice(0, 400) } : null);
@@ -178,6 +188,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           report('Nothing to confirm any more. You can tap Proceed on the review page.');
         }
       } else if (msg.type === 'error') {
+        console.error('[voice] error', { code: msg.code, message: msg.message, detail: msg.detail, turnId: msg.turn_id });
         if (msg.code === 'tts_failed') {
           report(msg.message); // the turn itself worked; the state was already handled by "reply"
           return;
