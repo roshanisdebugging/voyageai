@@ -26,6 +26,15 @@ export type VoiceServerMessage =
       tool_ms?: number;
       /** Small on-screen text, never spoken (e.g. "Details badal sakti hain."). */
       note?: string | null;
+      /** Step 4: show the Confirm card. */
+      pending_confirmation?: { id: string; summary: string } | null;
+    }
+  | {
+      type: 'confirm_result';
+      pending_id: string | null;
+      ok: boolean;
+      reply_text: string;
+      ui_actions?: Array<{ type: string; [key: string]: unknown }>;
     }
   | { type: 'error'; code: string; message: string; turn_id?: string }
   | { type: 'closed'; code: number };
@@ -143,6 +152,20 @@ class VoiceSocket {
 
   stop(): boolean {
     return this.sendJson({ type: 'stop' });
+  }
+
+  /** Step 4: the Confirm card's buttons (Confirm runs the same action as saying "haan"). */
+  confirm(conversationId: string, pendingId: string): boolean {
+    return this.sendJson({ type: 'confirm', conversation_id: conversationId, pending_id: pendingId });
+  }
+
+  cancel(conversationId: string, pendingId: string): boolean {
+    return this.sendJson({ type: 'cancel', conversation_id: conversationId, pending_id: pendingId });
+  }
+
+  /** The wizard created the trip (e.g. Proceed tapped): the voice draft can go. */
+  draftDone(conversationId: string): boolean {
+    return this.sendJson({ type: 'draft_done', conversation_id: conversationId });
   }
 
   /** Ends the voice session (test-only saving merges the session's audio) and closes the socket. */

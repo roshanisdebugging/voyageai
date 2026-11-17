@@ -21,6 +21,7 @@ Status (15 Nov 2026):
 - Voice steps 1 and 1b are done.
 - Step 2 is done: on `main`, tested by the owner on 15 Nov 2026.
 - Step 3 and the "Fixes before Step 4" are on `main` (15 Nov 2026), waiting for the owner's test by voice.
+- Step 4 (create a trip by voice) is built on the local branch `voice-step4` (17 Nov 2026), waiting for the owner's test.
 - Steps 1c and 3–7 are planned in detail below (section 8).
 
 The plan was first agreed on 12 Nov 2026.
@@ -976,6 +977,41 @@ Each checks the final prefill. Target: all 10.
 - [ ] The date is always read back, and a wrong date can be corrected.
 - [ ] The itinerary-ready line is spoken, and "haan" opens it.
 - [ ] Eval 10/10. Earlier evals still pass.
+
+#### Step 4 notes (17 Nov 2026, local branch `voice-step4`, not pushed)
+
+**Status: Built, waiting for the owner's test.** Tested by script and eval; not yet by voice in a browser or on a phone.
+
+**How it works**
+- `voice/draft.py`: the draft in Redis `voice:draft:{user}:{conversation}`, 30 min after the last change; deleted on confirm, cancel, `end_session`, and when the socket closes (leaving midway). Fields: destination, origin_city, start_date, end_date (or days), adults, children, budget_inr.
+- **Code decides what's missing** (fixed order: destination, dates, adults, children, budget) and asks with templates, at most 2 things per question. The model only extracts values (`update_trip_draft`); every value is checked here: dates in India time, not in the past, end not before start, at most 30 days and a year ahead; whole numbers for people (at least 1 adult, at most 20 travelers; "do", "koi nahi"); budget in rupees ("50 hazaar", "1.5 lakh", at least ₹1,000); places through the existing India-only place search.
+- **Date read-back:** once both dates are set: "15 December se 18 December, teen raat. Sahi hai?". "Haan" (matched in code, no LLM call) confirms; "nahi" clears the dates and asks again; any change to a date needs a new read-back. The draft is never `ready` without it.
+- **Ready:** one short line ("Sab details review page par hain. Check karke Proceed dabaiye, ya haan boliye."), `ui_actions: [{type: "open_review", prefill}]` (the wizard's `TripDraft` shape) and `pending_confirmation: {id, summary}`. The app opens the existing wizard on its review step, filled and editable, and shows the **Confirm card** (`ConfirmCard.tsx`).
+- **Confirm:** `voice/pending.py`, Redis `voice:confirm:{user}:{conversation}` (5 min, one per conversation; separate from step 3's `voice:pending:*` map actions). Voice "haan" and the Confirm button call the same `agent.confirm_trip`: it takes the pending once (a second confirm finds nothing) and returns `submit_review`, which presses **Proceed** on the review page. So the page's values, including edits made by tap, are saved through the wizard's own path (`trips:create` -> `create_trip_for_user`). Voice never creates a trip from its own copy. The wizard now ignores a second Proceed while one is saving, and tells the voice side when the trip was created (`draft_done` clears the draft).
+- **Cancel:** "cancel karo" / "nahi" on the card / the Cancel button / `cancel_trip_draft`: draft and pending deleted, nothing saved. A new topic cancels the pending confirmation (the draft stays). A new create request (`start_new`) replaces the old draft and pending and says "Pichli trip ka draft hata diya."
+- **Safety:** everything is keyed by the session's user; the tools take no user_id or trip_id; another user's pending ID or draft is never found; `/ws/voice` only accepts confirm/cancel for conversations started on that socket. The summary says "Trip voice se undo nahi hogi."
+- **Logs:** `action=trip_draft step=ask|confirm_date|ready missing=N llm_ms tool_ms`, confirm/cancel outcomes. No words, names or dates.
+
+**Tests**
+- `tests/test_voice_step4.py`: 48/48 (Groq and place search simulated): missing-field order, past date / end-before-start / 31 days / outside India refused, budget and number words, read-back then "haan", "nahi" to the read-back, cancel saves nothing, confirm once (voice and button), second confirm does nothing, another user's pending unreachable (also over the socket), pending replaced on a new request, a new topic cancels, exact prefill shape, logs without words/names/dates, socket close and `draft_done` clear the draft.
+- All earlier tests pass: fixes 45/45, step 3 48/48, step 2 51/51, step 1b 22/22, step 1 31/31, place details 10/10, step 0 27/27, ownership 21/21, step 0e 13/13, rate limiter. Frontend build and lint clean.
+
+**Eval**
+- `python -m scripts.eval_create_trip` (real Groq, decision only): **14/15 = 93%**. The miss ("I want to plan a trip to Manali" opened the empty form) was fixed in the prompt and re-checked (now `update_trip_draft`, while "nayi trip banani hai" still opens the form).
+- Step 2/3 eval after the change: **39/40** and **32/32**.
+- Deciding Groq call: median 823 ms, average 859 ms. Code steps (draft checks, read-back, confirm) add only milliseconds; setting a destination adds the place search (~1.1 s).
+
+**Not done in this step**
+- The spoken "Aapka Jaipur plan ready hai. Itinerary kholun?" on `ITINERARY_READY` (the visual notice stays).
+- The plan's 10 scripted multi-turn conversations with final-prefill checks (the 15-phrase decision eval and the unit tests cover the turns).
+- Tested by voice in a browser or on a phone: needs the owner.
+
+**Owner test: say these**
+1. "Delhi se Jaipur jaana hai 3 din ke liye, budget 20 hazaar" -> it asks the start date and adults.
+2. "Agle Friday se, 2 adults, koi bachcha nahi" -> it reads the dates back.
+3. "Haan" -> the review page opens, filled, with the Confirm card.
+4. Change something by tap (e.g. budget), then say "haan" -> the trip is created with your edit.
+5. Another time: "Goa jaana hai, 15 se 18 December, do log" -> "nahi" to the read-back -> new dates -> "cancel karo" (nothing saved).
 
 ---
 

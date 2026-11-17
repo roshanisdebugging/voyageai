@@ -9,6 +9,8 @@ import { MAX_RECORDING_MS, useVoiceRecorder } from './useVoiceRecorder';
 import { TestTranscriptPanel, type PanelEntry } from './TestTranscriptPanel';
 import { replyPlayer } from './replyPlayer';
 import { runUiActions } from './uiActions';
+import { ConfirmCard } from './ConfirmCard';
+import { isReviewShowing, requestSubmitReview, TRIP_CREATED } from './reviewState';
 import { useTrip } from '../features/trip/TripContext';
 import { useNavigation } from '../context/NavigationContext';
 
@@ -37,6 +39,10 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   const [entries, setEntries] = useState<PanelEntry[]>([]);
   const [remaining, setRemaining] = useState(MAX_RECORDING_MS / 1000);
   const [note, setNote] = useState<string | null>(null);
+  // Step 4: the Confirm card ({id, summary} from the server); Confirm == saying "haan".
+  const [confirmCard, setConfirmCard] = useState<{ id: string; summary: string } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const confirmKindRef = useRef<'confirm' | 'cancel' | null>(null);
   const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (noteTimerRef.current) clearTimeout(noteTimerRef.current); }, []);
 
@@ -117,6 +123,10 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           setEntries((prev) => prev.map((e) => (e.id === turnId ? { ...e, ...patch } : e)));
         const navTo = (msg.ui_actions || []).find((a) => a.type === 'navigate')?.to;
         update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
+        // Step 4: a reply with a pending confirmation shows the Confirm card; any other reply closes it.
+        const pc = msg.pending_confirmation;
+        setConfirmCard(pc && typeof pc.id === 'string' && typeof pc.summary === 'string' ? { id: pc.id, summary: pc.summary.slice(0, 400) } : null);
+        setConfirmBusy(false);
         if (phaseRef.current !== 'waiting') return; // the user already moved on (e.g. started recording)
         // A note (e.g. "Details badal sakti hain.") is shown as small text for a few seconds, never spoken.
         if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
@@ -135,6 +145,9 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
             tripApiRef.current.setCurrentTripId(tripId);
             return true;
           },
+          // Step 4: the filled, editable review page (the existing wizard); "haan" presses its Proceed.
+          openReview: (prefill) => navigate('/trips/new', { state: { prefill } }),
+          submitReview: requestSubmitReview,
         });
         if (!msg.reply_audio_base64) {
           setPhaseBoth('idle'); // the error ("Couldn't play the reply.") follows as its own message
@@ -149,6 +162,19 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           .finally(() => {
             if (phaseRef.current === 'speaking') setPhaseBoth('idle');
           });
+      } else if (msg.type === 'confirm_result') {
+        // Answer to the Confirm / Cancel buttons.
+        const kind = confirmKindRef.current;
+        confirmKindRef.current = null;
+        setConfirmBusy(false);
+        setConfirmCard(null);
+        if (msg.ok && kind === 'confirm') {
+          runUiActions(msg.ui_actions, { navigate: (to) => navigate(to), submitReview: requestSubmitReview });
+        } else if (msg.ok && kind === 'cancel') {
+          report(msg.reply_text || 'Okay, no trip was created.');
+        } else if (!msg.ok && kind === 'confirm') {
+          report('Nothing to confirm any more. You can tap Proceed on the review page.');
+        }
       } else if (msg.type === 'error') {
         if (msg.code === 'tts_failed') {
           report(msg.message); // the turn itself worked; the state was already handled by "reply"
@@ -172,6 +198,37 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
       }
     });
   }, [report, recorder, navigate]);
+
+  // Step 4: the wizard created the trip (Proceed by tap or by voice): the voice draft goes too.
+  useEffect(() => {
+    const onCreated = () => {
+      setConfirmCard(null);
+      voiceSocket.draftDone(conversationId.current);
+    };
+    window.addEventListener(TRIP_CREATED, onCreated);
+    return () => window.removeEventListener(TRIP_CREATED, onCreated);
+  }, []);
+
+  const onConfirmTap = () => {
+    if (!confirmCard || confirmBusy) return;
+    confirmKindRef.current = 'confirm';
+    setConfirmBusy(true);
+    if (!voiceSocket.confirm(conversationId.current, confirmCard.id)) {
+      setConfirmBusy(false);
+      confirmKindRef.current = null;
+      report('Voice connection lost. Tap Proceed on the review page instead.');
+    }
+  };
+  const onCancelTap = () => {
+    if (!confirmCard || confirmBusy) return;
+    confirmKindRef.current = 'cancel';
+    setConfirmBusy(true);
+    if (!voiceSocket.cancel(conversationId.current, confirmCard.id)) {
+      setConfirmBusy(false);
+      setConfirmCard(null);
+      confirmKindRef.current = null;
+    }
+  };
 
   // Close the voice session and stop any reply when the button goes away (logout, leaving the app).
   useEffect(() => () => {
@@ -220,7 +277,9 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
       setPhaseBoth('idle');
       return;
     }
-    if (!voiceSocket.start(conversationId.current, location.pathname, currentTrip?.id ?? null)) {
+    // Step 4: on the wizard's review step the agent must know that "haan" means Proceed.
+    const screen = location.pathname === '/trips/new' && isReviewShowing() ? '/trips/new#review' : location.pathname;
+    if (!voiceSocket.start(conversationId.current, screen, currentTrip?.id ?? null)) {
       await recorder.stop();
       report('Voice connection lost. Please try again.');
       setPhaseBoth('idle');
@@ -281,6 +340,9 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   return (
     <>
       {SHOW_TEST_PANEL && <TestTranscriptPanel entries={entries} onClear={() => setEntries([])} />}
+      {confirmCard && (
+        <ConfirmCard summary={confirmCard.summary} busy={confirmBusy} onConfirm={onConfirmTap} onCancel={onCancelTap} />
+      )}
       {note && (
         <p
           role="status"

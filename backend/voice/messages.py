@@ -7,6 +7,9 @@ App -> server (text frames, JSON):
                                                           trip_id is ownership-checked; not yours = none
   {"type": "stop"}
   {"type": "end_session"}
+  {"type": "confirm", "conversation_id", "pending_id"}  the Confirm card's button (same action as voice "haan")
+  {"type": "cancel", "conversation_id", "pending_id"}   the Cancel button: the draft is dropped, nothing saved
+  {"type": "draft_done", "conversation_id"}            the wizard created the trip (e.g. Proceed tapped): clear the draft
 App -> server (binary frames): raw PCM, 16 kHz, 16-bit little-endian, mono, ~100 ms per frame.
 
 Server -> app (text frames, JSON):
@@ -16,7 +19,10 @@ Server -> app (text frames, JSON):
                                                           sent as soon as speech-to-text finishes
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
    "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
-   "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null)}
+   "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null),
+   "pending_confirmation": {"id", "summary"} | null}      step 4: show the Confirm card
+  {"type": "confirm_result", "pending_id", "ok", "reply_text", "ui_actions"}
+                                                          answer to confirm / cancel (ok=false: nothing to confirm)
                                                           the agent's spoken reply (steps 1b + 2), after
                                                           "transcript"; the app runs ui_actions first
   {"type": "error", "code": "...", "message": "...", "turn_id"?}
@@ -80,7 +86,8 @@ def recording(turn_id: str) -> Dict[str, Any]:
 
 def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str, tts_ms: int,
           ui_actions: Optional[list] = None, action: str = "reply", llm_ms: int = 0,
-          tool_ms: int = 0, note: Optional[str] = None) -> Dict[str, Any]:
+          tool_ms: int = 0, note: Optional[str] = None,
+          pending_confirmation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {
         "type": "reply",
         "turn_id": turn_id,
@@ -93,6 +100,7 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
         "llm_ms": llm_ms,
         "tool_ms": tool_ms,
         "note": note,
+        "pending_confirmation": pending_confirmation,
     }
 
 
@@ -107,3 +115,7 @@ def transcript(turn_id: str, text: str, language: Optional[str], duration_ms: in
         "latency_ms": latency_ms,
         "truncated": truncated,
     }
+
+
+def confirm_result(pending_id: Optional[str], ok: bool, reply_text: str, ui_actions: Optional[list] = None) -> Dict[str, Any]:
+    return {"type": "confirm_result", "pending_id": pending_id, "ok": ok, "reply_text": reply_text, "ui_actions": ui_actions or []}

@@ -191,7 +191,7 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.objec
     kinds = [f["type"] for f in frames]
     check("transcript first, then reply", kinds[:2] == ["transcript", "reply"], kinds)
     rep = frames[1] if len(frames) > 1 else {}
-    check("reply message shape", set(rep) == {"type", "turn_id", "reply_text", "reply_audio_base64", "mime", "tts_ms", "ui_actions", "action", "llm_ms", "tool_ms", "note"}
+    check("reply message shape", set(rep) == {"type", "turn_id", "reply_text", "reply_audio_base64", "mime", "tts_ms", "ui_actions", "action", "llm_ms", "tool_ms", "note", "pending_confirmation"}
           and rep["turn_id"] == frames[0]["turn_id"] and rep["mime"] == "audio/wav" and isinstance(rep["tts_ms"], int), rep.keys())
     check("reply text is the echo", rep.get("reply_text") == "Aapne kaha: mujhe jaipur jaana hai", rep.get("reply_text"))
     check("reply audio is Sarvam's WAV", rep.get("reply_audio_base64") == WAV_B64)

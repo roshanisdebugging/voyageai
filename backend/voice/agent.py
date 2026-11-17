@@ -63,12 +63,23 @@ Call exactly one tool when it fits:
   reason="unclear" when the words are garbled, nonsense or can't be understood. Don't guess what garbled
   words meant.
 - If the request is understandable but unclear (e.g. "woh wala kholo"), ask ONE short question.
+- update_trip_draft: the user wants to create a trip by voice and gives details ("Goa jaana hai, 15 se 18
+  December, do log", "trip banao Jaipur ke liye"), or answers a question about the trip being planned, or
+  corrects a detail ("nahi, budget 50 hazaar kar do"). Pass ONLY values the user said:
+  dates as YYYY-MM-DD from today's date ("15 December" = the next 15 December; "agle Friday"); "3 din ke liye"
+  -> days=3; people as integers ("do log" -> adults=2, "koi bachcha nahi" -> children=0); budget in rupees as a
+  number ("50 hazaar" -> 50000, "1.5 lakh" -> 150000); origin_city for "Delhi se". start_new=true only when the
+  user starts a different new trip while one is being planned. Never ask for details yourself: our code asks.
+  A destination alone counts as a detail ("plan a trip to Manali" -> update_trip_draft).
+  "Nayi trip banani hai" / "plan a new trip" with NO details at all -> navigate to plan_trip.
+- cancel_trip_draft: the user wants to stop planning this trip ("cancel karo", "trip mat banao").
 - Never invent pages, routes, trips, places or facts.
 
 Current state:
 - Today (India): {today}
 - User is on page: {screen}
-- Open trip: {trip_line}"""
+- Open trip: {trip_line}
+- Trip being planned by voice: {draft_line}"""
 
 
 def _nullable(t: str) -> List[str]:
@@ -180,7 +191,38 @@ CANT_HELP_TOOL: Dict[str, Any] = {
         },
     },
 }
-TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL, CANT_HELP_TOOL]
+UPDATE_DRAFT_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "update_trip_draft",
+        "description": "Create a trip by voice: save the trip details the user said (any subset). Our code checks them, "
+                       "decides what is still missing and asks for it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "destination": {"type": _nullable("string"), "description": "Where to go, e.g. 'Jaipur'."},
+                "origin_city": {"type": _nullable("string"), "description": "Starting city, e.g. 'Delhi'."},
+                "start_date": {"type": _nullable("string"), "description": "YYYY-MM-DD."},
+                "end_date": {"type": _nullable("string"), "description": "YYYY-MM-DD (last day of the trip)."},
+                "days": {"type": _nullable("integer"), "description": "Trip length in days, if said instead of an end date."},
+                "adults": {"type": _nullable("integer")},
+                "children": {"type": _nullable("integer")},
+                "budget_inr": {"type": _nullable("number"), "description": "Total budget in rupees."},
+                "start_new": {"type": _nullable("boolean"), "description": "true only for a different new trip while one is being planned."},
+            },
+        },
+    },
+}
+CANCEL_DRAFT_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "cancel_trip_draft",
+        "description": "Stop planning the trip being created by voice; nothing is saved.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL, CANT_HELP_TOOL,
+         UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL]
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 
@@ -203,6 +245,9 @@ class AgentResult:
     error_code: Optional[str] = None  # for logs only
     note: Optional[str] = None        # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
     pending_actions: List[Dict[str, Any]] = field(default_factory=list)
+    pending_confirmation: Optional[Dict[str, Any]] = None   # {id, summary}: the app shows the Confirm card
+    step: Optional[str] = None                              # trip draft: ask | confirm_date | ready (logs)
+    missing_count: Optional[int] = None                     # trip draft: missing fields (logs)
 
 
 def template_language(stt_language: Optional[str], text: Optional[str] = None) -> str:
@@ -213,12 +258,25 @@ def template_language(stt_language: Optional[str], text: Optional[str] = None) -
     return "en" if lang == "en" else "hi"
 
 
-def build_system_prompt(screen: Optional[str], trip: Optional[TripInfo], today: Optional[str] = None) -> str:
+def build_system_prompt(screen: Optional[str], trip: Optional[TripInfo], today: Optional[str] = None,
+                        draft_line: str = "none") -> str:
     trip_line = (f"{trip.title} ({trip.start_date or '?'} to {trip.end_date or '?'})" if trip else "none")
     if today is None:
         from datetime import datetime, timedelta, timezone
-        today = datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%A %d %B %Y")
-    return SYSTEM_PROMPT.format(screen=(screen or "unknown")[:120], trip_line=trip_line, today=today)
+        now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        today = f"{now.strftime('%A %d %B %Y')} ({now.date().isoformat()})"
+    return SYSTEM_PROMPT.format(screen=(screen or "unknown")[:120], trip_line=trip_line, today=today, draft_line=draft_line)
+
+
+def _draft_line(d) -> str:
+    """The draft for the prompt: field names and values the user gave (in the prompt only, never logged)."""
+    if d is None:
+        return "none"
+    have = {k: v for k, v in {
+        "destination": (d.destination or {}).get("name"), "origin_city": (d.origin_city or {}).get("name"),
+        "start_date": d.start_date, "end_date": d.end_date, "days": d.days, "adults": d.adults,
+        "children": d.children, "budget_inr": d.budget_inr}.items() if v is not None}
+    return f"have {json.dumps(have)}; still missing {d.missing_fields()} (our code asks for them)"
 
 
 def trim_sentences(text: str, limit: int = 2) -> str:
@@ -239,7 +297,10 @@ _YES = {"haan", "haa", "ha", "han", "haanji", "ji", "yes", "yeah", "yep", "sure"
 _YES_CORE = {"haan", "haa", "ha", "han", "haanji", "yes", "yeah", "yep", "sure", "ok", "okay", "zaroor", "bilkul", "theek", "thik",
              "dikhao", "show"}
 _NO = {"nahi", "nahin", "na", "no", "nope", "mat", "rehne", "rahne", "do", "dijiye", "ji", "thanks", "thank", "you", "zarurat"}
-_NO_CORE = {"nahi", "nahin", "na", "no", "nope", "mat", "rehne", "rahne"}
+_NO_CORE = {"nahi", "nahin", "na", "no", "nope", "mat", "rehne", "rahne", "cancel"}
+_NO.update({"cancel", "karo", "kar", "trip", "banao", "galat", "wrong"})
+_YES.update({"sahi", "correct", "right", "confirm", "proceed", "kar", "banao", "haanji", "bilkul"})
+_YES_CORE.update({"sahi", "correct", "right", "confirm", "proceed"})
 
 
 def yes_or_no(text: str) -> Optional[str]:
@@ -286,11 +347,12 @@ def clear_memory(redis_conn, user_id: str, conversation_id: Optional[str] = None
         if conversation_id:
             redis_conn.delete(_mem_key(user_id, conversation_id))
             redis_conn.delete(_pending_key(user_id, conversation_id))
+            redis_conn.delete(f"voice:draft:{user_id}:{conversation_id}")    # step 4: the trip draft
+            redis_conn.delete(f"voice:confirm:{user_id}:{conversation_id}")  # step 4: the pending confirmation
         else:
-            for key in redis_conn.scan_iter(f"voice:mem:{user_id}:*"):
-                redis_conn.delete(key)
-            for key in redis_conn.scan_iter(f"voice:pending:{user_id}:*"):
-                redis_conn.delete(key)
+            for prefix in ("voice:mem", "voice:pending", "voice:draft", "voice:confirm"):
+                for key in redis_conn.scan_iter(f"{prefix}:{user_id}:*"):
+                    redis_conn.delete(key)
     except Exception as err:
         logger.warning("[VOICE AGENT] memory clear failed: %s", type(err).__name__)
 
@@ -343,8 +405,95 @@ def _norm_text(s: str) -> str:
     return re.sub(r"[^a-z ]", "", (s or "").lower()).strip()
 
 
+# ---------------- create a trip by voice (step 4)
+
+READY_REPLY = {"hi": "Sab details review page par hain. Check karke Proceed dabaiye, ya haan boliye.",
+               "en": "All details are on the review page. Check them and tap Proceed, or say yes."}
+CONFIRMED_REPLY = {"hi": "Trip bana raha hoon.", "en": "Creating your trip."}
+NOTHING_TO_CONFIRM = {"hi": "Abhi confirm karne ke liye kuch nahi hai.", "en": "There's nothing to confirm right now."}
+CANCELLED_REPLY = {"hi": "Theek hai, trip nahi banayi. Kuch save nahi hua.", "en": "Okay, no trip was created. Nothing was saved."}
+REPLACED_NOTE = {"hi": "Pichli trip ka draft hata diya.", "en": "I dropped the previous trip draft."}
+DATE_AGAIN = {"hi": "Theek hai, kab se kab tak jaana hai?", "en": "Okay, from which date to which date?"}
+
+
+def _draft_today():
+    from trip_lifecycle import today_ist
+    return today_ist()
+
+
+def draft_next(redis_conn, user_id: str, conversation_id: str, d, lang: str, prefix: str = "") -> AgentResult:
+    """What to say next for a draft. CODE decides: ask (<= 2 missing fields) / read the dates back / ready."""
+    from voice import draft as D, pending as P
+    step = d.next_step()
+    missing = d.missing_fields()
+    if step == "ask":
+        d.awaiting = None
+        D.save(redis_conn, user_id, conversation_id, d)
+        text = f"{prefix} {D.question_for(missing, lang, days_known=bool(d.days))}".strip()
+        return AgentResult(text, action="trip_draft", step="ask", missing_count=len(missing))
+    if step == "confirm_date":
+        d.awaiting = "date"
+        D.save(redis_conn, user_id, conversation_id, d)
+        return AgentResult(f"{prefix} {D.readback(d, lang)}".strip(), action="trip_draft", step="confirm_date", missing_count=0)
+    # ready: open the review page with the draft; one pending confirmation (replaces any older one)
+    d.awaiting = None
+    D.save(redis_conn, user_id, conversation_id, d)
+    pc = P.save(redis_conn, user_id, conversation_id, "create_trip", D.summary(d, lang))
+    return AgentResult(f"{prefix} {READY_REPLY[lang]}".strip(),
+                       ui_actions=[{"type": "open_review", "prefill": D.prefill(d)}],
+                       action="trip_draft", step="ready", missing_count=0,
+                       pending_confirmation={"id": pc["id"], "summary": pc["summary"]})
+
+
+def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str, Any], lang: str) -> AgentResult:
+    from voice import draft as D, pending as P
+    d = D.load(redis_conn, user_id, conversation_id)
+    prefix = ""
+    if d is not None and args.get("start_new") is True:
+        d = None
+        prefix = REPLACED_NOTE[lang]
+    had_pending = P.get(redis_conn, user_id, conversation_id) is not None
+    if had_pending:
+        P.clear(redis_conn, user_id, conversation_id)   # details changed: the summary must be confirmed again
+    d = d or D.TripDraftState()
+    res = D.apply_update(d, {k: v for k, v in args.items() if k != "start_new"}, lang, _draft_today())
+    if res.problems:
+        D.save(redis_conn, user_id, conversation_id, res.draft)
+        r = AgentResult(" ".join(res.problems[:2]), action="trip_draft", step="ask",
+                        missing_count=len(res.draft.missing_fields()), error_code="refused_value")
+        return r
+    if "destination" in res.changed and not prefix:
+        name = (res.draft.destination or {}).get("name", "")
+        length = f", {res.draft.days} din" if res.draft.days and lang != "en" else (f", {res.draft.days} days" if res.draft.days else "")
+        prefix = f"{name}{length}."
+    return draft_next(redis_conn, user_id, conversation_id, res.draft, lang, prefix)
+
+
+def confirm_trip(redis_conn, user_id: str, conversation_id: str, lang: str, pending_id: Optional[str] = None) -> AgentResult:
+    """
+    The ONE confirm action, for voice "haan" and the Confirm button alike. Takes the pending confirmation once
+    (a second confirm finds nothing) and tells the app to press Proceed on the review page: the wizard then
+    saves the page's values through its own path (trips:create -> create_trip_for_user). Voice never creates
+    a trip from its own copy of the draft.
+    """
+    from voice import draft as D, pending as P
+    pc = P.take(redis_conn, user_id, conversation_id, pending_id)
+    if not pc or pc.get("tool") != "create_trip":
+        return AgentResult(NOTHING_TO_CONFIRM[lang], action="trip_confirm_none", error_code="no_pending")
+    D.delete(redis_conn, user_id, conversation_id)
+    return AgentResult(CONFIRMED_REPLY[lang], ui_actions=[{"type": "submit_review"}], action="trip_confirm", step="confirmed")
+
+
+def cancel_trip(redis_conn, user_id: str, conversation_id: str, lang: str) -> AgentResult:
+    from voice import draft as D, pending as P
+    P.clear(redis_conn, user_id, conversation_id)
+    D.delete(redis_conn, user_id, conversation_id)
+    return AgentResult(CANCELLED_REPLY[lang], action="trip_cancel", step="cancelled")
+
+
 def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str, has_trip: bool,
-            user_id: Optional[str] = None, trip: Optional[TripInfo] = None) -> AgentResult:
+            user_id: Optional[str] = None, trip: Optional[TripInfo] = None,
+            conversation_id: Optional[str] = None, redis_conn=None) -> AgentResult:
     """Check the model's choice and run the tool. user_id comes from the session, never from the model."""
     call = next((c for c in tool_calls if c.get("name") in TOOL_NAMES), None)
     if call is None:
@@ -367,6 +516,13 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         if args.get("reason") == "unclear":
             return AgentResult(UNCLEAR_REPLY[lang], action="unclear")
         return AgentResult(DECLINE_REPLY[lang], action="decline")
+
+    if name in ("update_trip_draft", "cancel_trip_draft"):
+        if not user_id or not conversation_id or redis_conn is None:
+            return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user")
+        if name == "cancel_trip_draft":
+            return cancel_trip(redis_conn, user_id, conversation_id, lang)
+        return update_draft(redis_conn, user_id, conversation_id, args, lang)
 
     from voice.tools import lookups
     if name == "search_places":
@@ -409,10 +565,36 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     started = time.perf_counter()
     llm_done: Optional[float] = None
     used_llm = False
+    from voice import draft as D, pending as P
+    confirm_pending = P.get(redis_conn, user_id, conversation_id)
+    draft_state = D.load(redis_conn, user_id, conversation_id)
+    said = yes_or_no(transcript)
     pending = pop_pending(redis_conn, user_id, conversation_id)
-    answer_to_pending = yes_or_no(transcript) if pending else None
+    answer_to_pending = said if pending else None
+    result: Optional[AgentResult] = None
 
-    if answer_to_pending == "yes":
+    if confirm_pending and said == "yes":
+        # "haan" to the Confirm card: same action as the Confirm button.
+        result = confirm_trip(redis_conn, user_id, conversation_id, lang)
+    elif confirm_pending and said == "no":
+        result = cancel_trip(redis_conn, user_id, conversation_id, lang)
+    elif draft_state is not None and draft_state.awaiting == "date" and said == "yes":
+        draft_state.dates_confirmed = True     # set only here, by code, after the read-back
+        result = draft_next(redis_conn, user_id, conversation_id, draft_state, lang)
+    elif draft_state is not None and draft_state.awaiting == "date" and said == "no":
+        draft_state.start_date = draft_state.end_date = None
+        draft_state.days = None
+        draft_state.dates_confirmed = False
+        draft_state.awaiting = None
+        D.save(redis_conn, user_id, conversation_id, draft_state)
+        result = AgentResult(DATE_AGAIN[lang], action="trip_draft", step="ask",
+                             missing_count=len(draft_state.missing_fields()))
+    elif draft_state is not None and said == "no" and _norm_text(transcript).startswith("cancel"):
+        result = cancel_trip(redis_conn, user_id, conversation_id, lang)
+
+    if result is not None:
+        pass
+    elif answer_to_pending == "yes":
         # "Taj Mahal kahan hai?" -> "... Map par dikhaun?" -> "haan": run the kept map actions, no LLM call.
         name = next((a.get("name") for a in pending if a.get("type") == "map_focus"), "")
         result = AgentResult({"hi": f"{name}: map par dikha diya.", "en": f"Showing {name} on the map."}[lang],
@@ -422,7 +604,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     elif is_garbled(transcript):
         result = AgentResult(UNCLEAR_REPLY[lang], action="unclear", error_code="no_words")
     else:
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": build_system_prompt(screen, trip)}]
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": build_system_prompt(
+            screen, trip, draft_line=_draft_line(draft_state))}]
         messages += load_memory(redis_conn, user_id, conversation_id)
         messages.append({"role": "user", "content": transcript})
         used_llm = True
@@ -436,7 +619,9 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                                          timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             llm_done = time.perf_counter()
             result = _decide(answer["tool_calls"], answer["content"], lang, has_trip=trip is not None,
-                             user_id=user_id, trip=trip)
+                             user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn)
+            if confirm_pending and not result.action.startswith("trip_"):
+                P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
         except GroqRateLimited:
             result = AgentResult(FALLBACK_REPLY, action="error", error_code="rate_limited")
         except GroqTransient:
@@ -453,6 +638,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
     if result.action != "error":
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
-    logger.info("[VOICE AGENT] action=%s llm_ms=%s tool_ms=%s%s", result.action, result.llm_ms, result.tool_ms,
-                f" code={result.error_code}" if result.error_code else "")
+    logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s", result.action,
+                f" step={result.step}" if result.step else "",
+                f" missing={result.missing_count}" if result.missing_count is not None else "",
+                result.llm_ms, result.tool_ms, f" code={result.error_code}" if result.error_code else "")
     return result

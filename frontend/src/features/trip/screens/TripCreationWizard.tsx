@@ -9,6 +9,7 @@ import { PreferenceProgress } from '../../../components/preferences/PreferencePr
 import { PreferenceFooter } from '../../../components/preferences/PreferenceFooter';
 import { PlaceSearchField, placeSubtitle } from '../components/PlaceSearchField';
 import { MapPin, Calendar, Sparkles, ArrowLeft, RefreshCw, AlertCircle, Wallet, Baby, User, Pencil } from 'lucide-react';
+import { announceTripCreated, setReviewShowing, VOICE_SUBMIT_REVIEW } from '../../../voice/reviewState';
 
 /**
  * Trip wizard: Where → When → Who → Style → Budget → Review.
@@ -229,13 +230,16 @@ export const TripCreationWizard: React.FC = () => {
     return null;
   };
 
+  const submittingRef = useRef(false);
   const handleProceed = async () => {
+    if (submittingRef.current) return; // a second tap / voice confirm while saving does nothing
     const problem = validationProblem();
     if (problem || !destination) {
       setSubmitError(problem);
       return;
     }
     setSubmitError(null);
+    submittingRef.current = true;
     try {
       await createTrip({
         destination,
@@ -248,11 +252,40 @@ export const TripCreationWizard: React.FC = () => {
         budgetAmount,
       });
       discardDraft();
+      announceTripCreated(); // voice: the draft for this trip can go
       navigate('/trip/itinerary');
     } catch (err: any) {
       setSubmitError(err?.message || 'Could not create the trip. Please try again.');
+    } finally {
+      submittingRef.current = false;
     }
   };
+
+  // Voice step 4: tell the mic button when the review step shows; "haan" / Confirm presses Proceed here,
+  // so the values on this page (including edits made by tap) are what gets saved.
+  const proceedRef = useRef(handleProceed);
+  useEffect(() => { proceedRef.current = handleProceed; });
+  useEffect(() => {
+    setReviewShowing(step === REVIEW_STEP);
+    return () => setReviewShowing(false);
+  }, [step]);
+  useEffect(() => {
+    const onSubmit = () => { if (step === REVIEW_STEP) void proceedRef.current(); };
+    window.addEventListener(VOICE_SUBMIT_REVIEW, onSubmit);
+    return () => window.removeEventListener(VOICE_SUBMIT_REVIEW, onSubmit);
+  }, [step]);
+
+  // A new voice prefill while the wizard is already open (e.g. a corrected budget): apply it and show the review.
+  const lastPrefillKeyRef = useRef(location.key);
+  useEffect(() => {
+    if (location.key === lastPrefillKeyRef.current) return;
+    lastPrefillKeyRef.current = location.key;
+    if (prefill) {
+      applyDraft(prefill);
+      setStep(REVIEW_STEP);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.key]);
 
   const toggleStyle = (id: TravelStyle) =>
     setStyles(prev => (prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]));

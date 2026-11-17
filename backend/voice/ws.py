@@ -121,7 +121,7 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
             await run_in_threadpool(pipeline.make_reply, ctx, result)
             await _send(ws, m.reply(ctx.turn_id, result.reply_text or "", result.reply_audio_b64,
                                     result.reply_mime, result.tts_ms, result.ui_actions, result.action, result.llm_ms,
-                                    result.tool_ms, result.note))
+                                    result.tool_ms, result.note, result.pending_confirmation))
             total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop received -> reply sent
             logger.info("[VOICE] turn=%s total_ms=%s action=%s", ctx.turn_id, total_ms, result.action)
             if result.tts_error and result.tts_error != "tts_disabled":
@@ -201,6 +201,31 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
         err = _finish_recording(ws, conn)
         if err:
             await _send(ws, m.error(err, turn_id=turn_id))
+        return True
+
+    if kind in ("confirm", "cancel", "draft_done"):
+        # Step 4. Everything is keyed by the session's user: another user's pending ID / draft is never found.
+        conversation_id = str(msg.get("conversation_id") or "")[:100]
+        pending_id = str(msg.get("pending_id") or "")[:40] or None
+        if not conversation_id or conversation_id not in conn.conversation_ids:
+            await _send(ws, m.confirm_result(pending_id, False, ""))
+            return True
+        from voice import agent as voice_agent
+        from voice.lang import detect_lang
+        from redis_client import redis_conn as rc
+        lang = detect_lang(str(msg.get("lang_hint") or ""), "hi")
+        if kind == "confirm":
+            res = await run_in_threadpool(voice_agent.confirm_trip, rc, conn.user_id, conversation_id, lang, pending_id)
+            ok = res.action == "trip_confirm"
+        elif kind == "cancel":
+            res = await run_in_threadpool(voice_agent.cancel_trip, rc, conn.user_id, conversation_id, lang)
+            ok = True
+        else:
+            await run_in_threadpool(voice_agent.cancel_trip, rc, conn.user_id, conversation_id, lang)
+            logger.info("[VOICE] draft_done")
+            return True
+        logger.info("[VOICE] %s ok=%s", kind, ok)
+        await _send(ws, m.confirm_result(pending_id, ok, res.reply_text, res.ui_actions))
         return True
 
     if kind == "end_session":
@@ -288,5 +313,6 @@ def mount_voice(app: FastAPI, origin_allowed: Callable[[Optional[str]], bool]) -
                     await asyncio.wait_for(asyncio.shield(conn.task), 25)
                 except Exception:
                     pass
-            if conn.turns:
-                await run_in_threadpool(pipeline.end_session, conn.user_id, conn.session_id)
+            if conn.turns or conn.conversation_ids:
+                # Leaving midway (socket closed): memory, draft and pending confirmation go with it.
+                await run_in_threadpool(pipeline.end_session, conn.user_id, conn.session_id, list(conn.conversation_ids))
