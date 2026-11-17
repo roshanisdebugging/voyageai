@@ -20,7 +20,7 @@ Server -> app (text frames, JSON):
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
    "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
    "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null),
-   "pending_confirmation": {"id", "summary"} | null}      step 4: show the Confirm card
+   "pending_confirmation": {"id", "summary", "title"?} | null}  step 4/5: show the Confirm card
   {"type": "confirm_result", "pending_id", "ok", "reply_text", "ui_actions"}
                                                           answer to confirm / cancel (ok=false: nothing to confirm)
                                                           the agent's spoken reply (steps 1b + 2), after

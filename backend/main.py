@@ -1413,31 +1413,16 @@ async def process_ws_action(
         ]
 
     elif reqname == "trips:add_expense":
-        trip_id = data.get("trip_id")
-        expense = TripExpenseModel(
-            id=f"exp-{uuid.uuid4().hex[:8]}",
-            trip_id=trip_id,
-            title=data.get("title") or data.get("description") or "Expense",
-            amount=float(data.get("amount") or 0.0),
-            category=data.get("category") or "Other",
-            paid_by=data.get("paidBy") or data.get("paid_by") or "Me",
+        import trip_actions
+        return trip_actions.add_expense(
+            db, user.id, data["trip_id"],
+            title=data.get("title") or data.get("description"),
+            amount=data.get("amount"),
+            category=data.get("category"),
+            paid_by=data.get("paidBy") or data.get("paid_by"),
             is_split=bool(data.get("isSplit") or False),
-            created_at=data.get("createdAt") or data.get("date") or datetime.now(timezone.utc).isoformat()
+            created_at=data.get("createdAt") or data.get("date"),
         )
-        db.add(expense)
-        db.commit()
-        return {
-            "id": expense.id,
-            "tripId": expense.trip_id,
-            "title": expense.title,
-            "amount": expense.amount,
-            "category": expense.category,
-            "paidBy": expense.paid_by,
-            "isSplit": expense.is_split,
-            "createdAt": expense.created_at,
-            "description": expense.title,
-            "date": expense.created_at
-        }
 
     elif reqname == "trips:weather_replan":
         trip_id = data.get("trip_id") or data.get("tripId")
@@ -1467,59 +1452,37 @@ async def process_ws_action(
         return execute_refinement_actions_service(db, trip_id, actions)
 
     elif reqname == "trips:regenerate_itinerary":
-        trip_id = data.get("trip_id") or data.get("tripId")
-        if not trip_id:
-            raise ValueError("trip_id is required for regenerate_itinerary")
-        trip = db.query(TripModel).filter(TripModel.id == trip_id, TripModel.user_id == user.id).first()
-        if trip:
-            trip.itinerary_status = "GENERATING"
-            db.commit()
-            enqueue_itinerary_generation(trip_id)
-        return {"status": "GENERATING", "tripId": trip_id}
+        import trip_actions
+        return trip_actions.regenerate_itinerary(db, user.id, data["trip_id"])
 
     elif reqname == "trips:set_activity_done":
-        owned = find_owned_activity(db, data.get("activity_id") or data.get("activityId"), user.id)
-        if not owned or owned[1].id != data["trip_id"]:
-            raise LookupError("Activity not found")
-        activity, trip = owned
-        activity.is_done = bool(data.get("done", True))
-        db.flush()  # the session doesn't autoflush; count must see this change
-        trip_activities = (
-            db.query(ItineraryActivityModel.is_done)
-            .join(ItineraryDayModel, ItineraryDayModel.id == ItineraryActivityModel.day_id)
-            .join(ItineraryModel, ItineraryModel.id == ItineraryDayModel.itinerary_id)
-            .filter(ItineraryModel.trip_id == trip.id)
-            .all()
-        )
-        progress = dict(trip.progress or {})
-        progress["completedActivitiesCount"] = sum(1 for (done,) in trip_activities if done)
-        progress["totalActivitiesCount"] = len(trip_activities)
-        trip.progress = progress
-        db.commit()
-        return {"activityId": activity.id, "isDone": activity.is_done, "progress": progress}
+        import trip_actions
+        return trip_actions.set_activity_done(
+            db, user.id, data["trip_id"], data.get("activity_id") or data.get("activityId"), bool(data.get("done", True)))
 
     elif reqname == "trips:swap_activity":
-        trip_id = data.get("trip_id") or data.get("tripId")
-        activity_id = data.get("activity_id") or data.get("activityId")
-        replacement = data.get("replacement") or {}
-        if not activity_id:
-            raise ValueError("activity_id is required for swap_activity")
-        owned = find_owned_activity(db, activity_id, user.id)
-        if not owned or owned[1].id != data["trip_id"]:
-            raise LookupError("Activity not found")
-        act = owned[0]
-        if replacement:
-            act.title = replacement.get("name") or replacement.get("title") or act.title
-            act.description = replacement.get("description", act.description)
-            act.location_name = replacement.get("locationName", act.location_name)
-            if replacement.get("latitude"):
-                act.latitude = replacement["latitude"]
-            if replacement.get("longitude"):
-                act.longitude = replacement["longitude"]
-            if replacement.get("estimatedCost"):
-                act.estimated_cost_inr = replacement["estimatedCost"]
-            db.commit()
-        return {"status": "SUCCESS", "activityId": activity_id}
+        import trip_actions
+        return trip_actions.swap_activity(
+            db, user.id, data["trip_id"], data.get("activity_id") or data.get("activityId"), data.get("replacement") or {})
+
+    elif reqname == "places:save":
+        # Voice step 5: the Undo of "unsave" (and a WS path for saving). Keyed by the session user only.
+        import trip_actions
+        place_id = str(data.get("place_id") or "").strip()[:300]
+        title = str(data.get("title") or "").strip()[:200]
+        if not place_id or not title:
+            raise ValueError("place_id and title are required")
+        fields = {k: data.get(k) for k in ("category", "rating", "location_name", "distance_text",
+                                           "duration_text", "cost_text", "description")}
+        return trip_actions.save_place(db, user.id, place_id=place_id, title=title, **fields)
+
+    elif reqname == "places:unsave":
+        import trip_actions
+        place_id = str(data.get("place_id") or "").strip()[:300]
+        if not place_id:
+            raise ValueError("place_id is required")
+        res = trip_actions.unsave_place(db, user.id, place_id)
+        return {"status": res["status"], "place_id": res["place_id"]}
 
     else:
         raise ValueError(f"Unknown WebSocket request action: [{reqname}]")
@@ -1935,8 +1898,7 @@ def save_place(
     current_user: AuthUser = Depends(get_user_or_guest),
     db: Session = Depends(get_db)
 ):
-    from redis_client import redis_conn
-    from models_db import SavedPlaceModel, AuthUserModel
+    from models_db import AuthUserModel
 
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required to save places")
@@ -1965,47 +1927,11 @@ def save_place(
             db.rollback()
             print(f"[SAVED PLACES USER SYNC WARN]: {e}", flush=True)
 
-    loc = req.location_name or req.location or ""
-
-    existing = db.query(SavedPlaceModel).filter(
-        SavedPlaceModel.user_id == user_id,
-        SavedPlaceModel.place_id == req.place_id
-    ).first()
-
-    if existing:
-        existing.title = req.title
-        existing.category = req.category
-        existing.rating = req.rating
-        existing.location_name = loc
-        existing.distance_text = req.distance_text
-        existing.duration_text = req.duration_text
-        existing.cost_text = req.cost_text
-        existing.description = req.description
-    else:
-        new_place = SavedPlaceModel(
-            id=f"sp_{uuid.uuid4().hex[:12]}",
-            user_id=user_id,
-            place_id=req.place_id,
-            title=req.title,
-            category=req.category,
-            rating=req.rating,
-            location_name=loc,
-            distance_text=req.distance_text,
-            duration_text=req.duration_text,
-            cost_text=req.cost_text,
-            description=req.description
-        )
-        db.add(new_place)
-
-    db.commit()
-
-    # Atomically invalidate/update Redis cache
-    try:
-        redis_conn.delete(f"saved_places:{user_id}")
-    except Exception as e:
-        print(f"[SAVED PLACES CACHE WARN]: {e}", flush=True)
-
-    return {"status": "saved", "place_id": req.place_id}
+    import trip_actions
+    return trip_actions.save_place(
+        db, user_id, place_id=req.place_id, title=req.title, category=req.category, rating=req.rating,
+        location_name=req.location_name or req.location or "", distance_text=req.distance_text,
+        duration_text=req.duration_text, cost_text=req.cost_text, description=req.description)
 
 @app.delete("/api/places/save/{place_id}")
 @app.delete("/api/user/saved-places/{place_id}")
@@ -2014,26 +1940,11 @@ def remove_saved_place(
     current_user: AuthUser = Depends(get_user_or_guest),
     db: Session = Depends(get_db)
 ):
-    from redis_client import redis_conn
-    from models_db import SavedPlaceModel
-
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    user_id = current_user.id
-    db.query(SavedPlaceModel).filter(
-        SavedPlaceModel.user_id == user_id,
-        SavedPlaceModel.place_id == place_id
-    ).delete()
-
-    db.commit()
-
-    # Invalidate cache
-    try:
-        redis_conn.delete(f"saved_places:{user_id}")
-    except Exception as e:
-        print(f"[SAVED PLACES CACHE WARN]: {e}", flush=True)
-
+    import trip_actions
+    trip_actions.unsave_place(db, current_user.id, place_id)
     return {"status": "removed", "place_id": place_id}
 
 @app.delete("/api/user/saved-places")

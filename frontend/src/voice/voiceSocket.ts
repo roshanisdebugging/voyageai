@@ -26,8 +26,8 @@ export type VoiceServerMessage =
       tool_ms?: number;
       /** Small on-screen text, never spoken (e.g. "Details badal sakti hain."). */
       note?: string | null;
-      /** Step 4: show the Confirm card. */
-      pending_confirmation?: { id: string; summary: string } | null;
+      /** Step 4/5: show the Confirm card (title: e.g. "Add this expense?"). */
+      pending_confirmation?: { id: string; summary: string; title?: string } | null;
     }
   | {
       type: 'confirm_result';
@@ -141,9 +141,13 @@ class VoiceSocket {
     return true;
   }
 
-  /** tripId: the open trip (the server ownership-checks it; not yours = none), or null. */
-  start(conversationId: string, screen: string, tripId: string | null = null): boolean {
-    return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId });
+  /**
+   * tripId: the open trip (the server ownership-checks it; not yours = none), or null.
+   * screenPlace (step 5): the place page on screen, so "yeh jagah save karo" knows it (server checks the shape).
+   */
+  start(conversationId: string, screen: string, tripId: string | null = null,
+    screenPlace: { place_id: string; name: string; address?: string } | null = null): boolean {
+    return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId, screen_place: screenPlace });
   }
 
   sendAudio(chunk: ArrayBuffer) {
@@ -155,8 +159,9 @@ class VoiceSocket {
   }
 
   /** Step 4: the Confirm card's buttons (Confirm runs the same action as saying "haan"). */
-  confirm(conversationId: string, pendingId: string): boolean {
-    return this.sendJson({ type: 'confirm', conversation_id: conversationId, pending_id: pendingId });
+  /** tripId: the trip open now; a pending made for the open trip is refused if another trip is open (server-checked). */
+  confirm(conversationId: string, pendingId: string, tripId: string | null = null): boolean {
+    return this.sendJson({ type: 'confirm', conversation_id: conversationId, pending_id: pendingId, trip_id: tripId });
   }
 
   cancel(conversationId: string, pendingId: string): boolean {

@@ -3,17 +3,20 @@ import { Loader2 } from 'lucide-react';
 import { Portal } from '../components/common/Portal';
 
 /**
- * Voice step 4: the Confirm card. Confirm here and saying "haan" run the same server action (the app then
- * presses Proceed on the review page, so the page's values are what gets saved). Cancel saves nothing.
+ * Voice steps 4-5: the Confirm card for a big action (create a trip, add an expense, rebuild the itinerary).
+ * Confirm here and saying "haan" run the same server action, once. Cancel saves nothing. For a new trip the
+ * app then presses Proceed on the review page, so the page's values are what gets saved.
  */
 export const ConfirmCard: React.FC<{
   summary: string;
+  /** Step 5: "Add this expense?" / "Rebuild the itinerary?"; default is the trip one. */
+  title?: string;
   busy?: boolean;
   /** CSS bottom offset; defaults to just above the bottom nav. */
   bottom?: string;
   onConfirm: () => void;
   onCancel: () => void;
-}> = ({ summary, busy = false, bottom, onConfirm, onCancel }) => (
+}> = ({ summary, title = 'Create this trip?', busy = false, bottom, onConfirm, onCancel }) => (
   <Portal>
     <div
       role="dialog"
@@ -23,7 +26,7 @@ export const ConfirmCard: React.FC<{
       className="fixed left-3 right-3 sm:left-auto sm:right-6 sm:w-[380px] z-[var(--z-modal)] rounded-2xl bg-white dark:bg-zinc-900 border border-[#D9DEDA] dark:border-zinc-700 shadow-2xl p-4 space-y-3 animate-fadeIn"
       style={{ bottom: bottom ?? 'calc(var(--bottom-nav-h, 72px) + env(safe-area-inset-bottom, 0px) + 12px)' }}
     >
-      <h2 id="voice-confirm-title" className="text-sm font-bold text-[#1F2522] dark:text-zinc-100">Create this trip?</h2>
+      <h2 id="voice-confirm-title" className="text-sm font-bold text-[#1F2522] dark:text-zinc-100">{title}</h2>
       <p className="text-xs leading-relaxed text-[#5F6863] dark:text-zinc-400">{summary}</p>
       <div className="flex gap-2">
         <button

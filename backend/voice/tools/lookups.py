@@ -36,6 +36,7 @@ class ToolResult:
     action: str = "reply"
     error_code: Optional[str] = None
     pending_actions: List[Dict[str, Any]] = field(default_factory=list)  # run only after "haan" / "yes"
+    place: Optional[Dict[str, Any]] = None  # step 5: the place found (so "yeh jagah save karo" knows it)
 
 
 # ---------------- search a place on the map
@@ -112,15 +113,16 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     if top.get("place_id") or top.get("id"):
         focus["place_id"] = str(top.get("place_id") or top.get("id"))[:300]
     actions = [focus, {"type": "navigate", "to": "/map"}]
+    found = {"place_id": focus.get("place_id"), "name": name, "address": ", ".join(x for x in (city, state) if x)}
     if show:
         label = f"{name}, {city}" if city and city.lower() != name.lower() else name
         reply = {"hi": f"{label}: map par dikha diya.", "en": f"Showing {label} on the map."}[lang]
-        return ToolResult(reply, ui_actions=actions, action="map_focus")
+        return ToolResult(reply, ui_actions=actions, action="map_focus", place=found)
     if where:
         reply = {"hi": f"{name} {where} mein hai. Map par dikhaun?", "en": f"{name} is in {where}. Shall I show it on the map?"}[lang]
     else:
         reply = {"hi": f"{name} mil gaya. Map par dikhaun?", "en": f"I found {name}. Shall I show it on the map?"}[lang]
-    return ToolResult(reply, action="where", pending_actions=actions)
+    return ToolResult(reply, action="where", pending_actions=actions, place=found)
 
 
 # ---------------- weather (Open-Meteo via weather_service)
@@ -342,14 +344,11 @@ def parse_month(raw: Any) -> Optional[int]:
     return MONTH_ALIASES.get(s) or MONTH_ALIASES.get(s[:3])
 
 
-def open_trip(user_id: str, lang: str, name_or_destination: Optional[str] = None, month: Any = None,
-              which: Optional[str] = None, db=None) -> ToolResult:
+def match_trips(user_id: str, name_or_destination: Optional[str] = None, month: Any = None,
+                which: Optional[str] = None, db=None) -> Tuple[List[TripRow], List[TripRow]]:
+    """(all of the user's trips, the ones matching name / month / next|current|last). Code only, user's own trips."""
     trips = load_user_trips(user_id, db)
     today = _today()
-    if not trips:
-        return ToolResult({"hi": "Abhi aapki koi trip nahi hai.", "en": "You don't have any trips yet."}[lang],
-                          ui_actions=[{"type": "navigate", "to": "/trips"}], action="open_trip_none", error_code="no_trips")
-
     which = (which or "").strip().lower() or None
     m = parse_month(month)
     query = (name_or_destination or "").strip()
@@ -357,7 +356,9 @@ def open_trip(user_id: str, lang: str, name_or_destination: Optional[str] = None
     cands = list(trips)
     if query:
         scored = [(t, _name_score(query, t)) for t in cands]
-        cands = [t for t, s in scored if s >= 0.75]
+        exact = [t for t, s in scored if s >= 1.0]
+        # An exact name wins over look-alikes ("Udaipur" must not also pick a Jaipur trip, ratio 0.92).
+        cands = exact or [t for t, s in scored if s >= 0.75]
     if m:
         cands = [t for t in cands if t.start and t.start.month == m]
     if which == "current":
@@ -372,17 +373,14 @@ def open_trip(user_id: str, lang: str, name_or_destination: Optional[str] = None
         # By name only: prefer open trips; past ones only if nothing open matches.
         open_ones = [t for t in cands if t.status in OPEN_STATUSES]
         cands = open_ones or cands
+    return trips, cands
 
-    if not cands:
-        return ToolResult({"hi": "Is naam ki koi trip nahi mili.", "en": "I couldn't find a trip like that."}[lang],
-                          action="open_trip_none", error_code="not_found")
-    if len(cands) == 1:
-        t = cands[0]
-        reply = {"hi": f"{_short_name(t)} wali trip khol di.", "en": f"Opened your {_short_name(t)} trip."}[lang]
-        return ToolResult(reply, ui_actions=[{"type": "open_trip", "trip_id": t.id}, {"type": "navigate", "to": "/trip"}],
-                          action="open_trip")
 
-    # Several: ask which, by month (or by date when the months are the same).
+NO_SUCH_TRIP = {"hi": "Is naam ki koi trip nahi mili.", "en": "I couldn't find a trip like that."}
+
+
+def which_trip_question(cands: List[TripRow], lang: str) -> str:
+    """Several trips match: ask which, by month (or by date when the months are the same)."""
     cands = _sort_open(cands)[:3]
     months = [MONTHS_EN[t.start.month - 1] if t.start else "?" for t in cands]
     if len(set(months)) == len(months):
@@ -392,7 +390,21 @@ def open_trip(user_id: str, lang: str, name_or_destination: Optional[str] = None
     name = _short_name(cands[0]) if len({_short_name(t) for t in cands}) == 1 else None
     sep = " ya " if lang == "hi" else " or "
     if lang == "hi":
-        reply = (f"{name} ki {len(cands)} trips hain: " if name else f"{len(cands)} trips milin: ") + sep.join(options) + "?"
-    else:
-        reply = (f"You have {len(cands)} {name} trips: " if name else f"I found {len(cands)} trips: ") + sep.join(options) + "?"
-    return ToolResult(reply, action="open_trip_ask", error_code="ambiguous")
+        return (f"{name} ki {len(cands)} trips hain: " if name else f"{len(cands)} trips milin: ") + sep.join(options) + "?"
+    return (f"You have {len(cands)} {name} trips: " if name else f"I found {len(cands)} trips: ") + sep.join(options) + "?"
+
+
+def open_trip(user_id: str, lang: str, name_or_destination: Optional[str] = None, month: Any = None,
+              which: Optional[str] = None, db=None) -> ToolResult:
+    trips, cands = match_trips(user_id, name_or_destination, month, which, db)
+    if not trips:
+        return ToolResult({"hi": "Abhi aapki koi trip nahi hai.", "en": "You don't have any trips yet."}[lang],
+                          ui_actions=[{"type": "navigate", "to": "/trips"}], action="open_trip_none", error_code="no_trips")
+    if not cands:
+        return ToolResult(NO_SUCH_TRIP[lang], action="open_trip_none", error_code="not_found")
+    if len(cands) == 1:
+        t = cands[0]
+        reply = {"hi": f"{_short_name(t)} wali trip khol di.", "en": f"Opened your {_short_name(t)} trip."}[lang]
+        return ToolResult(reply, ui_actions=[{"type": "open_trip", "trip_id": t.id}, {"type": "navigate", "to": "/trip"}],
+                          action="open_trip")
+    return ToolResult(which_trip_question(cands, lang), action="open_trip_ask", error_code="ambiguous")

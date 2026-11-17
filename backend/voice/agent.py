@@ -1,5 +1,5 @@
 """
-The voice agent ("the mind"), voicefirst.md steps 2-3 + "Fixes before Step 4".
+The voice agent ("the mind"), voicefirst.md steps 2-5 + "Fixes before Step 4".
 
 ONE Groq call per turn decides (retried once on a transient Groq error); tools:
 navigate, answer_question, search_places, get_weather, list_my_trips, open_trip, cant_help. Read-only.
@@ -7,6 +7,8 @@ navigate, answer_question, search_places, get_weather, list_my_trips, open_trip,
 transcript + memory + current state -> Groq (function calling) -> our code checks the call and runs the tool
 (voice/pages.py, voice/tools/lookups.py, tour_guide_service.voice_answer) -> (reply_text, ui_actions, note).
 The model never touches data and never supplies a trip ID: trips are looked up by the session's user.
+Step 4 adds the trip draft (voice/draft.py); step 5 adds actions on the open trip (voice/tools/actions.py):
+small ones run now with an Undo toast, big ones wait for "haan" / Confirm (voice/pending.py), voice never deletes.
 "Where is X" answers with city/state and keeps the map actions pending; "haan"/"yes" runs them (no LLM call).
 Logs carry the action, timings and error codes only, never the user's words or the reply.
 
@@ -73,12 +75,28 @@ Call exactly one tool when it fits:
   A destination alone counts as a detail ("plan a trip to Manali" -> update_trip_draft).
   "Nayi trip banani hai" / "plan a new trip" with NO details at all -> navigate to plan_trip.
 - cancel_trip_draft: the user wants to stop planning this trip ("cancel karo", "trip mat banao").
+Actions on a trip (default: the OPEN trip, its plan is listed below; pass an activity's short ID like "a5" if you
+can, else its name). Only if the user names ANOTHER trip ("Goa wali trip mein...", "December wali trip", "agli trip")
+set trip_name / trip_month / trip_which (next, current, last); our code finds it.
+- mark_activity_done: the user did an activity ("Hawa Mahal done ho gaya", "Amber Fort ho gaya"); done=false to
+  unmark it.
+- save_place / unsave_place: save or remove a place ("yeh jagah save karo", "Hawa Mahal saved se hatao"). place =
+  the name only if the user said one.
+- add_expense: money spent on this trip ("auto ka 350 add karo", "khane ka 1200 kharcha"). amount in rupees as a
+  number; title short (e.g. "Auto", "Lunch"); category: food, transport, stay, shopping, tickets or other. Our code
+  asks the user to confirm.
+- swap_activity: replace an activity with something else ("Amber Fort ki jagah kuch aur").
+- regenerate_itinerary: rebuild the whole plan ("plan dobara banao"). Our code asks the user to confirm.
+- If you can't tell which activity the user means, ask which one. Never guess.
+- NEVER delete anything (trips, activities, expenses). For any delete request reply exactly:
+  "Trip delete karne ke liye button khud dabaiye, dhyan se."
 - Never invent pages, routes, trips, places or facts.
 
 Current state:
 - Today (India): {today}
 - User is on page: {screen}
 - Open trip: {trip_line}
+- Open trip's plan: {trip_context}
 - Trip being planned by voice: {draft_line}"""
 
 
@@ -221,8 +239,39 @@ CANCEL_DRAFT_TOOL: Dict[str, Any] = {
         "parameters": {"type": "object", "properties": {}},
     },
 }
+def _fn(name: str, description: str, properties: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        params["required"] = required
+    return {"type": "function", "function": {"name": name, "description": description, "parameters": params}}
+
+
+ACTIVITY_ARG = {"type": "string", "description": "The activity's short ID from the plan (e.g. 'a5') or its name."}
+TRIP_ARGS = {
+    "trip_name": {"type": _nullable("string"), "description": "Only if the user names a trip: its name/destination, e.g. 'Goa'."},
+    "trip_month": {"type": _nullable("string"), "description": "Only if the user names a trip by month, e.g. 'December'."},
+    "trip_which": {"type": _nullable("string"), "enum": ["next", "current", "last", None]},
+}
+PLACE_ARG = {"type": _nullable("string"), "description": "The place name, only if the user said one."}
+MARK_DONE_TOOL = _fn("mark_activity_done", "Mark an activity of the open trip as done (or not done).",
+                     {"activity": ACTIVITY_ARG, "done": {"type": _nullable("boolean"), "description": "false to unmark."}, **TRIP_ARGS},
+                     ["activity"])
+SAVE_PLACE_TOOL = _fn("save_place", "Save the place on screen or the one just found to the user's saved places.",
+                      {"place": PLACE_ARG})
+UNSAVE_PLACE_TOOL = _fn("unsave_place", "Remove a place from the user's saved places.", {"place": PLACE_ARG})
+ADD_EXPENSE_TOOL = _fn("add_expense", "Add money spent to the open trip's expenses (the user confirms first).", {
+    "title": {"type": _nullable("string"), "description": "Short label, e.g. 'Auto', 'Lunch'."},
+    "amount": {"type": "number", "description": "Rupees."},
+    "category": {"type": _nullable("string"), "enum": ["food", "transport", "stay", "shopping", "tickets", "other", None]},
+    **TRIP_ARGS,
+}, ["amount"])
+SWAP_TOOL = _fn("swap_activity", "Show alternatives to replace one activity of the open trip.",
+                {"activity": ACTIVITY_ARG, "reason": {"type": _nullable("string")}, **TRIP_ARGS}, ["activity"])
+REGEN_TOOL = _fn("regenerate_itinerary", "Rebuild a trip's whole itinerary (the user confirms first).", dict(TRIP_ARGS))
+ACTION_TOOLS = [MARK_DONE_TOOL, SAVE_PLACE_TOOL, UNSAVE_PLACE_TOOL, ADD_EXPENSE_TOOL, SWAP_TOOL, REGEN_TOOL]
+
 TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL, CANT_HELP_TOOL,
-         UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL]
+         UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL] + ACTION_TOOLS
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 
@@ -259,13 +308,14 @@ def template_language(stt_language: Optional[str], text: Optional[str] = None) -
 
 
 def build_system_prompt(screen: Optional[str], trip: Optional[TripInfo], today: Optional[str] = None,
-                        draft_line: str = "none") -> str:
+                        draft_line: str = "none", trip_context: str = "none") -> str:
     trip_line = (f"{trip.title} ({trip.start_date or '?'} to {trip.end_date or '?'})" if trip else "none")
     if today is None:
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         today = f"{now.strftime('%A %d %B %Y')} ({now.date().isoformat()})"
-    return SYSTEM_PROMPT.format(screen=(screen or "unknown")[:120], trip_line=trip_line, today=today, draft_line=draft_line)
+    return SYSTEM_PROMPT.format(screen=(screen or "unknown")[:120], trip_line=trip_line, today=today, draft_line=draft_line,
+                                trip_context=trip_context)
 
 
 def _draft_line(d) -> str:
@@ -349,8 +399,9 @@ def clear_memory(redis_conn, user_id: str, conversation_id: Optional[str] = None
             redis_conn.delete(_pending_key(user_id, conversation_id))
             redis_conn.delete(f"voice:draft:{user_id}:{conversation_id}")    # step 4: the trip draft
             redis_conn.delete(f"voice:confirm:{user_id}:{conversation_id}")  # step 4: the pending confirmation
+            redis_conn.delete(f"voice:lastplace:{user_id}:{conversation_id}")  # step 5: the last place found
         else:
-            for prefix in ("voice:mem", "voice:pending", "voice:draft", "voice:confirm"):
+            for prefix in ("voice:mem", "voice:pending", "voice:draft", "voice:confirm", "voice:lastplace"):
                 for key in redis_conn.scan_iter(f"{prefix}:{user_id}:*"):
                     redis_conn.delete(key)
     except Exception as err:
@@ -469,6 +520,60 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
     return draft_next(redis_conn, user_id, conversation_id, res.draft, lang, prefix)
 
 
+CONFIRMED_ACTIONS = {"trip_confirm", "expense_added", "regen_queued"}
+NOTHING_CHANGED = {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing changed."}
+DELETE_REPLY = {"hi": "Trip delete karne ke liye button khud dabaiye, dhyan se.",
+                "en": "To delete a trip, please tap the delete button yourself, carefully."}
+
+
+def confirm_pending(redis_conn, user_id: str, conversation_id: str, lang: str, pending_id: Optional[str] = None,
+                    open_trip_id: Optional[str] = None) -> AgentResult:
+    """
+    The ONE confirm action for every pending confirmation (voice "haan" and the Confirm button alike).
+    Takes it once: a second confirm finds nothing and runs nothing. A pending big action carries its trip_id;
+    it runs only if that trip is still the user's (trip_actions) and still the one meant (open_trip_id, see
+    actions.same_trip).
+    """
+    from voice import pending as P
+    from voice.tools import actions as A
+    current = P.get(redis_conn, user_id, conversation_id)
+    if current and current.get("tool") == "create_trip":
+        return confirm_trip(redis_conn, user_id, conversation_id, lang, pending_id)
+    pc = P.take(redis_conn, user_id, conversation_id, pending_id)
+    if not pc:
+        return AgentResult(NOTHING_TO_CONFIRM[lang], action="confirm_none", error_code="no_pending")
+    if pc.get("tool") == "add_expense":
+        return A.run_add_expense(user_id, pc.get("data") or {}, lang, open_trip_id)
+    if pc.get("tool") == "regenerate_itinerary":
+        return A.run_regenerate(redis_conn, user_id, pc.get("data") or {}, lang, open_trip_id)
+    return AgentResult(NOTHING_TO_CONFIRM[lang], action="confirm_none", error_code="unknown_pending")
+
+
+def cancel_pending(redis_conn, user_id: str, conversation_id: str, lang: str) -> AgentResult:
+    """Cancel (button or "nahi"): nothing runs. For a trip being created, the draft goes too."""
+    from voice import pending as P
+    current = P.get(redis_conn, user_id, conversation_id)
+    if current is None or current.get("tool") == "create_trip":
+        return cancel_trip(redis_conn, user_id, conversation_id, lang)
+    P.clear(redis_conn, user_id, conversation_id)
+    return AgentResult(NOTHING_CHANGED[lang], action="pending_cancel")
+
+
+_DELETE_WORDS = re.compile(r"\b(delete|del|remove|hatao|hata|hatado|mitao|mita|mitado|uda|udao|erase)\b")
+_TRIP_WORDS = re.compile(r"\b(trip|trips|yatra|safar|plan|itinerary)\b")
+
+
+def is_delete_request(text: str) -> bool:
+    """'meri trip delete karo': answered by code, never by a tool. (Removing a SAVED place is unsave_place.)"""
+    t = (text or "").lower()
+    return bool(_DELETE_WORDS.search(t) and _TRIP_WORDS.search(t) and "save" not in t)
+
+
+def delete_refused(lang: str) -> AgentResult:
+    return AgentResult(DELETE_REPLY[lang], ui_actions=[{"type": "navigate", "to": pages.ROUTES["trip"]}],
+                       action="delete_refused")
+
+
 def confirm_trip(redis_conn, user_id: str, conversation_id: str, lang: str, pending_id: Optional[str] = None) -> AgentResult:
     """
     The ONE confirm action, for voice "haan" and the Confirm button alike. Takes the pending confirmation once
@@ -493,7 +598,8 @@ def cancel_trip(redis_conn, user_id: str, conversation_id: str, lang: str) -> Ag
 
 def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str, has_trip: bool,
             user_id: Optional[str] = None, trip: Optional[TripInfo] = None,
-            conversation_id: Optional[str] = None, redis_conn=None) -> AgentResult:
+            conversation_id: Optional[str] = None, redis_conn=None, trip_ctx=None,
+            screen_place: Optional[Dict[str, Any]] = None) -> AgentResult:
     """Check the model's choice and run the tool. user_id comes from the session, never from the model."""
     call = next((c for c in tool_calls if c.get("name") in TOOL_NAMES), None)
     if call is None:
@@ -505,6 +611,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
             return AgentResult(DECLINE_REPLY[lang], action="decline")
         if _norm_text(text) in {_norm_text(v) for v in UNCLEAR_REPLY.values()}:
             return AgentResult(UNCLEAR_REPLY[lang], action="unclear")
+        if "button khud dabaiye" in text.lower() or "delete" in text.lower():
+            return delete_refused(lang)   # the model refused a delete in words: same fixed reply + open the trip
         return AgentResult(text or pages.WHICH_PAGE_REPLY[lang], action="reply")
 
     name, args = call["name"], call.get("arguments") or {}
@@ -524,9 +632,29 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
             return cancel_trip(redis_conn, user_id, conversation_id, lang)
         return update_draft(redis_conn, user_id, conversation_id, args, lang)
 
+    if name in {t["function"]["name"] for t in ACTION_TOOLS}:
+        if not user_id or not conversation_id or redis_conn is None:
+            return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user")
+        from voice.tools import actions as A
+        if name == "mark_activity_done":
+            return A.mark_activity_done(user_id, trip_ctx, args, lang)
+        if name == "save_place":
+            return A.save_place(redis_conn, user_id, conversation_id, screen_place, args, lang)
+        if name == "unsave_place":
+            return A.unsave_place(redis_conn, user_id, conversation_id, screen_place, args, lang)
+        if name == "add_expense":
+            return A.add_expense(redis_conn, user_id, conversation_id, trip_ctx, args, lang)
+        if name == "swap_activity":
+            return A.swap_activity(user_id, trip_ctx, args, lang)
+        return A.regenerate_itinerary(redis_conn, user_id, conversation_id, trip_ctx, args, lang)
+
     from voice.tools import lookups
     if name == "search_places":
-        return _from_tool(lookups.search_place(str(args.get("query") or ""), lang, show=args.get("show") is not False))
+        found = lookups.search_place(str(args.get("query") or ""), lang, show=args.get("show") is not False)
+        if user_id and conversation_id and redis_conn is not None and found.place:
+            from voice.tools import actions as A
+            A.remember_place(redis_conn, user_id, conversation_id, found.place)
+        return _from_tool(found)
     if name == "get_weather":
         return _from_tool(lookups.get_weather(args.get("place"), args.get("day"), lang, user_id=user_id,
                                               trip_id=trip.id if trip else None))
@@ -553,7 +681,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 
 
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
-              screen: Optional[str], trip: Optional[TripInfo], redis_conn=None) -> AgentResult:
+              screen: Optional[str], trip: Optional[TripInfo], redis_conn=None,
+              screen_place: Optional[Dict[str, Any]] = None) -> AgentResult:
     """Blocking (HTTP): call from a threadpool. Never raises."""
     from groq_client import GroqError, GroqRateLimited, GroqTransient, groq_chat_tools
 
@@ -566,18 +695,19 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     llm_done: Optional[float] = None
     used_llm = False
     from voice import draft as D, pending as P
-    confirm_pending = P.get(redis_conn, user_id, conversation_id)
+    pending_conf = P.get(redis_conn, user_id, conversation_id)
     draft_state = D.load(redis_conn, user_id, conversation_id)
     said = yes_or_no(transcript)
     pending = pop_pending(redis_conn, user_id, conversation_id)
     answer_to_pending = said if pending else None
     result: Optional[AgentResult] = None
 
-    if confirm_pending and said == "yes":
+    if pending_conf and said == "yes":
         # "haan" to the Confirm card: same action as the Confirm button.
-        result = confirm_trip(redis_conn, user_id, conversation_id, lang)
-    elif confirm_pending and said == "no":
-        result = cancel_trip(redis_conn, user_id, conversation_id, lang)
+        result = confirm_pending(redis_conn, user_id, conversation_id, lang,
+                                 open_trip_id=trip.id if trip is not None and trip.id else None)
+    elif pending_conf and said == "no":
+        result = cancel_pending(redis_conn, user_id, conversation_id, lang)
     elif draft_state is not None and draft_state.awaiting == "date" and said == "yes":
         draft_state.dates_confirmed = True     # set only here, by code, after the read-back
         result = draft_next(redis_conn, user_id, conversation_id, draft_state, lang)
@@ -603,9 +733,13 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         result = AgentResult(OK_NO_REPLY[lang], action="reply")
     elif is_garbled(transcript):
         result = AgentResult(UNCLEAR_REPLY[lang], action="unclear", error_code="no_words")
+    elif is_delete_request(transcript):
+        result = delete_refused(lang)   # voice never deletes; no LLM call
     else:
+        from voice import context as trip_context
+        trip_ctx = trip_context.load(user_id, trip.id) if trip is not None and trip.id else None
         messages: List[Dict[str, Any]] = [{"role": "system", "content": build_system_prompt(
-            screen, trip, draft_line=_draft_line(draft_state))}]
+            screen, trip, draft_line=_draft_line(draft_state), trip_context=trip_context.prompt_text(trip_ctx))}]
         messages += load_memory(redis_conn, user_id, conversation_id)
         messages.append({"role": "user", "content": transcript})
         used_llm = True
@@ -619,8 +753,9 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                                          timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             llm_done = time.perf_counter()
             result = _decide(answer["tool_calls"], answer["content"], lang, has_trip=trip is not None,
-                             user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn)
-            if confirm_pending and not result.action.startswith("trip_"):
+                             user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn,
+                             trip_ctx=trip_ctx, screen_place=screen_place)
+            if pending_conf and result.pending_confirmation is None and not result.action.startswith("trip_"):
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
         except GroqRateLimited:
             result = AgentResult(FALLBACK_REPLY, action="error", error_code="rate_limited")
