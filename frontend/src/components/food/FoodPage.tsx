@@ -6,6 +6,7 @@ import { UtensilsCrossed, ArrowLeft, Star, MapPin, Sparkles, Car, Navigation, Co
 import { wsClient } from '../../services/wsClient';
 import { memoize } from '../../services/memoCache';
 import { CACHE_TTL } from '../../store/cache/cacheTypes';
+import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 
 /** A restaurant as returned by the backend place search. Only fields Google actually provides. */
 interface NearbyRestaurant {
@@ -124,6 +125,7 @@ export const FoodPage: React.FC = () => {
           <div className="p-6 text-center bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)] text-xs text-[var(--color-text-secondary)]">No restaurants found nearby.</div>
         ) : (
           <div className="space-y-3">
+            <div className="flex justify-end"><GoogleMapsAttribution /></div>
             {restaurants.slice(0, 10).map((rst, idx) => {
               const coords: [number, number] | null =
                 rst.latitude != null && rst.longitude != null ? [rst.latitude, rst.longitude] : null;

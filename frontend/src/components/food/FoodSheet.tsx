@@ -8,6 +8,7 @@ import { Star, MapPin, Navigation, Car, Heart, RefreshCw } from 'lucide-react';
 import { getApiBaseUrl, DEFAULT_HEADERS } from '../../config/apiConfig';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { fetchSavedPlaces, savePlaceThunk, unsavePlaceThunk } from '../../store/reducers/savedPlacesSlice';
+import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 
 export const FoodSheet: React.FC = () => {
   const { isFoodSheetOpen, setIsFoodSheetOpen, openCabModal, openInAppNavigation, activeTrip, userLocation, userLocationName } = useApp();
@@ -143,6 +144,7 @@ export const FoodSheet: React.FC = () => {
 
         {/* Restaurant Cards List */}
         <div className="space-y-3">
+          {displayRestaurants.length > 0 && <div className="flex justify-end"><GoogleMapsAttribution /></div>}
           {displayRestaurants.map(r => {
             const isSaved = savedIds.has(r.id);
             return (

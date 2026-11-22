@@ -87,8 +87,9 @@ def recording(turn_id: str) -> Dict[str, Any]:
 def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str, tts_ms: int,
           ui_actions: Optional[list] = None, action: str = "reply", llm_ms: int = 0,
           tool_ms: int = 0, note: Optional[str] = None,
-          pending_confirmation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return {
+          pending_confirmation: Optional[Dict[str, Any]] = None,
+          note_attribution: Optional[str] = None) -> Dict[str, Any]:
+    out = {
         "type": "reply",
         "turn_id": turn_id,
         "reply_text": reply_text,
@@ -102,6 +103,9 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
         "note": note,
         "pending_confirmation": pending_confirmation,
     }
+    if note and note_attribution:
+        out["note_attribution"] = note_attribution   # e.g. "Google Maps" for a Google route warning
+    return out
 
 
 def transcript(turn_id: str, text: str, language: Optional[str], duration_ms: int, latency_ms: int,

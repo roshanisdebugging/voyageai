@@ -54,5 +54,22 @@ with mock.patch.dict(os.environ, {"ROUTES_CACHE_TTL_S": "1800"}):
 if _saved is not None:
     os.environ["ROUTES_CACHE_TTL_S"] = _saved
 
+# ---------------- 4. attribution travels with Google Maps notes (voice)
+from voice import messages as vmsg  # noqa: E402
+from voice.tools import lookups  # noqa: E402
+HIT = [{"id": "ChIJhawa", "name": "Hawa Mahal", "latitude": 26.9239, "longitude": 75.8267, "types": ["monument"]}]
+walk = lookups.get_travel_time("Hawa Mahal", "walk", "en", origin=(26.9124, 75.7873), search_fn=lambda q: HIT,
+                               route_fn=lambda *a, **k: {"distance_m": 1900, "duration_s": 1600, "mode": "walk",
+                                                         "warning": "This route has restricted usage or private roads.", "cached": False})
+check("Google route warning note carries 'Google Maps' attribution", walk.note and walk.note_attribution == "Google Maps")
+car = lookups.get_travel_time("Hawa Mahal", "car", "en", origin=(26.9124, 75.7873), search_fn=lambda q: HIT,
+                              route_fn=lambda *a, **k: {"distance_m": 6800, "duration_s": 1300, "mode": "drive", "warning": None, "cached": False})
+check("no note -> no attribution field", car.note is None and car.note_attribution is None)
+r1 = vmsg.reply("t1", "x", None, "audio/wav", 0, note="This route has tolls.", note_attribution="Google Maps")
+r2 = vmsg.reply("t2", "x", None, "audio/wav", 0, note=None, note_attribution="Google Maps")
+r3 = vmsg.reply("t3", "x", None, "audio/wav", 0, note="Details badal sakti hain.")
+check("reply sends note_attribution only with a note", r1.get("note_attribution") == "Google Maps"
+      and "note_attribution" not in r2 and "note_attribution" not in r3)
+
 print(f"\n{sum(results)}/{len(results)} passed", flush=True)
 sys.exit(0 if all(results) else 1)

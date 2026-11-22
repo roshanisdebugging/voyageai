@@ -5,6 +5,7 @@ import { wsClient } from '../../../services/wsClient';
 import { memoize } from '../../../services/memoCache';
 import { CACHE_TTL } from '../../../store/cache/cacheTypes';
 import { mapSearchErrorMessage } from '../../../utils/mapSearchError';
+import { GoogleMapsAttribution } from '../../../components/common/GoogleMapsAttribution';
 
 /** India-only place search used for the destination and the starting city. */
 
@@ -132,6 +133,9 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
                     </div>
                   </button>
                 ))
+              )}
+              {!error && results.length > 0 && (
+                <div className="flex justify-end px-1"><GoogleMapsAttribution className="text-slate-400" /></div>
               )}
             </div>
           )}

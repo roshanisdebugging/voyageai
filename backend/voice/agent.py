@@ -271,6 +271,7 @@ class AgentResult:
     step: Optional[str] = None                              # trip draft: ask | confirm_date | ready (logs)
     missing_count: Optional[int] = None                     # trip draft: missing fields (logs)
     google_calls: Optional[int] = None                      # Google requests made by a look-up tool (logs)
+    note_attribution: Optional[str] = None                  # "Google Maps" when the note is Google Maps content
 
 
 def template_language(stt_language: Optional[str], text: Optional[str] = None) -> str:
@@ -422,7 +423,8 @@ def _navigate(args: Dict[str, Any], lang: str, has_trip: bool) -> AgentResult:
 def _from_tool(r) -> AgentResult:
     return AgentResult(r.reply_text, ui_actions=list(r.ui_actions), action=r.action, error_code=r.error_code,
                        pending_actions=list(getattr(r, "pending_actions", []) or []),
-                       google_calls=getattr(r, "google_calls", None), note=getattr(r, "note", None))
+                       google_calls=getattr(r, "google_calls", None), note=getattr(r, "note", None),
+                       note_attribution=getattr(r, "note_attribution", None))
 
 
 def _norm_text(s: str) -> str:

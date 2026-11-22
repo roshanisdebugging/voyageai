@@ -5,6 +5,7 @@ import { ArrowLeft, Heart, MapPin, Star, Navigation, Trash2, Compass, Check, Loa
 import type { SavedPlace } from '../../services/savedPlacesApi';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { fetchSavedPlaces, savePlaceThunk, unsavePlaceThunk } from '../../store/reducers/savedPlacesSlice';
+import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 
 export const SavedPlacesPage: React.FC = () => {
   const navigate = useNavigate();
@@ -162,6 +163,7 @@ export const SavedPlacesPage: React.FC = () => {
           </div>
 
           <div className="space-y-3.5">
+            <div className="flex justify-end"><GoogleMapsAttribution /></div>
             {places.map((place) => (
               <div
                 key={place.id || place.place_id}

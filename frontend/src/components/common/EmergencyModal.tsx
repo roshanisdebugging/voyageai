@@ -4,6 +4,7 @@ import { useTrip } from '../../features/trip/TripContext';
 import { BottomSheet } from './BottomSheet';
 import { PhoneCall, ShieldAlert, MapPin, Hospital, Check, Loader2 } from 'lucide-react';
 import { getApiBaseUrl, DEFAULT_HEADERS } from '../../config/apiConfig';
+import { GoogleMapsAttribution } from './GoogleMapsAttribution';
 
 interface EmergencyFacility {
   name: string;
@@ -158,6 +159,7 @@ export const EmergencyModal: React.FC = () => {
               <Loader2 className="w-3.5 h-3.5 text-amber-800 dark:text-amber-300 animate-spin shrink-0 ml-2" />
             ) : null}
           </button>
+          {(policeStation || hospital) && <div className="flex justify-end"><GoogleMapsAttribution /></div>}
         </div>
 
         {hasCalled && (

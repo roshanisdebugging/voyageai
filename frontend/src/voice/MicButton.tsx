@@ -14,6 +14,7 @@ import { isReviewShowing, requestSubmitReview, TRIP_CREATED } from './reviewStat
 import { useTrip } from '../features/trip/TripContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useApp } from '../context/AppContext';
+import { GoogleMapsAttribution } from '../components/common/GoogleMapsAttribution';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
 const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
@@ -43,6 +44,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   const [entries, setEntries] = useState<PanelEntry[]>([]);
   const [remaining, setRemaining] = useState(MAX_RECORDING_MS / 1000);
   const [note, setNote] = useState<string | null>(null);
+  const [noteAttribution, setNoteAttribution] = useState<string | null>(null);
   // Step 4: the Confirm card ({id, summary} from the server); Confirm == saying "haan".
   const [confirmCard, setConfirmCard] = useState<{ id: string; summary: string } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
@@ -135,6 +137,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         // A note (e.g. "Details badal sakti hain.") is shown as small text for a few seconds, never spoken.
         if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
         setNote(typeof msg.note === 'string' && msg.note ? msg.note.slice(0, 120) : null);
+        setNoteAttribution(msg.note && msg.note_attribution === 'Google Maps' ? 'Google Maps' : null);
         if (msg.note) noteTimerRef.current = setTimeout(() => setNote(null), 6000);
         // Step 2: run the agent's ui_actions FIRST (e.g. open the map), then speak.
         runUiActions(msg.ui_actions, {
@@ -365,6 +368,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           style={{ bottom: `calc(${micBottom} + 64px)` }}
         >
           {note}
+          {noteAttribution && <GoogleMapsAttribution className="block mt-0.5" />}
         </p>
       )}
       {inlineTarget ? createPortal(button, inlineTarget) : button}

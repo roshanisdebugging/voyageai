@@ -68,6 +68,7 @@ class TurnResult:
     llm_ms: int = 0
     tool_ms: int = 0                     # step 3: the tool after the deciding call (answer: cost guard + Gemini)
     note: Optional[str] = None           # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
+    note_attribution: Optional[str] = None  # "Google Maps" when the note is Google Maps content
     pending_confirmation: Optional[Dict[str, Any]] = None  # step 4: {id, summary} -> the Confirm card
     reply_language: Optional[str] = None # "hi" / "en", from the reply text (TTS voice)
     tts_error: Optional[str] = None      # None = reply audio ready
@@ -119,6 +120,7 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
         return
     result.reply_text, result.ui_actions, result.action, result.llm_ms, result.tool_ms, result.note = (
         agent.reply_text, agent.ui_actions, agent.action, agent.llm_ms, agent.tool_ms, agent.note)
+    result.note_attribution = getattr(agent, "note_attribution", None)
     result.pending_confirmation = agent.pending_confirmation
 
 

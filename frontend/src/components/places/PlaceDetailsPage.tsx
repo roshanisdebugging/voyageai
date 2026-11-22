@@ -7,6 +7,7 @@ import { useToast } from '../common/UndoToast';
 import { AddToItineraryModal } from '../itinerary/AddToItineraryModal';
 import { usePlaceItineraryAdd } from '../itinerary/usePlaceItineraryAdd';
 import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
+import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 
 /** What the map card hands over in route state (shown at once, before any fetch). */
 interface CardPlace {
@@ -252,6 +253,8 @@ const PlaceDetailsView: React.FC<{ placeId: string }> = ({ placeId }) => {
           <ExternalLink className="w-4 h-4 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" /> Open in Google Maps
         </a>
       </div>
+
+      <div className="flex justify-end"><GoogleMapsAttribution /></div>
 
       <AddToItineraryModal {...itineraryAdd.modalProps} />
     </div>

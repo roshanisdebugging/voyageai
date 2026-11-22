@@ -13,6 +13,7 @@ import { Navigation, Star } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatDistance } from '../../services/tourGuideApi';
 import { isMockPayload } from '../../utils/mockIndicator';
+import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 
 export const HomePage: React.FC = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -102,6 +103,7 @@ export const HomePage: React.FC = () => {
 
       {nearbyPlaces.length > 0 && (
         <div className="relative">
+          <div className="flex justify-end mb-1"><GoogleMapsAttribution /></div>
           <div
             className="flex gap-4 overflow-x-auto overflow-y-hidden pb-4
                  snap-x snap-mandatory scroll-smooth

@@ -38,6 +38,7 @@ class ToolResult:
     pending_actions: List[Dict[str, Any]] = field(default_factory=list)  # run only after "haan" / "yes"
     google_calls: Optional[int] = None   # Google requests this tool made (logs only)
     note: Optional[str] = None           # small on-screen text, never spoken (e.g. Google's route warning)
+    note_attribution: Optional[str] = None   # "Google Maps" when the note is Google Maps content
 
 
 # ---------------- search a place on the map
@@ -264,7 +265,8 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
         reply = f"{name} is {dist} {src}, {dur} {words}."
     # Google's route warning (walk / bike) goes on screen, not in the spoken reply.
     note = route.get("warning") if mode != "drive" else None
-    return ToolResult(reply, action="travel_time", google_calls=calls, note=note)
+    return ToolResult(reply, action="travel_time", google_calls=calls, note=note,
+                      note_attribution="Google Maps" if note else None)
 
 
 # ---------------- weather (Open-Meteo via weather_service)

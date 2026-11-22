@@ -26,6 +26,8 @@ export type VoiceServerMessage =
       tool_ms?: number;
       /** Small on-screen text, never spoken (e.g. "Details badal sakti hain."). */
       note?: string | null;
+      /** "Google Maps" when the note is Google Maps content (attribution shown with it). */
+      note_attribution?: string;
       /** Step 4: show the Confirm card. */
       pending_confirmation?: { id: string; summary: string } | null;
     }

@@ -31,6 +31,7 @@ import {
 } from './mapLogic';
 import { computeRoute, RouteError, type RouteResult } from '../../services/routesApi';
 import { createClusterBubble, createPlacePin, createSearchPin, createUserDot, setPinSelected } from './mapPins';
+import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 
 // Shown when there is no location and no trip yet, so search still works.
 const INDIA_CENTER: [number, number] = [22.9734, 78.6569];
@@ -857,6 +858,8 @@ export const MapView: React.FC = () => {
 
   const renderCardBody = (place: PlaceItem) => (
     <>
+      {/* No Google map on screen (key missing/paused): the card itself carries the attribution. */}
+      {mapStatus === 'unavailable' && <div className="flex justify-end -mt-1"><GoogleMapsAttribution /></div>}
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 space-y-0.5">
                     <div className="flex items-center gap-2">
@@ -1059,6 +1062,9 @@ export const MapView: React.FC = () => {
                   </span>
                 </button>
               ))}
+              {searchSuggestions.length > 0 && (
+                <div role="presentation" className="sticky bottom-0 px-3.5 py-1.5 flex justify-end border-t border-gray-100 dark:border-zinc-800 bg-white dark:bg-zinc-900"><GoogleMapsAttribution /></div>
+              )}
               {searchMessage && (
                 <div className="px-3.5 py-3 text-xs text-[color:var(--color-text-secondary)]">{searchMessage}</div>
               )}
