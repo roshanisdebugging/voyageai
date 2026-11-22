@@ -15,7 +15,7 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
   - Works: Places Autocomplete (New), Place Details (New) (`types`, `rating`, `regularOpeningHours` and `editorialSummary` do come back), Text Search (New), Geocoding v4 (and v4beta).
   - Refused: Geocoding v3 (`REQUEST_DENIED`, billing required).
 - **Daily limits pause the API until midnight Pacific (13:30 IST).** Measured: **Place Details = 100 requests a day** (`GetPlaceRequest per day`).
-  Today a search costs 1 autocomplete call plus up to 6 detail calls, so the key covers only about 15–20 new searches a day (cached searches are free).
+  Since Stage 4 (1b), a named lookup is 1 Text Search call and Place Details is only used for a picked suggestion.
 
 ## Stage 1: search (done on `map-stage1`)
 
@@ -62,13 +62,48 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
 - Quota: 503 "Route abhi available nahi hai", and Routes is skipped until Google's reset.
 - **Route caching is off** (`ROUTES_CACHE_TTL_S=0`, Stage 4). Service Specific Terms 19.3 allow caching only latitude/longitude from the Routes API, not distance, duration or polyline. The browser doesn't keep route results either. The setting remains for a billed key with Google's written OK.
 
-## Stage 4: clean-up
+## Stage 4: clean-up and safety (done on `map-stage4`, one commit per item)
 
-- Done (stage 2): the old map library, its CSS and the internal tile URL are removed.
-- One key name per side, `GOOGLE_MAPS_SERVER_KEY` and `VITE_GOOGLE_MAPS_BROWSER_KEY`. Keep reading the old names for one release, and update the `.env.example` files.
-- Done (stage 4): `/api/places/autocomplete` removed (nothing called it); comments naming other providers removed.
-- Show "Google Maps" attribution wherever Places data appears outside a Google map.
-- Before real users: see the checklist below.
+1. **Key names:** `GOOGLE_MAPS_SERVER_KEY` (backend) and `VITE_GOOGLE_MAPS_BROWSER_KEY` (frontend).
+   - The old names (`GOOGLE_MAPS_API_KEY`, `GOOGLE_MAP_DEMO_KEY`, `VITE_GOOGLE_MAP_DEMO_KEY`) are still read for one release, with a one-line warning naming the variable.
+   - The Docker build arg, `docker-compose.yml`, the `.env.example` files, README and the `netlify.toml` notes are updated.
+2. **Route caching off:** `ROUTES_CACHE_TTL_S=0` by default, and the browser no longer keeps route results either. Terms 19.3 allow caching only lat/lng from the Routes API.
+3. **Removed:**
+   - `/api/places/autocomplete` (nothing called it);
+   - comments naming other providers;
+   - dead imports in the map files.
+
+   A repo-wide grep for other map providers finds only line 3 of this file.
+4. **Attribution:** "Google Maps" is shown wherever Google Maps content appears outside a Google map:
+   - map search suggestions (pinned to the box), trip destination search, manual location search;
+   - the place details page, Food, Saved places, Home "Near you", emergency places;
+   - map cards when the map itself is unavailable;
+   - voice route notes.
+
+   At phone size nothing covers Google's logo or copyright on the map.
+5. **Key safety:** `python -m scripts.check_keys` (no network, never prints a key), plus the checklist below.
+6. **Stage 1b, fewer Place Details calls:**
+   - A named lookup is ONE Places Text Search (New) call.
+   - Typing uses autocomplete only (3+ characters).
+   - Place Details is called only for the suggestion the user picks.
+   - Eval, 20 queries, uncached: 19/20 at about 6 calls per search before, **20/20 at 1 call** after. Text Search knows "4 minar" means Charminar.
+   - 5 queries now ask a short choice where Google's #1 was right ("Sri Harmandir Sahib" for "Golden Temple"). A possible follow-up is to trust Text Search's #1 landmark.
+
+**Caches holding Google data (reported, not changed).** Only place IDs (indefinitely) and lat/lng (up to 30 days) are allowed by Places 14.3, Geocoding 6.3 and Routes 19.3. Everything marked "outside" needs a decision before real users:
+
+| Cache | Where | TTL | Holds | Terms |
+|---|---|---|---|---|
+| `places:textsearch:v1:*` | Redis + memory | 1 h | name, address, lat/lng, types | outside (name/address) |
+| `places:autocomplete:v2:*` | Redis + memory | 1 h | place ID, name, address text, types | outside (name/address) |
+| `places:detail:v2:basic/full:*` | Redis + memory | 24 h | name, address, lat/lng; full: hours, phone, website, summary | outside |
+| `places:nearby:*` | Redis + memory | 2 h | name, address, lat/lng, rating, type, summary | outside |
+| `geo:reverse:*` | Redis + memory | 24 h (1 h fallback) | formatted address, city, state | outside: 6.3.2 allows this only per user, not as a shared cache that replaces calls |
+| `routes:v1:*` | Redis + memory | 0 (off) | distance, duration, polyline | OK while 0 |
+| `saved_places:{user}` (saved-places list) | Redis | 10 min | the user's saved places (Google name, address, rating) | outside (copy of the DB rows below) |
+| `cache:spotlight:*` (highlights) | Redis | 48 h | AI-written highlights | not Google |
+| Browser memo `places:suggest/resolve/search`, Food `places:nearby` | memory | 10 min / 5 min | as above | outside (short) |
+| DB `saved_places` | Postgres | permanent | name, address, coordinates, rating | outside (beyond place ID) |
+| DB `trips.destination_json`, `cities` | Postgres | permanent | place name, lat/lng (and place ID) | lat/lng beyond 30 days is outside |
 
 ## Before real users (checklist)
 
