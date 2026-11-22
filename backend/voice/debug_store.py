@@ -168,7 +168,7 @@ def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: 
             audio_duration_ms=result.duration_ms,
             transcription=result.text if result.ok else None,
             language=result.language,
-            stt_provider=result.stt_provider or (os.getenv("VOICE_STT_PROVIDER") or "groq"),
+            stt_provider=result.stt_provider or (os.getenv("VOICE_STT_PROVIDER") or "openai"),
             stt_model=result.stt_model or os.getenv("VOICE_STT_MODEL") or DEFAULT_STT_MODEL,
             stt_time_ms=result.stt_ms if result.ok else None,
             total_time_ms=total_ms,

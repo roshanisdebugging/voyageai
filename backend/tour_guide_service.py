@@ -576,7 +576,7 @@ VOICE_NO_FACTS = {
 # Shown as small text on screen with ungrounded answers; never spoken.
 VOICE_NOTE = {"hi": "Details badal sakti hain.", "en": "Details may vary."}
 VOICE_GEMINI_TIMEOUT = 4.0
-VOICE_GROQ_TIMEOUT = 4.0
+VOICE_LLM_TIMEOUT = 4.0
 GROUNDING_COOLDOWN_SECONDS = 600  # after a quota error, don't spend ~0.5 s per question on a call that fails
 
 # Questions whose answer must come from grounded search (timings, hours, prices, fees, tickets).
@@ -649,13 +649,13 @@ def _gemini_rest(question: str, system_prompt: str, grounded: bool) -> Tuple[Opt
     return text, None
 
 
-def _voice_groq(question: str, system_prompt: str) -> Optional[str]:
+def _voice_llm(question: str, system_prompt: str) -> Optional[str]:
     try:
-        from groq_client import groq_chat
-        return groq_chat([{"role": "system", "content": system_prompt}, {"role": "user", "content": question}],
-                         temperature=0.3, timeout=VOICE_GROQ_TIMEOUT, max_completion_tokens=400, reasoning_effort="low")
+        from openai_client import chat
+        return chat([{"role": "system", "content": system_prompt}, {"role": "user", "content": question}],
+                    temperature=0.3, timeout=VOICE_LLM_TIMEOUT, max_completion_tokens=400, reasoning_effort="low")
     except Exception as e:
-        log.warning("[voice answer] groq failed: %s", type(e).__name__)
+        log.warning("[voice answer] openai failed: %s", type(e).__name__)
         return None
 
 
@@ -666,10 +666,10 @@ def voice_answer(question: str, lang: str = "hi", user_id: Optional[str] = None,
       1. Cost guard (fails closed, as for every paid answer).
       2. Gemini with Google Search grounding.
       3. Timings / hours / prices / fees: ONLY a grounded answer is used; else "Abhi pakki jaankari nahi mil rahi."
-         Other questions: plain Gemini, then Groq; these carry a `note` ("Details badal sakti hain") that the app
+         Other questions: plain Gemini, then OpenAI; these carry a `note` ("Details badal sakti hain") that the app
          shows as small text and never speaks.
     The question and the answer are saved to the user's Guide chat (mode "voice").
-    Returns {status: ok|declined|no_facts|failed, spoken, full, note, source: gemini_grounded|gemini|groq|None,
+    Returns {status: ok|declined|no_facts|failed, spoken, full, note, source: gemini_grounded|gemini|openai|None,
              fallback_code}. Never raises. Logs carry outcomes and error codes, never the question or the answer.
     """
     lang = lang if lang in VOICE_LANG_RULE else "hi"
@@ -699,7 +699,7 @@ def voice_answer(question: str, lang: str = "hi", user_id: Optional[str] = None,
         source, note = "gemini", VOICE_NOTE[lang]
         if not raw:
             log.warning("[voice answer] plain gemini failed: %s", code2)
-            raw, source = _voice_groq(q, system_prompt), "groq"
+            raw, source = _voice_llm(q, system_prompt), "openai"
     full = _first_sentences(_clean_spoken(raw or ""), 2)
     if not full:
         return {**empty, "status": "failed", "fallback_code": fallback_code}

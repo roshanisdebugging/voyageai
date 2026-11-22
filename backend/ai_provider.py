@@ -1209,14 +1209,14 @@ Generate structured actions to execute. Return ONLY valid JSON matching this sch
         raise RuntimeError("AI_GENERATION_ERROR: Gemini did not return a usable generate_refinement_actions result")
 
 
-class GroqProvider(GeminiProvider):
+class OpenAIProvider(GeminiProvider):
     """
-    Same prompts and parsing as GeminiProvider; only the model call goes to Groq
-    (GROQ_MODEL, default openai/gpt-oss-120b) in JSON mode.
+    Same prompts and parsing as GeminiProvider; only the model call goes to OpenAI
+    (OPENAI_MODEL, default gpt-4.1-mini) in JSON mode.
     """
     def _execute_gemini_request(self, prompt: str, temperature: float = 0.2, timeout: int = 25) -> str:
-        from groq_client import groq_json
-        raw_text = groq_json(prompt, temperature=temperature, timeout=max(timeout, 30))
+        from openai_client import chat_json
+        raw_text = chat_json(prompt, temperature=temperature, timeout=max(timeout, 30))
         if raw_text.startswith("```"):
             raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text, flags=re.IGNORECASE)
             raw_text = re.sub(r"\n?```$", "", raw_text)
@@ -1226,8 +1226,8 @@ class GroqProvider(GeminiProvider):
 class FallbackAIProvider:
     """
     Tries each provider in order and returns the first success.
-    Used for AI_PROVIDER=groq: Groq first, Gemini as the backup when Groq fails
-    or hits its free-tier limit. Never falls back to mock data.
+    Used for AI_PROVIDER=openai: OpenAI first, Gemini as the backup when OpenAI fails
+    or hits its rate limit. Never falls back to mock data.
     """
     def __init__(self, providers: List[AIProviderInterface]):
         self.providers = providers
@@ -1246,8 +1246,8 @@ class FallbackAIProvider:
 
 
 def ai_provider_name() -> str:
-    """The configured provider setting: groq (default), gemini or mock."""
-    return os.getenv("AI_PROVIDER", "groq").lower().strip()
+    """The configured provider setting: openai (default), gemini or mock."""
+    return os.getenv("AI_PROVIDER", "openai").lower().strip()
 
 
 def get_ai_provider():
@@ -1256,19 +1256,19 @@ def get_ai_provider():
         return MockAIProvider()
     if provider_type == "gemini":
         return GeminiProvider()
-    return FallbackAIProvider([GroqProvider(), GeminiProvider()])
+    return FallbackAIProvider([OpenAIProvider(), GeminiProvider()])
 
 
 def complete_json(prompt: str, temperature: float = 0.3, timeout: int = 25) -> str:
     """
     One JSON-mode completion through the configured provider chain
-    (Groq, then Gemini as backup). For call sites that build their own prompt.
+    (OpenAI, then Gemini as backup). For call sites that build their own prompt.
     Raises RuntimeError if every provider fails, and in mock mode.
     """
     provider_type = ai_provider_name()
     if provider_type == "mock":
         raise RuntimeError("AI_PROVIDER=mock: no live completion available")
-    chain = [GeminiProvider()] if provider_type == "gemini" else [GroqProvider(), GeminiProvider()]
+    chain = [GeminiProvider()] if provider_type == "gemini" else [OpenAIProvider(), GeminiProvider()]
     last_error: Optional[Exception] = None
     for provider in chain:
         try:

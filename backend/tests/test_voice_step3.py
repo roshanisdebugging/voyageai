@@ -1,5 +1,5 @@
 """
-Voice step 3 checks (questions and look-ups): app DB = SQLite, Redis = local, Groq / Gemini / cost guard /
+Voice step 3 checks (questions and look-ups): app DB = SQLite, Redis = local, OpenAI / Gemini / cost guard /
 Google search simulated (no real calls), TTS off.
 Run from backend/: python -m tests.test_voice_step3
 """
@@ -19,7 +19,7 @@ import dotenv
 dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
-os.environ["GROQ_API_KEY"] = "test-key-not-real"
+os.environ["OPENAI_API_KEY"] = "test-key-not-real"
 os.environ["VOICE_TTS_ENABLED"] = "false"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 
@@ -37,7 +37,7 @@ database.engine = create_engine(f"sqlite:///{os.path.join(SCRATCH, 'voice3.db')}
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
 
 import main  # noqa: E402,F401  (registers all models)
-import groq_client  # noqa: E402
+import openai_client  # noqa: E402
 import places  # noqa: E402
 import tour_guide_service as tgs  # noqa: E402
 from models_trip import TripModel  # noqa: E402
@@ -87,7 +87,7 @@ OTHER_GOA = add_trip(OTHER, "Goa", 20)
 OTHER_MANALI = add_trip(OTHER, "Manali", 30)
 
 
-class FakeGroqTools:
+class FakeLLMTools:
     queue = []
     calls = []
 
@@ -101,7 +101,7 @@ class FakeGroqTools:
         return {"content": payload, "tool_calls": []}
 
 
-fake_tools = FakeGroqTools()
+fake_tools = FakeLLMTools()
 
 
 def ra(text, lang="hi", trip=None, user=USER):
@@ -128,88 +128,88 @@ check("system prompt has today's date and tool rules", "Today (India): Saturday 
       and "Do NOT answer these from memory" in sp and "navigate to plan_trip at once" in sp)
 check("system prompt default date is India time", "Today (India): " in agent.build_system_prompt(None, None))
 
-with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
+with mock.patch.object(openai_client, "chat_tools", fake_tools):
     # ---------------- navigate (step 2 misses)
-    FakeGroqTools.queue = [("tool", ("navigate", {"page": "plan_trip"}))]
+    FakeLLMTools.queue = [("tool", ("navigate", {"page": "plan_trip"}))]
     r = ra("nayi trip banani hai")
     check("'nayi trip banani hai' -> /trips/new", r.ui_actions == [{"type": "navigate", "to": "/trips/new"}] and r.action == "navigate:plan_trip", r)
 
     # ---------------- search_places
     with mock.patch.object(places, "search_places", lambda q: SEARCH_HITS):
-        FakeGroqTools.queue = [("tool", ("search_places", {"query": "Hawa Mahal", "show": True}))]
+        FakeLLMTools.queue = [("tool", ("search_places", {"query": "Hawa Mahal", "show": True}))]
         r = ra("Hawa Mahal dikhao")
     check("search_places -> map_focus + navigate /map",
           r.ui_actions == [{"type": "map_focus", "lat": 26.9239, "lng": 75.8267, "name": "Hawa Mahal", "place_id": "ChIJhawa"},
                            {"type": "navigate", "to": "/map"}] and r.action == "map_focus", r.ui_actions)
     check("search_places reply (Hinglish)", r.reply_text == "Hawa Mahal: map par dikha diya.", r.reply_text)
     with mock.patch.object(places, "search_places", lambda q: [{"name": "Eiffel Tower", "latitude": 48.858, "longitude": 2.294}]):
-        FakeGroqTools.queue = [("tool", ("search_places", {"query": "Eiffel Tower"}))]
+        FakeLLMTools.queue = [("tool", ("search_places", {"query": "Eiffel Tower"}))]
         r = ra("show me Eiffel Tower", lang="en")
     check("search outside India -> nothing, says so", r.ui_actions == [] and r.reply_text == "I couldn't find that place." and r.error_code == "not_found")
     with mock.patch.object(places, "search_places", lambda q: []):
-        FakeGroqTools.queue = [("tool", ("search_places", {"query": "xyzzy"}))]
+        FakeLLMTools.queue = [("tool", ("search_places", {"query": "xyzzy"}))]
         r = ra("xyzzy dikhao")
     check("search with no result -> 'Yeh jagah nahi mili.'", r.ui_actions == [] and r.reply_text == "Yeh jagah nahi mili.")
 
     # ---------------- list_my_trips
-    FakeGroqTools.queue = [("tool", ("list_my_trips", {}))]
+    FakeLLMTools.queue = [("tool", ("list_my_trips", {}))]
     r = ra("meri trips kaun si hain")
     j, g1 = TODAY + timedelta(days=5), TODAY + timedelta(days=12)
     check("list_my_trips: own open trips, upcoming first, navigate /trips",
           r.reply_text.startswith("Aapki 3 trips hain: Jaipur ") and "Goa" in r.reply_text and "Kerala" not in r.reply_text
           and "Manali" not in r.reply_text and r.ui_actions == [{"type": "navigate", "to": "/trips"}] and r.action == "list_trips", r.reply_text)
     check("list_my_trips: dates spoken as '<day> <Mon> se'", f"Jaipur {j.day} {month_name(j)[:3]} se" in r.reply_text, r.reply_text)
-    FakeGroqTools.queue = [("tool", ("list_my_trips", {"include_past": True}))]
+    FakeLLMTools.queue = [("tool", ("list_my_trips", {"include_past": True}))]
     r = ra("meri purani trips")
     check("list_my_trips(include_past) -> only past trips", "Kerala" in r.reply_text and "Jaipur" not in r.reply_text, r.reply_text)
     for i in range(3):
         add_trip(USER, f"Extra{i}", 100 + i)
-    FakeGroqTools.queue = [("tool", ("list_my_trips", {}))]
+    FakeLLMTools.queue = [("tool", ("list_my_trips", {}))]
     r = ra("meri trips")
     check("more than 3 trips -> speaks 3 then 'aur bhi hain'", r.reply_text.endswith(", aur bhi hain.") and r.reply_text.count(" se") == 3, r.reply_text)
-    FakeGroqTools.queue = [("tool", ("list_my_trips", {}))]
+    FakeLLMTools.queue = [("tool", ("list_my_trips", {}))]
     r = ra("my trips", lang="en", user=f"usr_s3_empty_{uuid.uuid4().hex[:6]}")
     check("no trips -> says so, offers to plan", r.reply_text.startswith("You don't have any trips yet") and r.error_code == "no_trips")
 
     # ---------------- open_trip
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Jaipur"}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Jaipur"}))]
     r = ra("Jaipur wali trip kholo")
     check("open_trip one match -> open_trip + navigate /trip",
           r.ui_actions == [{"type": "open_trip", "trip_id": JAIPUR}, {"type": "navigate", "to": "/trip"}]
           and r.reply_text == "Jaipur wali trip khol di." and r.action == "open_trip", r)
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa"}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa"}))]
     r = ra("Goa wali trip kholo")
     m1, m2 = month_name(TODAY + timedelta(days=12)), month_name(TODAY + timedelta(days=70))
     check("open_trip two Goa trips -> asks which (by month), no actions",
           r.ui_actions == [] and r.reply_text.startswith("Goa ki 2 trips hain:") and r.reply_text.endswith("?")
           and (m1 in r.reply_text and m2 in r.reply_text) and r.action == "open_trip_ask", r.reply_text)
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa", "month": m2}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa", "month": m2}))]
     r = ra(f"{m2} wali")
     check("follow-up with the month -> the right Goa trip", r.ui_actions[:1] == [{"type": "open_trip", "trip_id": GOA_2}], r.ui_actions)
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa", "month": str((TODAY + timedelta(days=12)).month)}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa", "month": str((TODAY + timedelta(days=12)).month)}))]
     r = ra("Goa, month number")
     check("month as a number works", r.ui_actions[:1] == [{"type": "open_trip", "trip_id": GOA_1}], r.ui_actions)
-    FakeGroqTools.queue = [("tool", ("open_trip", {"which": "next"}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"which": "next"}))]
     r = ra("agli trip kholo")
     check("open_trip which=next -> nearest upcoming (Jaipur)", r.ui_actions[:1] == [{"type": "open_trip", "trip_id": JAIPUR}], r.ui_actions)
-    FakeGroqTools.queue = [("tool", ("open_trip", {"which": "last"}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"which": "last"}))]
     r = ra("pichli trip kholo")
     check("open_trip which=last -> the past Kerala trip", r.ui_actions[:1] == [{"type": "open_trip", "trip_id": KERALA_PAST}], r.ui_actions)
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Gao"}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Gao"}))]
     r = ra("Gao wali trip")
     check("fuzzy name ('Gao') still finds Goa (asks which of 2)", r.reply_text.startswith("Goa ki 2 trips hain"), r.reply_text)
 
     # ownership: never another user's trips, whatever the model sends
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Manali"}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Manali"}))]
     r = ra("Manali wali trip kholo")
     check("another user's trip (Manali) is never found", r.ui_actions == [] and r.reply_text == "Is naam ki koi trip nahi mili." and r.error_code == "not_found")
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Jaipur", "trip_id": OTHER_GOA}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Jaipur", "trip_id": OTHER_GOA}))]
     r = ra("Jaipur kholo")
     check("a trip_id sent by the model is ignored", r.ui_actions[:1] == [{"type": "open_trip", "trip_id": JAIPUR}] and OTHER_GOA not in json.dumps(r.ui_actions))
-    FakeGroqTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa"}))]
+    FakeLLMTools.queue = [("tool", ("open_trip", {"name_or_destination": "Goa"}))]
     r = ra("Goa wali trip kholo", user=OTHER)
     check("the other user sees only their own (single) Goa trip", r.ui_actions[:1] == [{"type": "open_trip", "trip_id": OTHER_GOA}], r.ui_actions)
-    FakeGroqTools.queue = [("tool", ("list_my_trips", {}))]
+    FakeLLMTools.queue = [("tool", ("list_my_trips", {}))]
     r = ra("meri trips", user=OTHER)
     check("the other user's list has no Jaipur", "Jaipur" not in r.reply_text and "Manali" in r.reply_text, r.reply_text)
 
@@ -219,7 +219,7 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
     gem = {"grounded": ("**Amber Fort** subah jaldi jaana best hai. Bheed kam hoti hai. Teesra vaakya.\n<<<CHIPS:[\"Timings\"]>>>", None),
            "plain": ("Amber Fort subah jaana accha hai. Dopahar mein garmi hoti hai. Teesra.", None)}
     gem_calls = []
-    groq_answer = {"text": "Amber Fort subah jaaiye. Shaam ko roshni dekhiye. Teesra vaakya."}
+    llm_answer = {"text": "Amber Fort subah jaaiye. Shaam ko roshni dekhiye. Teesra vaakya."}
 
     def fake_gem(q, sp, grounded):
         gem_calls.append(grounded)
@@ -230,9 +230,9 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
 
     with mock.patch.object(tgs, "evaluate_cost_guards", fake_guard), \
             mock.patch.object(tgs, "_gemini_rest", fake_gem), \
-            mock.patch.object(tgs, "_voice_groq", lambda q, sp: groq_answer["text"]), \
+            mock.patch.object(tgs, "_voice_llm", lambda q, sp: llm_answer["text"]), \
             mock.patch.object(tgs, "persist_message", lambda *a, **k: saved.append((a, k))):
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?", "place": "Amber Fort"}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?", "place": "Amber Fort"}))]
         r = ra("Amber Fort kab jaana best hai")
         check("grounded Gemini answer: 2 sentences, no markdown/chips, no note",
               r.reply_text == "Amber Fort subah jaldi jaana best hai. Bheed kam hoti hai." and r.action == "answer"
@@ -242,44 +242,44 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
               and "CHIPS" not in saved[1][0][2] and "**" not in saved[1][0][2], saved[-1:])
 
         gem["grounded"] = (None, "http_429")
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
         r = ra("Amber Fort kab jaana best hai")
         check("grounding fails (429) on a general question -> plain Gemini; note on screen, not spoken",
               r.reply_text == "Amber Fort subah jaana accha hai. Dopahar mein garmi hoti hai." and r.note == "Details badal sakti hain."
               and "Details" not in r.reply_text and r.error_code == "answered_by_gemini:http_429", (r.reply_text, r.note, r.error_code))
 
         gem["plain"] = (None, "http_500")
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
         r = ra("Amber Fort kab jaana best hai")
-        check("plain Gemini fails too -> Groq (2 sentences, note on screen)", r.reply_text == "Amber Fort subah jaaiye. Shaam ko roshni dekhiye."
-              and r.note == "Details badal sakti hain." and r.error_code.startswith("answered_by_groq"), (r.reply_text, r.error_code))
+        check("plain Gemini fails too -> OpenAI (2 sentences, note on screen)", r.reply_text == "Amber Fort subah jaaiye. Shaam ko roshni dekhiye."
+              and r.note == "Details badal sakti hain." and r.error_code.startswith("answered_by_openai"), (r.reply_text, r.error_code))
 
         gem_calls.clear()
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort ki timing kya hai?", "facts": True}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort ki timing kya hai?", "facts": True}))]
         r = ra("Amber Fort ki timing kya hai")
         check("timings without a grounded answer -> 'Abhi pakki jaankari nahi mil rahi.', never guessed",
               r.reply_text == "Abhi pakki jaankari nahi mil rahi." and gem_calls == [True] and r.error_code == "no_facts:http_429", (r.reply_text, gem_calls))
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Hawa Mahal ka ticket kitne ka hai?"}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Hawa Mahal ka ticket kitne ka hai?"}))]
         r = ra("Hawa Mahal ka ticket kitne ka hai", lang="en")
         check("price question detected even without facts=true (English reply for English words? no: Hinglish words -> hi)",
               r.reply_text == "Abhi pakki jaankari nahi mil rahi.", r.reply_text)
         gem["grounded"] = ("Amber Fort 8 baje khulta hai.", "not_grounded")
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "What are Amber Fort timings?", "facts": True}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "What are Amber Fort timings?", "facts": True}))]
         r = ra("What are Amber Fort timings?", lang="en")
         check("an answer without search sources is not used for facts", r.reply_text == "I couldn't find reliable info right now.", r.reply_text)
         gem["grounded"] = ("Amber Fort 8 baje se 5:30 tak khula hai. Ticket 200 rupaye.", None)
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "Amber Fort timing?", "facts": True}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort timing?", "facts": True}))]
         r = ra("Amber Fort ki timing kya hai")
         check("grounded answer for facts is used", r.reply_text.startswith("Amber Fort 8 baje") and r.error_code is None)
 
-        gem["grounded"], gem["plain"], groq_answer["text"] = (None, "timeout"), (None, "timeout"), None
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "best food in Jaipur?"}))]
+        gem["grounded"], gem["plain"], llm_answer["text"] = (None, "timeout"), (None, "timeout"), None
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "best food in Jaipur?"}))]
         r = ra("What is the best food in Jaipur", lang="en")
         check("everything fails -> polite 'couldn't get an answer'", r.reply_text == agent.ANSWER_FAILED["en"] and r.error_code.startswith("answer_failed"))
 
         guard["allowed"] = False
         gem_calls.clear()
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "write me python code"}))]
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "write me python code"}))]
         r = ra("write python code", lang="en")
         check("cost guard refuses -> action decline, Gemini never called", r.reply_text == tgs.VOICE_DECLINE["en"] and not gem_calls
               and r.action == "decline", (r.action, gem_calls))
@@ -309,10 +309,10 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
     check("grounded call without search sources -> not_grounded", t4 == ("X.", "not_grounded"))
 
     # ---------------- no tool / unknown tool
-    FakeGroqTools.queue = [("text", "Main sirf aapki trip mein madad kar sakta hoon.")]
+    FakeLLMTools.queue = [("text", "Main sirf aapki trip mein madad kar sakta hoon.")]
     r = ra("ek joke sunao")
     check("off-topic said as text -> action decline, no actions", r.ui_actions == [] and r.action == "decline")
-    FakeGroqTools.queue = [("tool", ("delete_trip", {"name": "Goa"}))]
+    FakeLLMTools.queue = [("tool", ("delete_trip", {"name": "Goa"}))]
     r = ra("Goa trip delete karo")
     check("a tool we don't offer -> no action", r.ui_actions == [] and r.error_code == "unknown_tool")
 
@@ -324,10 +324,10 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
         logging.getLogger(name).setLevel(logging.DEBUG)
     with mock.patch.object(tgs, "evaluate_cost_guards", lambda q: (True, "PASSED", "")), \
             mock.patch.object(tgs, "_gemini_rest", lambda q, sp, grounded: (None, "http_429")), \
-            mock.patch.object(tgs, "_voice_groq", lambda q, sp: "Secretanswer zebra. Second."), \
+            mock.patch.object(tgs, "_voice_llm", lambda q, sp: "Secretanswer zebra. Second."), \
             mock.patch.object(tgs, "persist_message", lambda *a, **k: None), \
             mock.patch.object(places, "search_places", lambda q: SEARCH_HITS):
-        FakeGroqTools.queue = [("tool", ("answer_question", {"question": "zebraquestion about Jaipur"})),
+        FakeLLMTools.queue = [("tool", ("answer_question", {"question": "zebraquestion about Jaipur"})),
                                ("tool", ("open_trip", {"name_or_destination": "Zanzibarxyz"})),
                                ("tool", ("search_places", {"query": "Hawa Mahal zebraplace", "show": True}))]
         ra("zebraquestion about Jaipur")

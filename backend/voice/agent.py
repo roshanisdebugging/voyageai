@@ -1,10 +1,10 @@
 """
 The voice agent ("the mind"), voicefirst.md steps 2-3 + "Fixes before Step 4".
 
-ONE Groq call per turn decides (retried once on a transient Groq error); tools:
+ONE LLM call per turn decides (retried once on a transient error); tools:
 navigate, answer_question, search_places, get_weather, list_my_trips, open_trip, cant_help. Read-only.
 
-transcript + memory + current state -> Groq (function calling) -> our code checks the call and runs the tool
+transcript + memory + current state -> OpenAI (function calling) -> our code checks the call and runs the tool
 (voice/pages.py, voice/tools/lookups.py, tour_guide_service.voice_answer) -> (reply_text, ui_actions, note).
 The model never touches data and never supplies a trip ID: trips are looked up by the session's user.
 "Where is X" answers with city/state and keeps the map actions pending; "haan"/"yes" runs them (no LLM call).
@@ -99,7 +99,7 @@ Current state:
 
 
 def _nullable(t: str) -> List[str]:
-    # Groq validates tool arguments strictly and the model often sends null for "not given".
+    # Tool arguments are validated strictly and the model often sends null for "not given".
     return [t, "null"]
 
 
@@ -294,8 +294,8 @@ class AgentResult:
     ui_actions: List[Dict[str, Any]] = field(default_factory=list)
     # navigate:<page> | map_focus | where | answer | weather | decline | unclear | list_trips | open_trip | reply | error
     action: str = "reply"
-    llm_ms: int = 0                   # the deciding Groq call(s)
-    tool_ms: int = 0                  # the tool (answer: cost guard + Gemini/Groq; look-ups: Google/DB/Open-Meteo)
+    llm_ms: int = 0                   # the deciding LLM call(s)
+    tool_ms: int = 0                  # the tool (answer: cost guard + Gemini/OpenAI; look-ups: Google/DB/Open-Meteo)
     error_code: Optional[str] = None  # logs, and sent to the app (reply.error_code) so a failure shows its reason
     error_detail: Optional[str] = None  # short reason: status/code or "<Exc>: <message>", max 200 chars
     note: Optional[str] = None        # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
@@ -665,7 +665,7 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
               screen: Optional[str], trip: Optional[TripInfo], redis_conn=None) -> AgentResult:
     """Blocking (HTTP): call from a threadpool. Never raises."""
-    from groq_client import GroqError, GroqRateLimited, GroqTransient, groq_chat_tools
+    from openai_client import LLMError, LLMRateLimited, LLMTransient, chat_tools
 
     lang = template_language(stt_language, transcript)
     if redis_conn is None:
@@ -721,29 +721,29 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         used_llm = True
         try:
             try:
-                answer = groq_chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
-                                         timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
-            except GroqTransient:
-                # e.g. 400 tool_use_failed: the model's tool call didn't validate. One retry.
-                answer = groq_chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
-                                         timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
+                answer = chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
+                                    timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
+            except LLMTransient:
+                # e.g. a 5xx, a timeout or a malformed tool call. One retry.
+                answer = chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
+                                    timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             llm_done = time.perf_counter()
             result = _decide(answer["tool_calls"], answer["content"], lang, has_trip=trip is not None,
                              user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn)
             if open_pending and not result.action.startswith("trip_") and result.pending_confirmation is None:
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
-        # Groq errors carry status + provider code only (never the message, which can quote the user).
-        except GroqRateLimited as err:
-            logger.warning("[VOICE AGENT] Groq rate limit: %s", err)
+        # LLM errors carry status + provider code only (never the message, which can quote the user).
+        except LLMRateLimited as err:
+            logger.warning("[VOICE AGENT] LLM rate limit: %s", err)
             result = AgentResult(TRY_LATER_REPLY[lang], action="error", error_code="rate_limited",
                                  error_detail=str(err)[:200])
-        except GroqTransient as err:
-            logger.warning("[VOICE AGENT] Groq failed twice: %s", err)
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_transient_twice",
+        except LLMTransient as err:
+            logger.warning("[VOICE AGENT] LLM failed twice: %s", err)
+            result = AgentResult(FALLBACK_REPLY, action="error", error_code="llm_transient_twice",
                                  error_detail=str(err)[:200])
-        except GroqError as err:
-            logger.warning("[VOICE AGENT] Groq error: %s", err)
-            result = AgentResult(TRY_LATER_REPLY[lang], action="error", error_code="groq_error",
+        except LLMError as err:
+            logger.warning("[VOICE AGENT] LLM error: %s", err)
+            result = AgentResult(TRY_LATER_REPLY[lang], action="error", error_code="llm_error",
                                  error_detail=str(err)[:200])
         except Exception as err:
             # Unexpected (a bug, or a tool/lookup failing): the full traceback goes to the server log.

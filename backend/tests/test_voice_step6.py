@@ -1,6 +1,6 @@
 """
 Voice step 6 checks (smart actions: weather replan, optimize day, optimize budget).
-App DB = SQLite, Redis = local, Groq + the forecast simulated; the mock AI provider makes the suggestions.
+App DB = SQLite, Redis = local, OpenAI + the forecast simulated; the mock AI provider makes the suggestions.
 Run from backend/: python -m tests.test_voice_step6
 """
 import json
@@ -18,7 +18,7 @@ import dotenv
 dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
-os.environ["GROQ_API_KEY"] = "test-key-not-real"
+os.environ["OPENAI_API_KEY"] = "test-key-not-real"
 os.environ["VOICE_TTS_ENABLED"] = "false"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 
@@ -36,7 +36,7 @@ database.engine = create_engine(f"sqlite:///{os.path.join(SCRATCH, 'voice6.db')}
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
 
 import main  # noqa: E402
-import groq_client  # noqa: E402
+import openai_client  # noqa: E402
 import itinerary_service as svc  # noqa: E402
 import weather_service  # noqa: E402
 from models_itinerary import ItineraryActivityModel, ItineraryDayModel, ItineraryModel  # noqa: E402
@@ -207,7 +207,7 @@ hits = [smart.check_ai_rate_limit(RL) for _ in range(11)]
 check("the ai_trip bucket allows 10 a minute and blocks the 11th", hits[:10] == [True] * 10 and hits[10] is False, hits)
 clear_rate(RL)
 
-with mock.patch.object(groq_client, "groq_chat_tools", fake), mock.patch.object(weather_service, "get_trip_forecast", fake_forecast):
+with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(weather_service, "get_trip_forecast", fake_forecast):
     # ---------------- weather: good weather -> nothing happens
     TA, ACT_A, DAYS_A = seed_trip(USER_A)
     clear_rate(USER_A)

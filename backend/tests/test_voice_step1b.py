@@ -25,7 +25,7 @@ os.environ["SARVAM_API_KEY"] = "test-key-not-real"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 os.environ.pop("VOICE_TTS_ENABLED", None)
 os.environ.pop("VOICE_TTS_SPEAKER", None)
-os.environ["GROQ_API_KEY"] = ""  # the step 2 agent is replaced by an echo stub below
+os.environ["OPENAI_API_KEY"] = ""  # the step 2 agent is replaced by an echo stub below
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
@@ -105,12 +105,12 @@ WAV_B64 = fake_wav_b64()
 
 
 class FakeSTT:
-    provider, model = "groq", "whisper-large-v3-turbo"
+    provider, model = "openai", "gpt-transcribe"
     text, language = "mujhe jaipur jaana hai", "hi"
 
     def transcribe(self, audio):
         return STTResult(text=FakeSTT.text, language=FakeSTT.language, duration_ms=len(audio) * 1000 // 32000,
-                         latency_ms=111, provider="groq", model=self.model)
+                         latency_ms=111, provider="openai", model=self.model)
 
 
 class FakeSarvam:

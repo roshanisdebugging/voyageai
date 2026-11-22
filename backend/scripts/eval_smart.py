@@ -20,7 +20,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(BACKEND_DIR / ".env", override=True)
 
-from groq_client import GroqRateLimited, groq_chat_tools  # noqa: E402
+from openai_client import LLMRateLimited, chat_tools  # noqa: E402
 from trip_lifecycle import today_ist  # noqa: E402
 from voice import agent  # noqa: E402
 
@@ -84,10 +84,10 @@ def decide(phrase, history):
     for attempt in range(4):
         t = time.perf_counter()
         try:
-            out = groq_chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2, timeout=agent.LLM_TIMEOUT_SECONDS,
-                                  reasoning_effort="low")
+            out = chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2, timeout=agent.LLM_TIMEOUT_SECONDS,
+                             reasoning_effort="low")
             return out, int((time.perf_counter() - t) * 1000)
-        except GroqRateLimited:
+        except LLMRateLimited:
             if attempt == 3:
                 raise
             time.sleep(20)

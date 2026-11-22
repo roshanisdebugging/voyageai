@@ -1,6 +1,6 @@
 """
 Step 0 backend checks against a throwaway SQLite DB + local Redis. No real AI calls:
-AI_PROVIDER=mock for generation; Groq/Gemini HTTP is simulated for the provider tests.
+AI_PROVIDER=mock for generation; OpenAI/Gemini HTTP is simulated for the provider tests.
 Run from backend/: python -m tests.test_step0
 """
 import json
@@ -13,7 +13,7 @@ import dotenv
 dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
-for k in ("GROQ_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+for k in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
     os.environ.pop(k, None)
 from pathlib import Path
 import tempfile
@@ -42,7 +42,7 @@ from task_queue import TASK_QUEUE_KEY  # noqa: E402
 
 main.SessionLocal = database.SessionLocal
 import itinerary_service  # noqa: E402
-# Never read the developer's local itinerary cache: a real (Groq) itinerary cached by a live run would
+# Never read the developer's local itinerary cache: a real (OpenAI) itinerary cached by a live run would
 # replace the mock one this test expects.
 itinerary_service.get_cached_itinerary = lambda key: None
 database.Base.metadata.create_all(bind=database.engine)
@@ -172,9 +172,9 @@ with client.websocket_connect("/ws/app") as ws_a, client.websocket_connect("/ws/
 
 client.__exit__(None, None, None)
 
-# ---------- 0d: Groq first, Gemini backup (simulated HTTP)
+# ---------- 0d: OpenAI first, Gemini backup (simulated HTTP)
 import ai_provider  # noqa: E402
-import groq_client  # noqa: E402
+import openai_client  # noqa: E402
 
 
 class FakeResp:
@@ -187,57 +187,57 @@ class FakeResp:
         return self._payload
 
 
-groq_ok = FakeResp(200, {"choices": [{"message": {"content": '{"alternatives": [1]}'}, "finish_reason": "stop"}]})
+openai_ok = FakeResp(200, {"choices": [{"message": {"content": '{"alternatives": [1]}'}, "finish_reason": "stop"}]})
 gemini_ok = FakeResp(200, {"candidates": [{"content": {"parts": [{"text": '{"alternatives": [2]}'}]}}]})
 
-os.environ["AI_PROVIDER"] = "groq"
-os.environ["GROQ_API_KEY"] = "test-key"
+os.environ["AI_PROVIDER"] = "openai"
+os.environ["OPENAI_API_KEY"] = "test-key"
 os.environ["GEMINI_API_KEY"] = "test-key"
 seen = []
 
 
 def fake_post(url, **kw):
-    seen.append("groq" if "groq.com" in url else "gemini")
-    return groq_ok if "groq.com" in url else gemini_ok
+    seen.append("openai" if "openai.com" in url else "gemini")
+    return openai_ok if "openai.com" in url else gemini_ok
 
 
 with mock.patch("requests.post", side_effect=fake_post):
     out = json.loads(ai_provider.complete_json("say json"))
-check("groq used first when it works", out == {"alternatives": [1]} and seen == ["groq"], seen)
+check("openai used first when it works", out == {"alternatives": [1]} and seen == ["openai"], seen)
 
 seen.clear()
 
 
 def fake_post_429(url, **kw):
-    seen.append("groq" if "groq.com" in url else "gemini")
-    return FakeResp(429, {"error": "rate"}) if "groq.com" in url else gemini_ok
+    seen.append("openai" if "openai.com" in url else "gemini")
+    return FakeResp(429, {"error": "rate"}) if "openai.com" in url else gemini_ok
 
 
 with mock.patch("requests.post", side_effect=fake_post_429):
     out = json.loads(ai_provider.complete_json("say json"))
-check("gemini backup when groq is rate-limited", out == {"alternatives": [2]} and seen[0] == "groq", seen)
+check("gemini backup when openai is rate-limited", out == {"alternatives": [2]} and seen[0] == "openai", seen)
 
 with mock.patch("requests.post", side_effect=fake_post_429):
     prov = ai_provider.get_ai_provider()
     recs = prov.generate_refinement_actions("swap", {"days": []}) if False else None
-check("provider chain is Groq then Gemini", [p.__class__.__name__ for p in prov.providers] == ["GroqProvider", "GeminiProvider"])
+check("provider chain is OpenAI then Gemini", [p.__class__.__name__ for p in prov.providers] == ["OpenAIProvider", "GeminiProvider"])
 
-os.environ.pop("GROQ_API_KEY")
+os.environ.pop("OPENAI_API_KEY")
 seen.clear()
 with mock.patch("requests.post", side_effect=fake_post):
     out = json.loads(ai_provider.complete_json("say json"))
-check("no Groq key → Gemini serves the call", out == {"alternatives": [2]} and seen == ["gemini"], seen)
+check("no OpenAI key → Gemini serves the call", out == {"alternatives": [2]} and seen == ["gemini"], seen)
 
-# cost guard: Groq classifier with Gemini backup, fail closed when both fail
+# cost guard: OpenAI classifier with Gemini backup, fail closed when both fail
 import cost_guard  # noqa: E402
 
-os.environ["GROQ_API_KEY"] = "test-key"
+os.environ["OPENAI_API_KEY"] = "test-key"
 cost_guard._guard = None
-groq_intent = FakeResp(200, {"choices": [{"message": {"content": '{"intent": "travel", "unambiguous": true}'},
+openai_intent = FakeResp(200, {"choices": [{"message": {"content": '{"intent": "travel", "unambiguous": true}'},
                                           "finish_reason": "stop"}]})
-with mock.patch("requests.post", return_value=groq_intent):
+with mock.patch("requests.post", return_value=openai_intent):
     allowed, gate, _ = cost_guard.evaluate_cost_guards("best time to visit Amber Fort?")
-check("cost guard accepts travel via Groq", allowed and gate == "PASSED_TO_LLM", gate)
+check("cost guard accepts travel via OpenAI", allowed and gate == "PASSED_TO_LLM", gate)
 cost_guard._guard = None
 with mock.patch("requests.post", side_effect=Exception("network down")):
     allowed, gate, _ = cost_guard.evaluate_cost_guards("best time to visit Amber Fort?")

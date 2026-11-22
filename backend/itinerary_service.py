@@ -317,7 +317,7 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
 
         # 4. Save to Database
         from ai_provider import ai_provider_name
-        provider_name = ai_provider_name().upper()  # GROQ means Groq with Gemini as backup
+        provider_name = ai_provider_name().upper()  # OPENAI means OpenAI with Gemini as backup
 
         print(f"[TRIP CREATION STEP 3/3] Saving itinerary ({len(parsed_schema.days)} Days) to PostgreSQL database...", flush=True)
         itinerary_id = f"itin_{uuid.uuid4().hex[:12]}"

@@ -50,7 +50,7 @@ class ErrorCode:
     BUSY = "busy"                        # a recording is already running or being transcribed
     NOT_RECORDING = "not_recording"      # stop without start
     TOO_SHORT = "too_short"              # under 0.3 s
-    RATE_LIMITED = "rate_limited"        # our per-user limit or Groq's
+    RATE_LIMITED = "rate_limited"        # our per-user limit or OpenAI's
     STT_FAILED = "stt_failed"
     UNAVAILABLE = "unavailable"          # limiter/Redis down: fail closed
     TTS_FAILED = "tts_failed"            # the spoken reply couldn't be made (the turn still worked)

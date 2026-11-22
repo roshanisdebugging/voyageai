@@ -106,7 +106,7 @@ def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
 
 
 def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
-    """Stage 2a: the agent (one Groq call). Empty transcript -> a fixed reply, no LLM call."""
+    """Stage 2a: the agent (one LLM call). Empty transcript -> a fixed reply, no LLM call."""
     text = (result.text or "").strip()
     if not text:
         result.reply_text, result.ui_actions, result.action, result.llm_ms = EMPTY_TRANSCRIPT_REPLY, [], "unclear", 0

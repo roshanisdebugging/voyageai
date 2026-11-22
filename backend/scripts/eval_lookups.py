@@ -20,7 +20,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(BACKEND_DIR / ".env", override=True)
 
-from groq_client import groq_chat_tools  # noqa: E402
+from openai_client import chat_tools  # noqa: E402
 from voice import agent, pages  # noqa: E402
 from scripts.eval_navigation import CASES as NAV_CASES, TRIP  # noqa: E402
 
@@ -88,17 +88,17 @@ def decide(phrase, has_trip, history):
     msgs = [{"role": "system", "content": agent.build_system_prompt("/home", TRIP if has_trip else None)}]
     msgs += history or []
     msgs.append({"role": "user", "content": phrase})
-    from groq_client import GroqRateLimited
+    from openai_client import LLMRateLimited
     for attempt in range(4):
         t = time.perf_counter()
         try:
-            out = groq_chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2,
-                                  timeout=agent.LLM_TIMEOUT_SECONDS, reasoning_effort="low")
+            out = chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2,
+                             timeout=agent.LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             return out, int((time.perf_counter() - t) * 1000)
-        except GroqRateLimited:
+        except LLMRateLimited:
             if attempt == 3:
                 raise
-            time.sleep(20)  # Groq's per-minute token allowance; the eval waits, a user turn would not
+            time.sleep(20)  # the account's per-minute limit; the eval waits, a user turn would not
 
 
 def grade(expected, chk, out, has_trip):

@@ -1,5 +1,5 @@
 """
-Voice step 1 backend checks: app DB = SQLite, Redis = local, STT = simulated (no Groq calls),
+Voice step 1 backend checks: app DB = SQLite, Redis = local, STT = simulated (no OpenAI calls),
 debug store = a throwaway LOCAL Postgres DB (voice_test_ci, dropped at the end).
 Run from backend/: python -m tests.test_voice_step1
 The debug-store checks need a LOCAL Postgres admin URL: VOICE_TEST_PG_ADMIN_URL, or else the
@@ -21,7 +21,7 @@ os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 os.environ["VOICE_TTS_ENABLED"] = "false"  # step 1 behaviour only; step 1b is tests/test_voice_step1b.py
-os.environ["GROQ_API_KEY"] = ""  # the step 2 agent fails fast (no network); tests/test_voice_step2.py covers it
+os.environ["OPENAI_API_KEY"] = ""  # the step 2 agent fails fast (no network); tests/test_voice_step2.py covers it
 from pathlib import Path
 import tempfile
 
@@ -95,7 +95,7 @@ def pcm(seconds, freq=440.0):
 
 
 class FakeSTT:
-    provider, model = "groq", "whisper-large-v3-turbo"
+    provider, model = "openai", "gpt-transcribe"
     delay = 0.0
     fail = False
     calls = 0
@@ -104,9 +104,9 @@ class FakeSTT:
         FakeSTT.calls += 1
         time.sleep(FakeSTT.delay)
         if FakeSTT.fail:
-            raise STTError("Groq HTTP 500")
+            raise STTError("OpenAI HTTP 500")
         return STTResult(text="mujhe jaipur jaana hai", language="hi", duration_ms=len(audio) * 1000 // 32000,
-                         latency_ms=123, provider="groq", model=self.model)
+                         latency_ms=123, provider="openai", model=self.model)
 
 
 client = TestClient(main.app)
@@ -224,10 +224,10 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()):
     recv_until(ws, {"reply"})
     FakeSTT.delay = 0.0
 
-    # ---- Groq failure
+    # ---- OpenAI failure
     FakeSTT.fail = True
     msg = turn(ws, pcm(1.0))
-    check("Groq failure -> stt_failed with a user message", msg.get("code") == "stt_failed" and "try again" in msg.get("message", "").lower(), msg)
+    check("OpenAI failure -> stt_failed with a user message", msg.get("code") == "stt_failed" and "try again" in msg.get("message", "").lower(), msg)
     FakeSTT.fail = False
     ws.__exit__(None, None, None)
 
@@ -297,10 +297,10 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()):
                   and r0["session_id"] == real_sid and r0["user_id"] == user_id and r0["conversation_id"] == "conv1")
             check("row has transcript and timings", r0["transcription"] == "mujhe jaipur jaana hai" and r0["stt_time_ms"] == 123
                   and r0["total_time_ms"] is not None and r0["audio_duration_ms"] == 1000 and r0["status"] == "ok"
-                  and r0["stt_provider"] == "groq" and r0["stt_model"] == "whisper-large-v3-turbo", dict(r0))
+                  and r0["stt_provider"] == "openai" and r0["stt_model"] == "gpt-transcribe", dict(r0))
             check("turn_index 1,2,3", [r["turn_index"] for r in rows] == [1, 2, 3])
-            check("failed Groq call: failed row, no transcript", rows[2]["status"] == "failed" and rows[2]["transcription"] is None
-                  and "stt_failed" in (rows[2]["error"] or "") and rows[2]["stt_model"] == "whisper-large-v3-turbo", dict(rows[2]))
+            check("failed OpenAI call: failed row, no transcript", rows[2]["status"] == "failed" and rows[2]["transcription"] is None
+                  and "stt_failed" in (rows[2]["error"] or "") and rows[2]["stt_model"] == "gpt-transcribe", dict(rows[2]))
             wav_paths = [r["audio_path"] for r in rows]
             check("a WAV per recording (also the failed one)", all(os.path.exists(p) for p in wav_paths), wav_paths)
             import wave
