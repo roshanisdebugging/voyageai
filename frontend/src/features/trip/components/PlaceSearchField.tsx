@@ -4,6 +4,7 @@ import type { DestinationReference } from '../types';
 import { wsClient } from '../../../services/wsClient';
 import { memoize } from '../../../services/memoCache';
 import { CACHE_TTL } from '../../../store/cache/cacheTypes';
+import { mapSearchErrorMessage } from '../../../utils/mapSearchError';
 
 /** India-only place search used for the destination and the starting city. */
 
@@ -57,8 +58,8 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
           setError('No places found in India. Try a nearby city or a more specific name.');
         }
         setResults(india);
-      } catch {
-        setError("Couldn't search places. Check your connection and try again.");
+      } catch (err) {
+        setError(mapSearchErrorMessage(err, "Couldn't search places. Check your connection and try again."));
         setResults([]);
       } finally {
         setIsSearching(false);

@@ -15,7 +15,8 @@ from models_trip import TripModel
 from models_itinerary import ItineraryModel, ItineraryDayModel, ItineraryActivityModel
 from models_package import TripStayModel, TripTransportModel, TripExpenseModel
 from media_service import media_service
-from places import search_places, search_nearby_restaurants, validate_destination_payload
+from places import (MAP_SEARCH_UNAVAILABLE_MESSAGE, MapSearchUnavailable, search_places, search_nearby_restaurants,
+                    validate_destination_payload)
 import auth
 from trip_lifecycle import create_trip_for_user, serialize_trip, close_finished_trips, TripValidationError
 from ownership import (
@@ -1064,7 +1065,10 @@ async def process_ws_action(
         q = data.get("query") or data.get("q") or ""
         if not q.strip():
             return []
-        return await run_in_threadpool(search_places, q)
+        try:
+            return await run_in_threadpool(search_places, q)
+        except MapSearchUnavailable:
+            raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
 
     elif reqname == "places:nearby":
         q = data.get("query") or data.get("q") or ""
@@ -1692,8 +1696,11 @@ def get_latest_user_location(
 def search_user_location(query: str = ""):
     if not query or len(query.strip()) < 2:
         return []
-    log_event(f"🔍 GET /api/user/location/search?query={query}")
-    return search_places(query)
+    log_event("🔍 GET /api/user/location/search")  # no query text in logs
+    try:
+        return search_places(query)
+    except MapSearchUnavailable:
+        raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
 
 # ── PLACES & GEOCODING ENDPOINTS ──
 
@@ -1708,17 +1715,23 @@ async def places_autocomplete(q: str = "", lat: Optional[float] = None, lng: Opt
     """Google Places Autocomplete proxy with Redis caching."""
     if not q or len(query_clean := q.strip()) < 2:
         return []
-    from services.google_maps_service import autocomplete_places
-    return await autocomplete_places(q, lat, lng)
+    from services.google_maps_service import GoogleQuotaError, autocomplete_places
+    try:
+        return await autocomplete_places(q, lat, lng)
+    except GoogleQuotaError:
+        raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
 
 @app.get("/api/places/details", dependencies=[Depends(places_limiter)])
 async def places_details(place_id: str):
     """Place details for the map's details page (Google Places, full fields, cached). Bad IDs -> 404 without a Google call."""
-    from services.google_maps_service import get_place_details, is_valid_place_id
+    from services.google_maps_service import GoogleQuotaError, get_place_details, is_valid_place_id
     place_id = (place_id or "").strip()
     if not is_valid_place_id(place_id):
         raise HTTPException(status_code=404, detail="Place details not found.")
-    detail = await get_place_details(place_id, full=True)
+    try:
+        detail = await get_place_details(place_id, full=True)
+    except GoogleQuotaError:
+        raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
     if not detail:
         raise HTTPException(status_code=404, detail="Place details not found.")
     return detail
@@ -1727,8 +1740,11 @@ async def places_details(place_id: str):
 def search_destinations(q: str = ""):
     if not q or len(q.strip()) < 2:
         return []
-    log_event(f"🔍 GET /api/places/search?q={q}")
-    return search_places(q)
+    log_event("🔍 GET /api/places/search")  # no query text in logs
+    try:
+        return search_places(q)
+    except MapSearchUnavailable:
+        raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
 
 @app.get("/api/places/nearby", dependencies=[Depends(places_limiter)])
 async def get_nearby_places(

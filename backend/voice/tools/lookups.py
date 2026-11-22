@@ -36,16 +36,14 @@ class ToolResult:
     action: str = "reply"
     error_code: Optional[str] = None
     pending_actions: List[Dict[str, Any]] = field(default_factory=list)  # run only after "haan" / "yes"
+    google_calls: Optional[int] = None   # Google requests this tool made (logs only)
 
 
 # ---------------- search a place on the map
 
-def in_india(lat: Any, lng: Any) -> bool:
-    """Same box as the frontend's isInIndia()."""
-    try:
-        return 6.0 <= float(lat) <= 37.5 and 68.0 <= float(lng) <= 97.5
-    except (TypeError, ValueError):
-        return False
+from places import in_india  # noqa: E402  (same India box as the frontend's isInIndia())
+
+MAPS_UNAVAILABLE = {"hi": "Map search abhi available nahi hai.", "en": "Map search isn't available right now."}
 
 
 INDIAN_STATES = {
@@ -80,16 +78,47 @@ def _where(name: str, city: Optional[str], state: Optional[str]) -> str:
     return ", ".join(bits)
 
 
-def find_place(query: str, search_fn=None) -> Optional[Dict[str, Any]]:
-    """Top India result of the existing search (Google), or None."""
-    if search_fn is None:
-        from places import search_places as search_fn
+def search(query: str, search_fn=None):
+    """The shared place search (places.search_places: Google, ranked, India only), as a PlaceSearch.
+    A plain list (a test's search_fn) is ranked the same way."""
+    import places
+    fn = search_fn or places.search_places
     try:
-        results = search_fn(query) or []
+        results = fn(query) or []
+    except places.MapSearchUnavailable as err:
+        return places.PlaceSearch(unavailable=True, google_calls=err.google_calls)
     except Exception:
         results = []
-    hits = [r for r in results if r.get("latitude") is not None and in_india(r.get("latitude"), r.get("longitude"))]
-    return hits[0] if hits else None
+    if isinstance(results, places.PlaceResults):
+        return places.PlaceSearch(results=list(results), ambiguous=results.ambiguous, choices=list(results.choices),
+                                  google_calls=results.google_calls)
+    found = places.rank_places(query, list(results)) if results else places.PlaceSearch()
+    found.google_calls = None   # unknown for a plain list
+    return found
+
+
+def find_place(query: str, search_fn=None) -> Optional[Dict[str, Any]]:
+    """Top India result of the shared search, or None."""
+    found = search(query, search_fn)
+    return found.results[0] if found.results else None
+
+
+def _label(hit: Dict[str, Any], with_place: bool) -> str:
+    name = str(hit.get("name") or "").strip()[:40]
+    if not with_place:
+        return name
+    city, state = city_state(hit)
+    where = next((w for w in (city, state) if w and w.lower() != name.lower()), None)
+    return f"{name}, {where}" if where else name
+
+
+def _choice_reply(choices: List[Dict[str, Any]], lang: str) -> str:
+    """'Charminar ya Masjid Char Minar?' (city added only when two names are the same)."""
+    names = [str(c.get("name") or "").strip().lower() for c in choices]
+    labels = [_label(c, names.count(n) > 1) for c, n in zip(choices, names)]
+    sep = " ya " if lang == "hi" else " or "
+    joined = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + sep + labels[-1]
+    return {"hi": f"{joined}?", "en": f"Did you mean {joined}?"}[lang]
 
 
 def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> ToolResult:
@@ -101,10 +130,22 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     q = (query or "").strip()[:120]
     if len(q) < 2:
         return ToolResult({"hi": "Kaunsi jagah?", "en": "Which place?"}[lang], action="reply", error_code="no_query")
-    top = find_place(q, search_fn)
-    if not top:
+    found = search(q, search_fn)
+    calls = found.google_calls
+    if found.unavailable:
+        return ToolResult(MAPS_UNAVAILABLE[lang], action="map_unavailable", error_code="maps_unavailable",
+                          google_calls=calls)
+    if not found.results:
         return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place."}[lang],
-                          action="map_focus_none", error_code="not_found")
+                          action="map_focus_none", error_code="not_found", google_calls=calls)
+    if found.ambiguous and len(found.choices) > 1:
+        # Never pick a shop, or one of two equally likely landmarks, by default: ask a short choice.
+        return ToolResult(_choice_reply(found.choices, lang), action="place_ask", error_code="ambiguous",
+                          google_calls=calls)
+    top = found.results[0]
+    if found.ambiguous:
+        # The only result is a shop/unknown place: say what was found and show it only after "haan".
+        show = False
     name = (top.get("name") or q)[:120]
     city, state = city_state(top)
     where = _where(name, city, state)
@@ -115,12 +156,12 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     if show:
         label = f"{name}, {city}" if city and city.lower() != name.lower() else name
         reply = {"hi": f"{label}: map par dikha diya.", "en": f"Showing {label} on the map."}[lang]
-        return ToolResult(reply, ui_actions=actions, action="map_focus")
+        return ToolResult(reply, ui_actions=actions, action="map_focus", google_calls=calls)
     if where:
         reply = {"hi": f"{name} {where} mein hai. Map par dikhaun?", "en": f"{name} is in {where}. Shall I show it on the map?"}[lang]
     else:
         reply = {"hi": f"{name} mil gaya. Map par dikhaun?", "en": f"I found {name}. Shall I show it on the map?"}[lang]
-    return ToolResult(reply, action="where", pending_actions=actions)
+    return ToolResult(reply, action="where", pending_actions=actions, google_calls=calls)
 
 
 # ---------------- weather (Open-Meteo via weather_service)
@@ -177,13 +218,19 @@ def get_weather(place: Optional[str], day: Any, lang: str, user_id: Optional[str
         return ToolResult({"hi": "Itne aage ka mausam abhi pata nahi hai.", "en": "There's no forecast that far ahead yet."}[lang],
                           action="weather", error_code="too_far")
     target = None
+    calls = None
     if place and place.strip():
-        hit = find_place(place.strip()[:120], search_fn)
+        found = search(place.strip()[:120], search_fn)
+        calls = found.google_calls
+        if found.unavailable:
+            return ToolResult(MAPS_UNAVAILABLE[lang], action="weather", error_code="maps_unavailable", google_calls=calls)
+        hit = found.results[0] if found.results else None
         if hit:
             city, _ = city_state(hit)
             target = {"name": city or hit.get("name") or place.strip(), "latitude": hit["latitude"], "longitude": hit["longitude"]}
         else:
-            return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place."}[lang], action="weather", error_code="not_found")
+            return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place."}[lang], action="weather",
+                              error_code="not_found", google_calls=calls)
     else:
         target = _trip_destination(user_id, trip_id)
     if not target:
@@ -198,7 +245,7 @@ def get_weather(place: Optional[str], day: Any, lang: str, user_id: Optional[str
         d = None
     if not d:
         return ToolResult({"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now."}[lang],
-                          action="weather", error_code="unavailable")
+                          action="weather", error_code="unavailable", google_calls=calls)
     when, name = _day_words(the_day, today, lang), target["name"]
     rain, hi_t = d.get("rainChancePercent"), d.get("tempMaxC")
     parts_hi, parts_en = [], []
@@ -210,9 +257,9 @@ def get_weather(place: Optional[str], day: Any, lang: str, user_id: Optional[str
         parts_en.append(f"high {round(hi_t)}°C")
     if not parts_hi:
         return ToolResult({"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now."}[lang],
-                          action="weather", error_code="unavailable")
+                          action="weather", error_code="unavailable", google_calls=calls)
     reply = (f"{when} {name} mein " + ", ".join(parts_hi) + ".") if lang == "hi" else (f"{when} in {name}: " + ", ".join(parts_en) + ".")
-    return ToolResult(reply, action="weather")
+    return ToolResult(reply, action="weather", google_calls=calls)
 
 
 # ---------------- the user's trips

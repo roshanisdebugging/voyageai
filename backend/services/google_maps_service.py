@@ -66,6 +66,93 @@ class RedisCacheManager:
 cache = RedisCacheManager()
 
 
+class GoogleQuotaError(Exception):
+    """Google refused the call because a quota/daily limit was reached or the (demo) key is paused.
+    Callers stop at once: no retry, no further Google call for that request."""
+
+
+class GoogleCallCounter:
+    """Counts real Google HTTP requests (cache hits are not counted). For logs only."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def add(self) -> None:
+        self.count += 1
+
+
+def _count(counter: Optional[GoogleCallCounter]) -> None:
+    if counter is not None:
+        counter.add()
+
+
+QUOTA_STATUSES = {"RESOURCE_EXHAUSTED", "OVER_QUERY_LIMIT", "OVER_DAILY_LIMIT"}
+QUOTA_WORDS = ("quota", "limit", "paused", "exhausted")
+
+
+def is_quota_error(res: Any) -> bool:
+    """HTTP 429, or a 403/200 whose Google status says a quota/daily limit was hit or the key is paused."""
+    status = getattr(res, "status_code", None)
+    if status == 429:
+        return True
+    if status not in (200, 403):
+        return False
+    try:
+        body = res.json()
+    except Exception:
+        return False
+    if not isinstance(body, dict):
+        return False
+    err = body.get("error")
+    if isinstance(err, dict):
+        g_status = str(err.get("status") or "")
+        message = str(err.get("message") or "").lower()
+        return g_status in QUOTA_STATUSES or (g_status == "PERMISSION_DENIED" and any(w in message for w in QUOTA_WORDS))
+    return str(body.get("status") or "") in QUOTA_STATUSES   # Geocoding v3-style body
+
+
+PER_MINUTE_PAUSE_S = 60
+
+
+def _is_daily(res: Any) -> bool:
+    """A daily limit (the demo key's 'GetPlaceRequest per day' = 100) or a paused key, as opposed to a per-minute one."""
+    try:
+        err = res.json().get("error") or {}
+        text = str(err.get("message") or "").lower()
+        for d in err.get("details") or []:
+            text += " " + str((d.get("metadata") or {}).get("quota_limit") or "").lower()
+    except Exception:
+        return True
+    return "per day" in text or "perday" in text or "daily" in text or "paused" in text or "minute" not in text
+
+
+def _seconds_to_google_reset() -> int:
+    """Google resets daily quotas at midnight Pacific time."""
+    from datetime import datetime, timedelta, timezone
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("America/Los_Angeles")
+    except Exception:
+        tz = timezone(timedelta(hours=-8))   # no tz database: PST (at most one hour late in summer)
+    now = datetime.now(tz)
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(60, int((midnight - now).total_seconds()) + 60)
+
+
+async def mark_paused(api: str, res: Any) -> None:
+    """After a quota error, skip this API (no request at all) until Google's reset, or 60 s for a per-minute limit."""
+    ttl = _seconds_to_google_reset() if _is_daily(res) else PER_MINUTE_PAUSE_S
+    await cache.set(f"gmaps:paused:{api}", True, ttl_seconds=ttl)
+    print(f"[GOOGLE QUOTA] {api} paused for {ttl} s", flush=True)
+
+
+async def is_paused(*apis: str) -> bool:
+    for api in apis:
+        if await cache.get(f"gmaps:paused:{api}"):
+            return True
+    return False
+
+
 def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calculate great-circle distance between two points on Earth in meters."""
     R = 6371000.0
@@ -97,10 +184,30 @@ DEFAULT_NEARBY_TYPES = [
 ]
 
 
+GEOCODE_V4_URL = "https://geocode.googleapis.com/v4/geocode/location/{lat},{lng}"
+GEOCODE_V4_FIELDS = "results.formattedAddress,results.addressComponents"
+
+
+def _apply_components(result: Dict[str, Any], components: List[Dict[str, Any]]) -> None:
+    """Places (New) / Geocoding v4 addressComponents ({longText, types}) -> city/state/country."""
+    for comp in components or []:
+        types = comp.get("types", [])
+        if "locality" in types:
+            result["city"] = comp.get("longText")
+        elif "administrative_area_level_2" in types and result["city"] == "Current Location":
+            result["city"] = comp.get("longText")
+        elif "administrative_area_level_1" in types:
+            result["state"] = comp.get("longText")
+        elif "country" in types:
+            result["country"] = comp.get("longText")
+
+
 async def reverse_geocode(lat: float, lng: float) -> Dict[str, Any]:
     """
     Reverse geocodes (lat, lng) coordinates to a formatted address, city, state, country.
-    Uses Google Geocoding API or Google Places API (New) addressComponents, caching results for 24 hours.
+    Uses Google Geocoding API v4 (the version the Maps demo key supports; v3 is refused with REQUEST_DENIED),
+    then Google Places API (New) addressComponents if v4 has no city. Cached 24 hours.
+    On a quota/paused error nothing else is called.
     NEVER returns 'Madhubani' unless the coordinates are actually in Madhubani district.
     """
     cache_key = f"geo:reverse:{round(lat, 3)}:{round(lng, 3)}"
@@ -116,32 +223,35 @@ async def reverse_geocode(lat: float, lng: float) -> Dict[str, Any]:
         "source": "google"
     }
 
-    # 1. Attempt Google Geocoding API
+    if await is_paused("geocode"):
+        return result
+    # 1. Google Geocoding API v4 (reverse)
     if GOOGLE_MAPS_API_KEY:
         try:
-            url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&key={GOOGLE_MAPS_API_KEY}"
+            url = GEOCODE_V4_URL.format(lat=float(lat), lng=float(lng))
+            headers = {"X-Goog-Api-Key": GOOGLE_MAPS_API_KEY, "X-Goog-FieldMask": GEOCODE_V4_FIELDS}
             async with httpx.AsyncClient(timeout=4.0) as client:
-                res = await client.get(url)
-                if res.status_code == 200:
-                    data = res.json()
-                    status = data.get("status")
-                    if status == "OK" and data.get("results"):
-                        first = data["results"][0]
-                        result["formatted_address"] = first.get("formatted_address", "")
-                        for comp in first.get("address_components", []):
-                            types = comp.get("types", [])
-                            if "locality" in types:
-                                result["city"] = comp.get("long_name")
-                            elif "administrative_area_level_2" in types and result["city"] == "Current Location":
-                                result["city"] = comp.get("long_name")
-                            elif "administrative_area_level_1" in types:
-                                result["state"] = comp.get("long_name")
-                            elif "country" in types:
-                                result["country"] = comp.get("long_name")
+                res = await client.get(url, headers=headers)
+            if is_quota_error(res):
+                await mark_paused("geocode", res)
+                print("[REVERSE GEOCODE] Google quota/paused; nothing else called", flush=True)
+                return result   # not cached: the key comes back the next day
+            if res.status_code == 200:
+                results = res.json().get("results") or []
+                if results:
+                    result["formatted_address"] = results[0].get("formattedAddress") or result["formatted_address"]
+                    # The first result can be a plus code or a street; the city is in the first one that has it.
+                    for r in results:
+                        _apply_components(result, r.get("addressComponents") or [])
+                        if result["city"] != "Current Location":
+                            break
+                    if result["city"] != "Current Location":
                         await cache.set(cache_key, result, ttl_seconds=86400)
                         return result
+            else:
+                print(f"[REVERSE GEOCODE GOOGLE] HTTP {res.status_code}", flush=True)
         except Exception as e:
-            print(f"[REVERSE GEOCODE GOOGLE ERR] {e}", flush=True)
+            print(f"[REVERSE GEOCODE GOOGLE ERR] {type(e).__name__}", flush=True)
 
     # 2. Resilient Fallback: Google Places API (New) reverse address lookup
     if GOOGLE_MAPS_API_KEY and (result["city"] == "Current Location" or not result.get("formatted_address")):
@@ -163,21 +273,14 @@ async def reverse_geocode(lat: float, lng: float) -> Dict[str, Any]:
             }
             async with httpx.AsyncClient(timeout=4.0) as client:
                 res = await client.post(places_url, headers=headers, json=payload)
+                if is_quota_error(res):
+                    return result
                 if res.status_code == 200:
                     places = res.json().get("places", [])
                     if places:
                         p = places[0]
                         result["formatted_address"] = p.get("formattedAddress", "")
-                        for comp in p.get("addressComponents", []):
-                            types = comp.get("types", [])
-                            if "locality" in types:
-                                result["city"] = comp.get("longText")
-                            elif "administrative_area_level_2" in types and result["city"] == "Current Location":
-                                result["city"] = comp.get("longText")
-                            elif "administrative_area_level_1" in types:
-                                result["state"] = comp.get("longText")
-                            elif "country" in types:
-                                result["country"] = comp.get("longText")
+                        _apply_components(result, p.get("addressComponents", []))
                         if result["city"] != "Current Location":
                             await cache.set(cache_key, result, ttl_seconds=86400)
                             return result
@@ -298,20 +401,26 @@ async def search_nearby_places(
     return []
 
 
+AUTOCOMPLETE_CACHE_VERSION = "v2"  # v2 adds "types"
+
+
 async def autocomplete_places(
     query: str,
     lat: Optional[float] = None,
-    lng: Optional[float] = None
+    lng: Optional[float] = None,
+    counter: Optional[GoogleCallCounter] = None,
 ) -> List[Dict[str, Any]]:
     """
     Search suggestions using Google Places API (New) autocomplete.
-    Caches results in Redis for 1 hour.
+    Caches results in Redis for 1 hour. Each suggestion carries Google's "types" (no extra call).
+    Raises GoogleQuotaError on a quota/paused error; other failures return [].
     """
     if not query or len(query.strip()) < 2:
         return []
 
     clean_q = query.strip()
-    cache_key = f"places:autocomplete:{clean_q.lower()}:{round(lat, 2) if lat else 'none'}:{round(lng, 2) if lng else 'none'}"
+    cache_key = (f"places:autocomplete:{AUTOCOMPLETE_CACHE_VERSION}:{clean_q.lower()}:"
+                 f"{round(lat, 2) if lat else 'none'}:{round(lng, 2) if lng else 'none'}")
     cached_val = await cache.get(cache_key)
     if cached_val is not None:
         return cached_val
@@ -338,9 +447,15 @@ async def autocomplete_places(
             }
         }
 
+    if await is_paused("autocomplete"):
+        raise GoogleQuotaError("autocomplete")
     try:
+        _count(counter)
         async with httpx.AsyncClient(timeout=4.0) as client:
             res = await client.post(url, headers=headers, json=payload)
+            if is_quota_error(res):
+                await mark_paused("autocomplete", res)
+                raise GoogleQuotaError("autocomplete")
             if res.status_code == 200:
                 data = res.json()
                 suggestions = data.get("suggestions", [])
@@ -364,14 +479,17 @@ async def autocomplete_places(
                         "displayName": full_text or main_text,
                         "city": secondary_text,
                         "description": full_text,
+                        "types": [t for t in (pred.get("types") or []) if isinstance(t, str)],
                     })
 
                 await cache.set(cache_key, results, ttl_seconds=3600)
                 return results
             else:
-                print(f"[GOOGLE AUTOCOMPLETE ERROR] Status: {res.status_code} Body: {res.text[:300]}", flush=True)
+                print(f"[GOOGLE AUTOCOMPLETE ERROR] HTTP {res.status_code}", flush=True)
+    except GoogleQuotaError:
+        raise
     except Exception as e:
-        print(f"[GOOGLE AUTOCOMPLETE EXCEPTION] {e}", flush=True)
+        print(f"[GOOGLE AUTOCOMPLETE EXCEPTION] {type(e).__name__}", flush=True)
 
     return []
 
@@ -410,12 +528,14 @@ def _map_full_detail(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def get_place_details(place_id: str, full: bool = False) -> Optional[Dict[str, Any]]:
+async def get_place_details(place_id: str, full: bool = False,
+                            counter: Optional[GoogleCallCounter] = None) -> Optional[Dict[str, Any]]:
     """
     Details for a Google Place ID, cached 24 hours.
-    full=False: id, name, address, latitude, longitude (address search).
+    full=False: id, name, address, latitude, longitude (address search; types come from autocomplete).
     full=True:  also open_now, hours, phone, website, maps_url, summary (the map's place details page).
     Returns None for an invalid ID, a missing key, or when Google has no such place.
+    Raises GoogleQuotaError on a quota/paused error.
     """
     if not is_valid_place_id(place_id) or not GOOGLE_MAPS_API_KEY:
         return None
@@ -432,9 +552,15 @@ async def get_place_details(place_id: str, full: bool = False) -> Optional[Dict[
         "X-Goog-FieldMask": PLACE_FIELDS_FULL if full else PLACE_FIELDS_BASIC,
     }
 
+    if await is_paused("details"):
+        raise GoogleQuotaError("details")
     try:
+        _count(counter)
         async with httpx.AsyncClient(timeout=4.0) as client:
             res = await client.get(url, headers=headers)
+            if is_quota_error(res):
+                await mark_paused("details", res)
+                raise GoogleQuotaError("details")
             if res.status_code == 200:
                 data = res.json()
                 if full:
@@ -451,6 +577,8 @@ async def get_place_details(place_id: str, full: bool = False) -> Optional[Dict[
                 await cache.set(cache_key, detail, ttl_seconds=86400)
                 return detail
             print(f"[GOOGLE PLACE DETAIL] HTTP {res.status_code}", flush=True)
+    except GoogleQuotaError:
+        raise
     except Exception as e:
         print(f"[GOOGLE PLACE DETAIL EXCEPTION] {type(e).__name__}", flush=True)
 

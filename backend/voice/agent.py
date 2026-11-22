@@ -52,6 +52,8 @@ Call exactly one tool when it fits:
 - search_places: a NAMED place.
   * "X kahan hai" / "where is X" -> show=false (we tell them where it is and offer the map).
   * "X dikhao" / "show me X" / "X map pe dikhao" -> show=true (open the map).
+  * query = the place's usual written name, fixing speech-to-text spelling: "4 minar" -> "Charminar",
+    "taaj mahal" -> "Taj Mahal". If the last reply offered a choice ("A ya B?"), the answer is the place.
   General "ghoomne ki jagah dikhao" / things to do -> navigate to explore instead.
 - answer_question: other travel questions (timings, tickets, prices, food, culture, transport, tips).
   Do NOT answer these from memory. Set facts=true for timings, opening hours, prices, entry fees.
@@ -130,7 +132,8 @@ SEARCH_TOOL: Dict[str, Any] = {
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "The place name, e.g. 'Hawa Mahal Jaipur'."},
+                "query": {"type": "string", "description": "The place's usual written name, e.g. 'Hawa Mahal Jaipur'; "
+                                                            "fix speech-to-text spelling ('4 minar' -> 'Charminar')."},
                 "show": {"type": "boolean", "description": "true = open the map now; false = say where it is and ask."},
             },
             "required": ["query", "show"],
@@ -248,6 +251,7 @@ class AgentResult:
     pending_confirmation: Optional[Dict[str, Any]] = None   # {id, summary}: the app shows the Confirm card
     step: Optional[str] = None                              # trip draft: ask | confirm_date | ready (logs)
     missing_count: Optional[int] = None                     # trip draft: missing fields (logs)
+    google_calls: Optional[int] = None                      # Google requests made by a look-up tool (logs)
 
 
 def template_language(stt_language: Optional[str], text: Optional[str] = None) -> str:
@@ -398,7 +402,8 @@ def _navigate(args: Dict[str, Any], lang: str, has_trip: bool) -> AgentResult:
 
 def _from_tool(r) -> AgentResult:
     return AgentResult(r.reply_text, ui_actions=list(r.ui_actions), action=r.action, error_code=r.error_code,
-                       pending_actions=list(getattr(r, "pending_actions", []) or []))
+                       pending_actions=list(getattr(r, "pending_actions", []) or []),
+                       google_calls=getattr(r, "google_calls", None))
 
 
 def _norm_text(s: str) -> str:
@@ -638,8 +643,9 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
     if result.action != "error":
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
-    logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s", result.action,
+    logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s", result.action,
                 f" step={result.step}" if result.step else "",
                 f" missing={result.missing_count}" if result.missing_count is not None else "",
-                result.llm_ms, result.tool_ms, f" code={result.error_code}" if result.error_code else "")
+                result.llm_ms, result.tool_ms, f" code={result.error_code}" if result.error_code else "",
+                f" google_calls={result.google_calls}" if result.google_calls is not None else "")
     return result

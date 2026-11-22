@@ -22,6 +22,7 @@ import { wsClient } from '../../services/wsClient';
 import { memoize } from '../../services/memoCache';
 import { CACHE_TTL } from '../../store/cache/cacheTypes';
 import { isInIndia, placeSubtitle } from '../../features/trip/components/PlaceSearchField';
+import { mapSearchErrorMessage } from '../../utils/mapSearchError';
 import type { DestinationReference } from '../../features/trip/types';
 
 // Shown when there is no location and no trip yet, so search still works.
@@ -379,10 +380,10 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
         const india = Array.isArray(data) ? data.filter(isInIndia) : [];
         setSearchSuggestions(india);
         setSearchMessage(india.length === 0 ? 'No places found in India.' : null);
-      } catch {
+      } catch (err) {
         if (seq !== searchSeqRef.current) return;
         setSearchSuggestions([]);
-        setSearchMessage("Search isn't available right now. Please try again.");
+        setSearchMessage(mapSearchErrorMessage(err, "Search isn't available right now. Please try again."));
       } finally {
         if (seq === searchSeqRef.current) setIsSearching(false);
       }
