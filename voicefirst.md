@@ -22,6 +22,7 @@ Status (15 Nov 2026):
 - Step 2 is done: on `main`, tested by the owner on 15 Nov 2026.
 - Step 3 and the "Fixes before Step 4" are on `main` (15 Nov 2026), waiting for the owner's test by voice.
 - Step 4 (create a trip by voice) is built on the local branch `voice-step4` (17 Nov 2026), waiting for the owner's test.
+- Step 5 (more actions) is built on the local branch `voice-step5` (18 Nov 2026), waiting for the owner's test. Its eval is not finished (Groq rate limit).
 - Steps 1c and 3–7 are planned in detail below (section 8).
 
 The plan was first agreed on 12 Nov 2026.
@@ -1073,6 +1074,22 @@ That lets "Hawa Mahal wala mark done karo" become an activity ID. The ID is matc
 - [ ] Delete only redirects.
 - [ ] The screen updates after each change without a reload.
 - [ ] All evals ≥ 90%. All earlier tests pass.
+
+### Step 5 notes (18 Nov 2026)
+
+**Status: Built, waiting for the owner's test.** Local branch `voice-step5`, not pushed.
+
+- Shared actions are in `backend/trip_actions.py`, used by `/ws/app`, the saved-places REST routes and voice. Each checks ownership itself.
+- New `/ws/app` actions `places:save` / `places:unsave` (login required), used by the voice Undo.
+- `voice/context.py` puts the open trip's plan into the prompt (ownership checked). Activity names are matched by code (`match_activity`); an unknown or unclear name gets a question.
+- Voice tools: `mark_activity_done`, `save_place`, `unsave_place` (small, Undo toast); `add_expense`, `regenerate_itinerary` (pending, run on "haan" or Confirm, same trip and ownership re-checked); `swap_activity` opens the swap sheet. Regenerate uses the `ai_trip` rate-limit bucket.
+- Which trip: the open trip by default; a named trip is resolved by code like `open_trip`; several matches → asked by month; none → "Is naam ki koi trip nahi mili."; no trip → "Kaun si trip mein?".
+- Delete is caught by code before the LLM: it replies "Trip delete karne ke liye button khud dabaiye, dhyan se." and opens `/trip`.
+- Undo toast: 5 s, tap only, runs an allowlisted `/ws/app` action (`trips:set_activity_done`, `places:save`, `places:unsave`), allowlisted in backend and frontend.
+- Tests: `python -m tests.test_voice_step5` 79/79; all earlier test files pass. `test_voice_step3` was updated for the 15-tool list; `test_place_details` now removes its fake places from the local Redis.
+- Eval (`python -m scripts.eval_actions`, 47 phrases): **not finished.** Groq's free tier (8,000 tokens/min, each call ~2,900 tokens) rate-limited the run. Needs a rerun.
+- Concern: the prompt plus tools is now ~2,900 tokens a call, so Groq's free tier allows only about 2–3 voice turns a minute.
+- Not tested: browser and phone; the Undo, refresh and swap UI live.
 
 ---
 

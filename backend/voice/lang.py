@@ -26,6 +26,9 @@ HINGLISH_WORDS = {
     "ek", "do_", "teen", "sunao", "suno", "bolo", "bataao", "dikhaiye", "chaliye", "jaayen", "jaaun", "jaun", "doosre",
     "teesre", "pehle", "din", "kharche", "ghoomna", "chahiye", "wahan", "yahan", "kitni", "kaisa", "hoon", "hu", "hun",
     "mat", "rehne", "lagao", "kahin", "koi", "sabse", "accha", "achha", "dikhado", "batado", "khulta", "khulti",
+    # step 5 (actions): "plan dobara banao", "khane ka kharcha", "yeh jagah save karo", "saved se hatao"
+    "dobara", "banao", "banaiye", "banana", "banani", "kharcha", "kharch", "hatao", "hatado", "yeh", "ye", "woh",
+    "daalo", "dalo", "jodo", "badlo", "badal", "rupaye", "hazaar", "hazar", "lakh", "wapas", "khane",
 }
 # "trip" is shared with English; it only counts together with another Hindi word (see below).
 _SHARED = {"trip"}

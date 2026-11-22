@@ -94,6 +94,18 @@ def _resolve_trip(trip_id: Optional[str], user_id: str) -> Optional[pipeline.Tri
         return None
 
 
+def _screen_place(raw, screen: Optional[str]) -> Optional[dict]:
+    """Step 5: the place page on screen ({place_id, name, address}). Only on /details/<that place_id>; checked shape."""
+    import re
+    if not isinstance(raw, dict) or not screen or not screen.startswith("/details/"):
+        return None
+    place_id = str(raw.get("place_id") or "")
+    name = str(raw.get("name") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,300}", place_id) or not name or screen.split("?")[0] != f"/details/{place_id}":
+        return None
+    return {"place_id": place_id, "name": name[:120], "address": str(raw.get("address") or "")[:200]}
+
+
 async def _send(ws: WebSocket, payload: dict) -> bool:
     try:
         await ws.send_text(json.dumps(payload))
@@ -190,12 +202,14 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
             await _send(ws, m.error(limited))
             return True
         trip = await run_in_threadpool(_resolve_trip, msg.get("trip_id"), conn.user_id)
+        screen = str(msg.get("screen") or "")[:200] or None
         conn.ctx = pipeline.TurnContext(
             turn_id=pipeline.new_turn_id(), user_id=conn.user_id, session_id=conn.session_id,
             conversation_id=str(msg.get("conversation_id") or "")[:100] or None,
-            screen=str(msg.get("screen") or "")[:200] or None,
+            screen=screen,
             trip=trip,
             location=_parse_location(msg.get("location")),
+            screen_place=_screen_place(msg.get("screen_place"), screen),
         )
         conn.conversation_ids.add(conn.ctx.conversation_id or conn.session_id)
         conn.recording = True
@@ -229,16 +243,19 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
         from redis_client import redis_conn as rc
         lang = detect_lang(str(msg.get("lang_hint") or ""), "hi")
         if kind == "confirm":
-            res = await run_in_threadpool(voice_agent.confirm_trip, rc, conn.user_id, conversation_id, lang, pending_id)
-            ok = res.action == "trip_confirm"
+            # The app's open trip (if any): a pending made for the open trip is refused if another trip is open now.
+            open_trip = await run_in_threadpool(_resolve_trip, msg.get("trip_id"), conn.user_id)
+            res = await run_in_threadpool(voice_agent.confirm_pending, rc, conn.user_id, conversation_id, lang, pending_id,
+                                          open_trip.id if open_trip else None)
+            ok = res.action in voice_agent.CONFIRMED_ACTIONS
         elif kind == "cancel":
-            res = await run_in_threadpool(voice_agent.cancel_trip, rc, conn.user_id, conversation_id, lang)
+            res = await run_in_threadpool(voice_agent.cancel_pending, rc, conn.user_id, conversation_id, lang)
             ok = True
         else:
             await run_in_threadpool(voice_agent.cancel_trip, rc, conn.user_id, conversation_id, lang)
             logger.info("[VOICE] draft_done")
             return True
-        logger.info("[VOICE] %s ok=%s", kind, ok)
+        logger.info("[VOICE] %s ok=%s action=%s", kind, ok, res.action)
         await _send(ws, m.confirm_result(pending_id, ok, res.reply_text, res.ui_actions))
         return True
 

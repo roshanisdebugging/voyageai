@@ -8,13 +8,17 @@ import { voiceSocket, type VoiceServerMessage } from './voiceSocket';
 import { MAX_RECORDING_MS, useVoiceRecorder } from './useVoiceRecorder';
 import { TestTranscriptPanel, type PanelEntry } from './TestTranscriptPanel';
 import { replyPlayer } from './replyPlayer';
-import { runUiActions } from './uiActions';
+import { runUiActions, type UiActionHandlers } from './uiActions';
 import { ConfirmCard } from './ConfirmCard';
 import { isReviewShowing, requestSubmitReview, TRIP_CREATED } from './reviewState';
 import { useTrip } from '../features/trip/TripContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useApp } from '../context/AppContext';
 import { GoogleMapsAttribution } from '../components/common/GoogleMapsAttribution';
+import { useAppDispatch } from '../store/hooks';
+import { fetchSavedPlaces } from '../store/reducers/savedPlacesSlice';
+import { wsClient } from '../services/wsClient';
+import { getScreenPlace, SAVED_PLACES_CHANGED } from './screenPlace';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
 const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
@@ -33,12 +37,16 @@ type MicPlace = 'shell' | 'wizard';
 const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | null; place: MicPlace }> = ({ raised, inlineTarget, place }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentTrip, trips, setCurrentTripId } = useTrip();
+  const { currentTrip, trips, setCurrentTripId, refetchItinerary, fetchPackageData } = useTrip();
   const { userLocation } = useApp(); // sent with "start" for "how far is X" (that turn only)
   const { setMapFocusTarget } = useNavigation();
+  const { openSwapAssistant } = useApp();
+  const dispatch = useAppDispatch();
   // The socket handler is subscribed once: read the latest trips / setters through a ref.
-  const tripApiRef = useRef({ trips, setCurrentTripId, setMapFocusTarget });
-  useEffect(() => { tripApiRef.current = { trips, setCurrentTripId, setMapFocusTarget }; }, [trips, setCurrentTripId, setMapFocusTarget]);
+  const tripApiRef = useRef({ trips, currentTrip, setCurrentTripId, setMapFocusTarget, refetchItinerary, fetchPackageData, openSwapAssistant, dispatch });
+  useEffect(() => {
+    tripApiRef.current = { trips, currentTrip, setCurrentTripId, setMapFocusTarget, refetchItinerary, fetchPackageData, openSwapAssistant, dispatch };
+  }, [trips, currentTrip, setCurrentTripId, setMapFocusTarget, refetchItinerary, fetchPackageData, openSwapAssistant, dispatch]);
   const { showToast } = useToast();
   const [phase, setPhase] = useState<Phase>('idle');
   const [entries, setEntries] = useState<PanelEntry[]>([]);
@@ -46,7 +54,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   const [note, setNote] = useState<string | null>(null);
   const [noteAttribution, setNoteAttribution] = useState<string | null>(null);
   // Step 4: the Confirm card ({id, summary} from the server); Confirm == saying "haan".
-  const [confirmCard, setConfirmCard] = useState<{ id: string; summary: string } | null>(null);
+  const [confirmCard, setConfirmCard] = useState<{ id: string; summary: string; title?: string } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const confirmKindRef = useRef<'confirm' | 'cancel' | null>(null);
   const noteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,6 +113,54 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     }, REPLY_TIMEOUT_MS);
   }
 
+  // Step 5: reload what a voice change touched (the open screen updates without a manual reload).
+  const refresh = useCallback((what: 'itinerary' | 'expenses' | 'saved_places') => {
+    const api = tripApiRef.current;
+    const tripId = api.currentTrip?.id;
+    if (what === 'itinerary' && tripId) void api.refetchItinerary(tripId);
+    else if (what === 'expenses' && tripId) void api.fetchPackageData(tripId);
+    else if (what === 'saved_places') {
+      void api.dispatch(fetchSavedPlaces({ force: true }));
+      window.dispatchEvent(new Event(SAVED_PLACES_CHANGED));
+    }
+  }, []);
+
+  // ui_action handlers shared by voice replies and Confirm-button results.
+  const handlers = useCallback((): UiActionHandlers => ({
+    navigate: (to) => navigate(to),
+    // Step 3: "Hawa Mahal dikhao" -> the map shows a pin and the distance (the navigate to /map follows).
+    mapFocus: ({ lat, lng, name, placeId }) => tripApiRef.current.setMapFocusTarget({
+      id: placeId || `voice-${lat}-${lng}`, name, coordinates: [lat, lng], zoom: 15, highlight: true, pin: true,
+    }),
+    // Only an ID from the user's own loaded trips; anything else is ignored.
+    openTrip: (tripId) => {
+      if (!tripApiRef.current.trips.some((t) => t.id === tripId)) return false;
+      tripApiRef.current.setCurrentTripId(tripId);
+      return true;
+    },
+    // Step 4: the filled, editable review page (the existing wizard); "haan" presses its Proceed.
+    openReview: (prefill) => navigate('/trips/new', { state: { prefill } }),
+    submitReview: requestSubmitReview,
+    // Step 5: the existing swap sheet for the open trip's activity; the sheet's own Confirm applies it.
+    // Only for one of the user's own loaded trips (the voice action may name a trip that isn't the open one).
+    openSwap: ({ tripId, activityId, activityName, dayNumber }) => {
+      const trip = tripApiRef.current.trips.find((t) => t.id === tripId);
+      if (!trip) return;
+      tripApiRef.current.openSwapAssistant({
+        tripId: trip.id, activityId, activityName, selectedDay: dayNumber, destination: trip.destination?.name,
+      });
+    },
+    refresh,
+    // Small actions: Undo (tap only, 5 s) runs the allowlisted /ws/app action, then reloads the screen.
+    undoToast: ({ message, action, payload }) => showToast({
+      message,
+      undo: async () => {
+        await wsClient.sendRequest(action, payload);
+        refresh(action === 'trips:set_activity_done' ? 'itinerary' : 'saved_places');
+      },
+    }),
+  }), [navigate, refresh, showToast]);
+
   // Server messages
   useEffect(() => {
     return voiceSocket.onMessage((msg: VoiceServerMessage) => {
@@ -131,7 +187,9 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
         // Step 4: a reply with a pending confirmation shows the Confirm card; any other reply closes it.
         const pc = msg.pending_confirmation;
-        setConfirmCard(pc && typeof pc.id === 'string' && typeof pc.summary === 'string' ? { id: pc.id, summary: pc.summary.slice(0, 400) } : null);
+        setConfirmCard(pc && typeof pc.id === 'string' && typeof pc.summary === 'string'
+          ? { id: pc.id, summary: pc.summary.slice(0, 400), title: typeof pc.title === 'string' ? pc.title.slice(0, 60) : undefined }
+          : null);
         setConfirmBusy(false);
         if (phaseRef.current !== 'waiting') return; // the user already moved on (e.g. started recording)
         // A note (e.g. "Details badal sakti hain.") is shown as small text for a few seconds, never spoken.
@@ -140,22 +198,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         setNoteAttribution(msg.note && msg.note_attribution === 'Google Maps' ? 'Google Maps' : null);
         if (msg.note) noteTimerRef.current = setTimeout(() => setNote(null), 6000);
         // Step 2: run the agent's ui_actions FIRST (e.g. open the map), then speak.
-        runUiActions(msg.ui_actions, {
-          navigate: (to) => navigate(to),
-          // Step 3: "Hawa Mahal dikhao" -> the map shows a pin and the distance (the navigate to /map follows).
-          mapFocus: ({ lat, lng, name, placeId }) => tripApiRef.current.setMapFocusTarget({
-            id: placeId || `voice-${lat}-${lng}`, name, coordinates: [lat, lng], zoom: 15, highlight: true, pin: true,
-          }),
-          // Only an ID from the user's own loaded trips; anything else is ignored.
-          openTrip: (tripId) => {
-            if (!tripApiRef.current.trips.some((t) => t.id === tripId)) return false;
-            tripApiRef.current.setCurrentTripId(tripId);
-            return true;
-          },
-          // Step 4: the filled, editable review page (the existing wizard); "haan" presses its Proceed.
-          openReview: (prefill) => navigate('/trips/new', { state: { prefill } }),
-          submitReview: requestSubmitReview,
-        });
+        runUiActions(msg.ui_actions, handlers());
         if (!msg.reply_audio_base64) {
           setPhaseBoth('idle'); // the error ("Couldn't play the reply.") follows as its own message
           return;
@@ -176,11 +219,13 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         setConfirmBusy(false);
         setConfirmCard(null);
         if (msg.ok && kind === 'confirm') {
-          runUiActions(msg.ui_actions, { navigate: (to) => navigate(to), submitReview: requestSubmitReview });
+          runUiActions(msg.ui_actions, handlers());
+          // Step 5: a confirmed expense / rebuild says what happened (the trip wizard shows its own progress).
+          if (msg.reply_text && !(msg.ui_actions || []).some((a) => a.type === 'submit_review')) showToast({ message: msg.reply_text });
         } else if (msg.ok && kind === 'cancel') {
-          report(msg.reply_text || 'Okay, no trip was created.');
+          report(msg.reply_text || 'Okay, nothing changed.');
         } else if (!msg.ok && kind === 'confirm') {
-          report('Nothing to confirm any more. You can tap Proceed on the review page.');
+          report(msg.reply_text || 'Nothing to confirm any more.');
         }
       } else if (msg.type === 'error') {
         if (msg.code === 'tts_failed') {
@@ -204,7 +249,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         }
       }
     });
-  }, [report, recorder, navigate]);
+  }, [report, recorder, handlers, showToast]);
 
   // Step 4: the wizard created the trip (Proceed by tap or by voice): the voice draft goes too.
   useEffect(() => {
@@ -220,7 +265,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     if (!confirmCard || confirmBusy) return;
     confirmKindRef.current = 'confirm';
     setConfirmBusy(true);
-    if (!voiceSocket.confirm(conversationId.current, confirmCard.id)) {
+    if (!voiceSocket.confirm(conversationId.current, confirmCard.id, currentTrip?.id ?? null)) {
       setConfirmBusy(false);
       confirmKindRef.current = null;
       report('Voice connection lost. Tap Proceed on the review page instead.');
@@ -286,7 +331,8 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     }
     // Step 4: on the wizard's review step the agent must know that "haan" means Proceed.
     const screen = location.pathname === '/trips/new' && isReviewShowing() ? '/trips/new#review' : location.pathname;
-    if (!voiceSocket.start(conversationId.current, screen, currentTrip?.id ?? null, userLocation ?? null)) {
+    const screenPlace = location.pathname.startsWith('/details/') ? getScreenPlace() : null;
+    if (!voiceSocket.start(conversationId.current, screen, currentTrip?.id ?? null, userLocation ?? null, screenPlace)) {
       await recorder.stop();
       report('Voice connection lost. Please try again.');
       setPhaseBoth('idle');
@@ -354,6 +400,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
       {confirmCard && (
         <ConfirmCard
           summary={confirmCard.summary}
+          title={confirmCard.title}
           busy={confirmBusy}
           onConfirm={onConfirmTap}
           onCancel={onCancelTap}

@@ -8,6 +8,7 @@ import { AddToItineraryModal } from '../itinerary/AddToItineraryModal';
 import { usePlaceItineraryAdd } from '../itinerary/usePlaceItineraryAdd';
 import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
 import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
+import { SAVED_PLACES_CHANGED, setScreenPlace } from '../../voice/screenPlace';
 
 /** What the map card hands over in route state (shown at once, before any fetch). */
 interface CardPlace {
@@ -95,6 +96,19 @@ const PlaceDetailsView: React.FC<{ placeId: string }> = ({ placeId }) => {
     let active = true;
     checkPlaceSaved(placeId).then((saved) => { if (active && !savedTouchedRef.current) setIsSaved(saved); }).catch(() => {});
     return () => { active = false; };
+  }, [placeId]);
+
+  // Voice step 5: on this page, "yeh jagah save karo" means this place; a voice save/unsave re-checks the button.
+  const voiceName = details?.name || cardMatches?.name || '';
+  const voiceAddress = details?.address || cardMatches?.address || '';
+  useEffect(() => {
+    setScreenPlace(voiceName ? { place_id: placeId, name: voiceName, address: voiceAddress } : null);
+    return () => setScreenPlace(null);
+  }, [placeId, voiceName, voiceAddress]);
+  useEffect(() => {
+    const recheck = () => { checkPlaceSaved(placeId).then(setIsSaved).catch(() => {}); };
+    window.addEventListener(SAVED_PLACES_CHANGED, recheck);
+    return () => window.removeEventListener(SAVED_PLACES_CHANGED, recheck);
   }, [placeId]);
 
   const goBack = () => {

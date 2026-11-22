@@ -6,6 +6,9 @@
  * - open_trip {trip_id}: only an ID from the user's own loaded trip list (checked by the handler)
  * - open_review {prefill}: open the trip wizard's review page with the voice draft (checked shape, India only)
  * - submit_review: press Proceed on the wizard's review page (the wizard ignores it on any other step)
+ * - open_swap {activity_id, activity_name, day_number}: the existing swap sheet (its own Confirm applies the swap)
+ * - refresh {what}: reload itinerary | expenses | saved_places after a change made by voice
+ * - undo_toast {message, undo: {action, payload}}: 5 s toast; Undo (tap only) runs an allowlisted /ws/app action
  */
 import type { TripDraft } from '../features/trip/types';
 
@@ -18,7 +21,22 @@ export interface UiAction {
   place_id?: string;
   trip_id?: string;
   prefill?: unknown;
+  activity_id?: string;
+  activity_name?: string;
+  day_number?: number;
+  what?: string;
+  message?: string;
+  undo?: { action?: unknown; payload?: unknown };
 }
+
+export type RefreshWhat = 'itinerary' | 'expenses' | 'saved_places';
+const REFRESH_WHAT = new Set<RefreshWhat>(['itinerary', 'expenses', 'saved_places']);
+
+/** The ONLY /ws/app actions an Undo may run (mirrors UNDO_ALLOWLIST in backend/voice/tools/actions.py). */
+export const UNDO_ALLOWLIST = new Set(['trips:set_activity_done', 'places:save', 'places:unsave']);
+
+export interface UndoToastAction { message: string; action: string; payload: Record<string, unknown> }
+export interface OpenSwapAction { tripId: string; activityId: string; activityName: string; dayNumber: number }
 
 export interface MapFocusAction { lat: number; lng: number; name: string; placeId?: string }
 
@@ -29,6 +47,18 @@ export interface UiActionHandlers {
   openTrip?: (tripId: string) => boolean;
   openReview?: (prefill: TripDraft) => void;
   submitReview?: () => void;
+  openSwap?: (target: OpenSwapAction) => void;
+  refresh?: (what: RefreshWhat) => void;
+  undoToast?: (toast: UndoToastAction) => void;
+}
+
+/** An undo_toast's undo, only if its action is allowlisted and its payload is a plain object. */
+export function checkedUndo(raw: unknown): { action: string; payload: Record<string, unknown> } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const u = raw as { action?: unknown; payload?: unknown };
+  if (typeof u.action !== 'string' || !UNDO_ALLOWLIST.has(u.action)) return null;
+  if (!u.payload || typeof u.payload !== 'object' || Array.isArray(u.payload)) return null;
+  return { action: u.action, payload: u.payload as Record<string, unknown> };
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -118,6 +148,20 @@ export function runUiActions(actions: unknown, handlers: UiActionHandlers | ((to
       }
     } else if (action?.type === 'submit_review' && h.submitReview) {
       h.submitReview();
+      ran += 1;
+    } else if (action?.type === 'open_swap' && h.openSwap && str(action.trip_id, 80) && str(action.activity_id, 120)
+      && str(action.activity_name, 120) && isInt(action.day_number, 1, 60)) {
+      h.openSwap({
+        tripId: action.trip_id as string, activityId: action.activity_id as string,
+        activityName: action.activity_name as string, dayNumber: action.day_number as number,
+      });
+      ran += 1;
+    } else if (action?.type === 'refresh' && h.refresh && REFRESH_WHAT.has(action.what as RefreshWhat)) {
+      h.refresh(action.what as RefreshWhat);
+      ran += 1;
+    } else if (action?.type === 'undo_toast' && h.undoToast && str(action.message, 160) && checkedUndo(action.undo)) {
+      const undo = checkedUndo(action.undo)!;
+      h.undoToast({ message: action.message as string, action: undo.action, payload: undo.payload });
       ran += 1;
     } else if (action?.type === 'open_trip' && h.openTrip && typeof action.trip_id === 'string' && action.trip_id.length <= 80
       && h.openTrip(action.trip_id)) {

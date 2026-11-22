@@ -119,9 +119,10 @@ nav_desc = agent.NAVIGATE_TOOL["function"]["description"]
 check("navigate tool has a meaning for every page", all(f"{p}: " in nav_desc for p in pages.PAGES))
 check("plan_trip meaning: open the form, don't ask for details", "plan_trip: start planning a NEW trip" in nav_desc and "Do NOT ask" in nav_desc)
 check("more: settings and profile", "more: settings, profile" in nav_desc)
-check("ten tools offered (step 4 adds the trip draft tools, map stage 3 adds get_travel_time)", sorted(agent.TOOL_NAMES) == [
-    "answer_question", "cancel_trip_draft", "cant_help", "get_travel_time", "get_weather", "list_my_trips", "navigate",
-    "open_trip", "search_places", "update_trip_draft"])
+check("sixteen tools offered (step 4 trip draft, step 5 trip actions, map stage 3 get_travel_time)", sorted(agent.TOOL_NAMES) == [
+    "add_expense", "answer_question", "cancel_trip_draft", "cant_help", "get_travel_time", "get_weather", "list_my_trips",
+    "mark_activity_done", "navigate", "open_trip", "regenerate_itinerary", "save_place", "search_places", "swap_activity",
+    "unsave_place", "update_trip_draft"])
 check("open_trip takes no trip_id from the model", "trip_id" not in json.dumps(agent.OPEN_TRIP_TOOL))
 sp = agent.build_system_prompt("/home", None, today="Saturday 15 November 2026")
 check("system prompt has today's date and tool rules", "Today (India): Saturday 15 November 2026" in sp
@@ -312,8 +313,9 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake_tools):
     FakeGroqTools.queue = [("text", "Main sirf aapki trip mein madad kar sakta hoon.")]
     r = ra("ek joke sunao")
     check("off-topic said as text -> action decline, no actions", r.ui_actions == [] and r.action == "decline")
-    FakeGroqTools.queue = [("tool", ("delete_trip", {"name": "Goa"}))]
-    r = ra("Goa trip delete karo")
+    # (step 5: "Goa trip delete karo" is now answered by code before any LLM call; see test_voice_step5)
+    FakeGroqTools.queue = [("tool", ("send_photos", {"name": "Goa"}))]
+    r = ra("Goa trip ki photos bhejo")
     check("a tool we don't offer -> no action", r.ui_actions == [] and r.error_code == "unknown_tool")
 
     # ---------------- logs never carry the user's words

@@ -52,6 +52,18 @@ def check(name, cond, detail=""):
 
 
 PID = "ChIJxxxxTestPlaceId_1234"
+TEST_IDS = (PID, "ChIJyyyyTestPlaceId_5678", "ChIJbasicSearchUse_0001")
+
+
+def drop_cached_test_places():
+    """The details cache reaches the real local Redis: drop this test's fake places, so a re-run within 24 h still
+    calls the (fake) Google API instead of reading the last run's copy, and nothing fake is left behind."""
+    for test_id in TEST_IDS:
+        for key in redis_conn.scan_iter(f"places:detail:*:{test_id}"):
+            redis_conn.delete(key)
+
+
+drop_cached_test_places()
 FULL = {
     "id": PID, "displayName": {"text": "Hawa Mahal"}, "formattedAddress": "Hawa Mahal Rd, Jaipur, Rajasthan 302002, India",
     "location": {"latitude": 26.9239, "longitude": 75.8267},
@@ -121,5 +133,6 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
           and set(basic) == {"id", "name", "address", "latitude", "longitude"})
 
 client.__exit__(None, None, None)
+drop_cached_test_places()
 print(f"\n{sum(results)}/{len(results)} passed", flush=True)
 sys.exit(0 if all(results) else 1)

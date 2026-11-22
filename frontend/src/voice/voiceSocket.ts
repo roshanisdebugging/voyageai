@@ -28,8 +28,8 @@ export type VoiceServerMessage =
       note?: string | null;
       /** "Google Maps" when the note is Google Maps content (attribution shown with it). */
       note_attribution?: string;
-      /** Step 4: show the Confirm card. */
-      pending_confirmation?: { id: string; summary: string } | null;
+      /** Step 4/5: show the Confirm card (title: e.g. "Add this expense?"). */
+      pending_confirmation?: { id: string; summary: string; title?: string } | null;
     }
   | {
       type: 'confirm_result';
@@ -143,13 +143,18 @@ class VoiceSocket {
     return true;
   }
 
-  /** tripId: the open trip (the server ownership-checks it; not yours = none), or null.
-   *  location: the user's position for "how far is X" (rounded; used for that turn only), or null. */
-  start(conversationId: string, screen: string, tripId: string | null = null, location: [number, number] | null = null): boolean {
+  /**
+   * tripId: the open trip (the server ownership-checks it; not yours = none), or null.
+   * location: the user's position for "how far is X" (rounded; used for that turn only), or null.
+   * screenPlace (step 5): the place page on screen, so "yeh jagah save karo" knows it (server checks the shape).
+   */
+  start(conversationId: string, screen: string, tripId: string | null = null, location: [number, number] | null = null,
+    screenPlace: { place_id: string; name: string; address?: string } | null = null): boolean {
     const loc = location && Number.isFinite(location[0]) && Number.isFinite(location[1])
       ? { lat: Math.round(location[0] * 1e5) / 1e5, lng: Math.round(location[1] * 1e5) / 1e5 }
       : undefined;
-    return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId, location: loc });
+    return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId, location: loc,
+      screen_place: screenPlace });
   }
 
   sendAudio(chunk: ArrayBuffer) {
@@ -161,8 +166,9 @@ class VoiceSocket {
   }
 
   /** Step 4: the Confirm card's buttons (Confirm runs the same action as saying "haan"). */
-  confirm(conversationId: string, pendingId: string): boolean {
-    return this.sendJson({ type: 'confirm', conversation_id: conversationId, pending_id: pendingId });
+  /** tripId: the trip open now; a pending made for the open trip is refused if another trip is open (server-checked). */
+  confirm(conversationId: string, pendingId: string, tripId: string | null = null): boolean {
+    return this.sendJson({ type: 'confirm', conversation_id: conversationId, pending_id: pendingId, trip_id: tripId });
   }
 
   cancel(conversationId: string, pendingId: string): boolean {

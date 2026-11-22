@@ -294,5 +294,17 @@ async def check_ws_rate_limit(bucket: str, subject: str, limit: int, window_seco
     await check_sliding_window_rate_limit(f"rl:ws:{bucket}:{subject}", limit, window_seconds, fail_closed=True)
 
 
+def check_ws_rate_limit_sync(redis_conn, bucket: str, subject: str, limit: int, window_seconds: int = 60) -> Optional[int]:
+    """
+    The same bucket and Lua script as check_ws_rate_limit, for blocking code (voice tools run in a threadpool),
+    using the sync Redis client. Returns None if allowed, else the seconds to wait. Raises if Redis fails:
+    callers fail closed.
+    """
+    now = time.time()
+    result = redis_conn.eval(SLIDING_WINDOW_LUA, 1, f"rl:ws:{bucket}:{subject}", now, window_seconds, limit,
+                             f"{now}:{uuid.uuid4().hex[:8]}")
+    return None if int(result[0]) == 1 else int(result[2])
+
+
 # Backward compatibility aliases
 RateLimiter = NetworkRateLimiter
