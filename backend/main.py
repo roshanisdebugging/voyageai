@@ -204,6 +204,8 @@ ai_chat_limiter = UserRateLimiter(requests=20, window_seconds=60, key_prefix="rl
 tts_limiter = UserRateLimiter(requests=15, window_seconds=60, key_prefix="rl:ai:tts", fail_closed=True)
 
 places_limiter = UserRateLimiter(requests=60, window_seconds=60, key_prefix="rl:places", allow_guest=True)
+# Google Routes (paid; the demo key pauses at its daily limit): login required, fails closed.
+routes_limiter = UserRateLimiter(requests=20, window_seconds=60, key_prefix="rl:routes", fail_closed=True)
 osm_limiter = places_limiter
 general_limiter = UserRateLimiter(requests=120, window_seconds=60, key_prefix="rl:general", allow_guest=True)
 
@@ -1735,6 +1737,42 @@ async def places_details(place_id: str):
     if not detail:
         raise HTTPException(status_code=404, detail="Place details not found.")
     return detail
+
+class LatLng(BaseModel):
+    lat: float
+    lng: float
+
+
+class RouteComputeRequest(BaseModel):
+    origin: LatLng
+    destination: LatLng
+    mode: str = "drive"
+
+
+ROUTE_UNAVAILABLE_MESSAGE = "Route abhi available nahi hai"
+
+
+@app.post("/api/routes/compute", dependencies=[Depends(routes_limiter)])
+async def routes_compute(req: RouteComputeRequest, current_user: AuthUser = Depends(get_current_user)):
+    """Travel time + route line between two points in India (Google Routes API, cached). Never logs coordinates."""
+    from places import in_india
+    from services.routes_service import MODES, RouteNotFound, RouteUnavailable, compute_route
+    mode = (req.mode or "").strip().lower()
+    if mode not in MODES:
+        raise HTTPException(status_code=400, detail="mode must be drive, two_wheeler or walk.")
+    for p in (req.origin, req.destination):
+        if not (-90 <= p.lat <= 90 and -180 <= p.lng <= 180):
+            raise HTTPException(status_code=400, detail="Coordinates out of range.")
+        if not in_india(p.lat, p.lng):
+            raise HTTPException(status_code=400, detail="Routes are available inside India only.")
+    try:
+        return await compute_route(req.origin.lat, req.origin.lng, req.destination.lat, req.destination.lng, mode,
+                                   user_id=current_user.id)
+    except RouteUnavailable:
+        raise HTTPException(status_code=503, detail=ROUTE_UNAVAILABLE_MESSAGE)
+    except RouteNotFound:
+        raise HTTPException(status_code=404, detail="No route found between these places.")
+
 
 @app.get("/api/places/search", dependencies=[Depends(osm_limiter)])
 def search_destinations(q: str = ""):

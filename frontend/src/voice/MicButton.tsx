@@ -13,6 +13,7 @@ import { ConfirmCard } from './ConfirmCard';
 import { isReviewShowing, requestSubmitReview, TRIP_CREATED } from './reviewState';
 import { useTrip } from '../features/trip/TripContext';
 import { useNavigation } from '../context/NavigationContext';
+import { useApp } from '../context/AppContext';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
 const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
@@ -32,6 +33,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   const location = useLocation();
   const navigate = useNavigate();
   const { currentTrip, trips, setCurrentTripId } = useTrip();
+  const { userLocation } = useApp(); // sent with "start" for "how far is X" (that turn only)
   const { setMapFocusTarget } = useNavigation();
   // The socket handler is subscribed once: read the latest trips / setters through a ref.
   const tripApiRef = useRef({ trips, setCurrentTripId, setMapFocusTarget });
@@ -281,7 +283,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     }
     // Step 4: on the wizard's review step the agent must know that "haan" means Proceed.
     const screen = location.pathname === '/trips/new' && isReviewShowing() ? '/trips/new#review' : location.pathname;
-    if (!voiceSocket.start(conversationId.current, screen, currentTrip?.id ?? null)) {
+    if (!voiceSocket.start(conversationId.current, screen, currentTrip?.id ?? null, userLocation ?? null)) {
       await recorder.stop();
       report('Voice connection lost. Please try again.');
       setPhaseBoth('idle');

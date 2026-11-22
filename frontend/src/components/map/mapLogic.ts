@@ -99,3 +99,78 @@ export function flyZoom(from: number, to: number, distanceMeters: number, t: num
 export function flyDurationMs(distanceMeters: number): number {
   return Math.round(Math.min(1800, 700 + Math.log10(Math.max(10, distanceMeters)) * 180));
 }
+
+// ── Routes (map stage 3) ──
+
+export type RouteMode = 'drive' | 'two_wheeler' | 'walk';
+export const DEFAULT_ROUTE_MODE: RouteMode = 'drive';
+export const ROUTE_MODES: { key: RouteMode; label: string; words: string }[] = [
+  { key: 'drive', label: 'Car', words: 'by car' },
+  { key: 'two_wheeler', label: 'Bike', words: 'by bike' },
+  { key: 'walk', label: 'Walk', words: 'on foot' },
+];
+
+/** "22 min" / "1 h 5 min" / "2 h". */
+export function formatDurationShort(seconds: number): string {
+  const mins = Math.max(1, Math.round(seconds / 60));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (!h) return `${mins} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+/** "850 m" / "6.8 km" / "240 km" (route distance). */
+export function formatRouteDistance(meters: number): string {
+  return formatStraightLine(meters);
+}
+
+/** "6.8 km · 22 min by car" */
+export function formatRouteSummary(distanceM: number, durationS: number, mode: RouteMode): string {
+  const words = ROUTE_MODES.find((m) => m.key === mode)?.words || 'by car';
+  return `${formatRouteDistance(distanceM)} · ${formatDurationShort(durationS)} ${words}`;
+}
+
+/** "22 min by car" (itinerary legs). */
+export function formatLegTime(durationS: number, mode: RouteMode = 'drive'): string {
+  const words = ROUTE_MODES.find((m) => m.key === mode)?.words || 'by car';
+  return `${formatDurationShort(durationS)} ${words}`;
+}
+
+/** Google's encoded polyline -> [{lat, lng}]. (The map uses google.maps.geometry; this is the same algorithm.) */
+export function decodePolyline(encoded: string): { lat: number; lng: number }[] {
+  const out: { lat: number; lng: number }[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    for (const axis of [0, 1]) {
+      let result = 0, shift = 0, b: number;
+      do {
+        b = encoded.charCodeAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      const delta = result & 1 ? ~(result >> 1) : result >> 1;
+      if (axis === 0) lat += delta; else lng += delta;
+    }
+    out.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return out;
+}
+
+/** India bounding box (same as isInIndia() and the backend's in_india()). */
+export function inIndia(lat: unknown, lng: unknown): boolean {
+  const a = Number(lat), b = Number(lng);
+  return Number.isFinite(a) && Number.isFinite(b) && a >= 6 && a <= 37.5 && b >= 68 && b <= 97.5;
+}
+
+/** A place gets a Route button only with real coordinates in India and when it is not mock data. */
+export function canRoute(place: { latitude?: unknown; longitude?: unknown; isMock?: boolean } | null | undefined): boolean {
+  return Boolean(place) && !place!.isMock && inIndia(place!.latitude, place!.longitude);
+}
+
+/** Itinerary: travel times for at most this many legs per day (one Routes call each, lazily, cached). */
+export const MAX_LEGS_PER_DAY = 8;
+
+/** A leg gets a travel time only when both activities have real coordinates in India (never invented). */
+export function legHasCoords(from: { latitude?: unknown; longitude?: unknown }, to: { latitude?: unknown; longitude?: unknown }): boolean {
+  return inIndia(from.latitude, from.longitude) && inIndia(to.latitude, to.longitude);
+}

@@ -14,7 +14,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from voice import debug_store
 from voice.messages import ErrorCode
@@ -40,6 +40,7 @@ class TurnContext:
     conversation_id: Optional[str] = None
     screen: Optional[str] = None
     trip: Optional[TripInfo] = None  # the open trip, already ownership-checked (title + dates only)
+    location: Optional[Tuple[float, float]] = None  # the user's position from the app (this turn only; never logged)
     truncated: bool = False          # cut at 30 s
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -110,7 +111,7 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
     try:
         agent = run_agent(text, result.language, user_id=ctx.user_id,
                           conversation_id=ctx.conversation_id or ctx.session_id,
-                          screen=ctx.screen, trip=ctx.trip)
+                          screen=ctx.screen, trip=ctx.trip, location=ctx.location)
     except Exception as exc:  # run_agent doesn't raise, but a turn must never crash here
         from voice.agent import FALLBACK_REPLY
         logger.warning("[VOICE] turn=%s agent crashed: %s", ctx.turn_id, type(exc).__name__)

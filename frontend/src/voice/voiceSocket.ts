@@ -141,9 +141,13 @@ class VoiceSocket {
     return true;
   }
 
-  /** tripId: the open trip (the server ownership-checks it; not yours = none), or null. */
-  start(conversationId: string, screen: string, tripId: string | null = null): boolean {
-    return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId });
+  /** tripId: the open trip (the server ownership-checks it; not yours = none), or null.
+   *  location: the user's position for "how far is X" (rounded; used for that turn only), or null. */
+  start(conversationId: string, screen: string, tripId: string | null = null, location: [number, number] | null = null): boolean {
+    const loc = location && Number.isFinite(location[0]) && Number.isFinite(location[1])
+      ? { lat: Math.round(location[0] * 1e5) / 1e5, lng: Math.round(location[1] * 1e5) / 1e5 }
+      : undefined;
+    return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId, location: loc });
   }
 
   sendAudio(chunk: ArrayBuffer) {

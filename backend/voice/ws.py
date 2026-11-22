@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
@@ -63,6 +63,18 @@ def _resolve_session(token: str) -> Optional[Tuple[str, str]]:
             return user.id, record.id
     except Exception:
         return None
+
+
+def _parse_location(raw: Any) -> Optional[Tuple[float, float]]:
+    """The user's position sent by the app with "start" ({lat, lng}); India only, else ignored. Never logged."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        lat, lng = float(raw.get("lat")), float(raw.get("lng"))
+    except (TypeError, ValueError):
+        return None
+    from places import in_india
+    return (round(lat, 5), round(lng, 5)) if in_india(lat, lng) else None
 
 
 def _resolve_trip(trip_id: Optional[str], user_id: str) -> Optional[pipeline.TripInfo]:
@@ -182,6 +194,7 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
             conversation_id=str(msg.get("conversation_id") or "")[:100] or None,
             screen=str(msg.get("screen") or "")[:200] or None,
             trip=trip,
+            location=_parse_location(msg.get("location")),
         )
         conn.conversation_ids.add(conn.ctx.conversation_id or conn.session_id)
         conn.recording = True

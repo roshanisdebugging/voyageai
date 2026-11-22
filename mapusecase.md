@@ -42,12 +42,25 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
 - **Cut Place Details use before this stage goes to users** (the 100/day limit). For example, resolve coordinates only for the result the user picks. Or use one Text Search (New) call that returns `location` for every result. This changes the call count, so the owner decides.
 - Restrict the browser key to HTTP referrers (localhost, the app's domain) and to the Maps JavaScript API.
 
-## Stage 3: Routes
+## Stage 3: Routes (done on `map-stage3`)
 
-- "Route" on a place card calls `POST https://routes.googleapis.com/directions/v2:computeRoutes` from the backend, with a field mask (`routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline`) and no live traffic. The map draws the line and shows "6.8 km · 22 min by car / 31 min by 2-wheeler".
-- Cache about 30 min, keyed by the rounded origin and destination, plus the mode.
-- When Routes is paused, show the existing straight-line distance labelled "straight-line", with no route line. No other provider.
-- Voice: "Hawa Mahal kitni door hai?" answers from Routes.
+- **Probe, 22 Nov 2026** (`python -m scripts.probe_routes`):
+  - Compute Routes works for DRIVE, TWO_WHEELER and WALK.
+  - Compute Route Matrix is refused (403 PERMISSION_DENIED), so the itinerary uses one call per leg.
+  - Flyover info (`FLYOVER_INFO_ON_POLYLINE`) is accepted, but returned 0 flyovers for a Jaipur route. Not built.
+- `POST /api/routes/compute` (login, 20 a minute per user) calls `computeRoutes` with these settings:
+  - field mask `routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.warnings`;
+  - `TRAFFIC_UNAWARE` (WALK must send no routing preference);
+  - `languageCode en-IN`. Without it, Google sent the warnings in Assamese.
+- Warnings: Google gives no fixed wording. The app shows `routes.warnings` from the response, exactly as sent, for walk and bike.
+- Map: the "Route" button sits on the selected-place sheet and calls only on a tap or a mode-chip change (Car, Bike, Walk).
+  - The line is drawn with the Maps geometry library and the camera fits it.
+  - On error, the sheet shows the straight-line distance, labelled "straight-line", and no line.
+- Itinerary: "22 min by car" between activities, computed lazily, one leg at a time, at most 8 legs a day. That's about 3.75 calls per day the first time, 0 when cached.
+- Voice: the `get_travel_time` tool answers in one sentence, for example "Hawa Mahal yahan se 6.8 km hai, car se 23 minute."
+  - Origin: the app's location, else the open trip's destination. Stays have no coordinates.
+- Quota: 503 "Route abhi available nahi hai", and Routes is skipped until Google's reset.
+- **Caching conflict:** Service Specific Terms 19.3 allow caching only latitude/longitude from the Routes API, not distance, duration or polyline. The 30-minute cache is on (`ROUTES_CACHE_TTL_S=1800`). Set it to 0 before real users, unless Google confirms otherwise.
 
 ## Stage 4: clean-up
 

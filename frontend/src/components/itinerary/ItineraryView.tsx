@@ -8,6 +8,8 @@ import { useToast } from '../common/UndoToast';
 import { isPastTrip } from '../../features/trip/tripRepository';
 import { ItineraryAiDialog } from './ItineraryAiDialog';
 import { Trip3DFlyoverButton } from '../map/Trip3DFlyover';
+import { TravelLeg } from './TravelLeg';
+import { MAX_LEGS_PER_DAY } from '../map/mapLogic';
 
 const aiActionClassName =
   'flex min-h-11 items-center gap-1.5 rounded-full border border-[#355F58]/30 bg-[#E8F0EE] px-3 py-1.5 text-xs font-bold text-(--color-primary) press-scale hover:bg-[#D4E4E0] max-sm:px-3.5 dark:border-emerald-800 dark:bg-[#12332B] dark:hover:bg-[#194437]';
@@ -494,9 +496,12 @@ export const ItineraryView: React.FC = () => {
               <div className="space-y-3">
                 {selectedDay.activities.map((act, idx) => {
                   const isDone = Boolean(act.isDone);
+                  const prev = idx > 0 ? selectedDay.activities[idx - 1] : null;
                   return (
+                    <React.Fragment key={act.id}>
+                    {/* Travel time from the previous activity (lazy, one leg at a time, max 8 legs a day) */}
+                    {prev && idx <= MAX_LEGS_PER_DAY && <TravelLeg from={prev} to={act} />}
                     <div
-                      key={act.id}
                       className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-2xl p-4 space-y-3 shadow-xs hover:border-[var(--color-primary)] transition-all"
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -593,6 +598,7 @@ export const ItineraryView: React.FC = () => {
                         </button>
                       </div>
                     </div>
+                    </React.Fragment>
                   );
                 })}
               </div>

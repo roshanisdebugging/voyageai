@@ -37,6 +37,7 @@ class ToolResult:
     error_code: Optional[str] = None
     pending_actions: List[Dict[str, Any]] = field(default_factory=list)  # run only after "haan" / "yes"
     google_calls: Optional[int] = None   # Google requests this tool made (logs only)
+    note: Optional[str] = None           # small on-screen text, never spoken (e.g. Google's route warning)
 
 
 # ---------------- search a place on the map
@@ -162,6 +163,110 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     else:
         reply = {"hi": f"{name} mil gaya. Map par dikhaun?", "en": f"I found {name}. Shall I show it on the map?"}[lang]
     return ToolResult(reply, action="where", pending_actions=actions, google_calls=calls)
+
+
+# ---------------- travel time (Google Routes API via routes_service)
+
+TRAVEL_MODES = {"drive": "drive", "car": "drive", "cab": "drive", "taxi": "drive",
+                "two_wheeler": "two_wheeler", "bike": "two_wheeler", "scooty": "two_wheeler", "scooter": "two_wheeler",
+                "walk": "walk", "walking": "walk", "paidal": "walk"}
+MODE_WORDS = {"hi": {"drive": "car se", "two_wheeler": "bike se", "walk": "paidal"},
+              "en": {"drive": "by car", "two_wheeler": "by bike", "walk": "on foot"}}
+ROUTE_UNAVAILABLE = {"hi": "Route abhi available nahi hai.", "en": "Routes aren't available right now."}
+
+
+def travel_mode(raw: Any) -> str:
+    return TRAVEL_MODES.get(str(raw or "").strip().lower().replace(" ", "_"), "drive")
+
+
+def spoken_distance(meters: float) -> str:
+    """"850 m" / "6.8 km" / "240 km" (same in Hinglish and English)."""
+    if meters < 1000:
+        return f"{int(round(meters / 10.0) * 10)} m"
+    km = meters / 1000.0
+    return f"{km:.1f} km" if km < 10 else f"{round(km)} km"
+
+
+def spoken_duration(seconds: float, lang: str) -> str:
+    """"22 minute" / "1 ghanta 5 minute" (hi), "22 minutes" / "1 hour 5 minutes" (en)."""
+    mins = max(1, int(round(seconds / 60.0)))
+    h, m = divmod(mins, 60)
+    if lang == "hi":
+        hours = f"{h} ghanta" if h == 1 else f"{h} ghante"
+        return f"{mins} minute" if not h else (hours + (f" {m} minute" if m else ""))
+    if not h:
+        return f"{mins} minute" + ("s" if mins != 1 else "")
+    return f"{h} hour" + ("s" if h != 1 else "") + (f" {m} minute" + ("s" if m != 1 else "") if m else "")
+
+
+def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optional[str] = None,
+                    trip_id: Optional[str] = None, origin: Optional[Tuple[float, float]] = None,
+                    search_fn=None, route_fn=None) -> ToolResult:
+    """
+    "Hawa Mahal kitni door hai" -> "Hawa Mahal yahan se 6.8 km hai, car se 22 minute."
+    Destination: the shared place search (landmark-first). Origin: the user's position from the app, else the
+    open trip's destination (re-checked against the session user). Read-only; logs nothing about places.
+    """
+    from places import haversine_meters
+    from services.routes_service import RouteNotFound, RouteUnavailable
+    q = (place or "").strip()[:120]
+    if len(q) < 2:
+        return ToolResult({"hi": "Kahan tak ki doori?", "en": "Distance to which place?"}[lang], action="reply", error_code="no_query")
+    mode = travel_mode(mode)
+    found = search(q, search_fn)
+    calls = found.google_calls
+    if found.unavailable:
+        return ToolResult(MAPS_UNAVAILABLE[lang], action="travel_time", error_code="maps_unavailable", google_calls=calls)
+    if not found.results:
+        return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place."}[lang],
+                          action="travel_time", error_code="not_found", google_calls=calls)
+    if found.ambiguous and len(found.choices) > 1:
+        return ToolResult(_choice_reply(found.choices, lang), action="place_ask", error_code="ambiguous", google_calls=calls)
+    dest = found.results[0]
+    name = str(dest.get("name") or q)[:60]
+
+    from_name = None
+    if origin:
+        o_lat, o_lng = float(origin[0]), float(origin[1])
+    else:
+        trip_dest = _trip_destination(user_id, trip_id)
+        if not trip_dest:
+            return ToolResult({"hi": "Aap kahan se jaayenge? Location on kar dijiye.",
+                               "en": "Where are you starting from? Please turn on location."}[lang],
+                              action="travel_time", error_code="no_origin", google_calls=calls)
+        o_lat, o_lng, from_name = float(trip_dest["latitude"]), float(trip_dest["longitude"]), trip_dest["name"]
+    d_lat, d_lng = float(dest["latitude"]), float(dest["longitude"])
+    straight = spoken_distance(haversine_meters(o_lat, o_lng, d_lat, d_lng))
+
+    if route_fn is None:
+        from places import _run_sync
+        from services.routes_service import compute_route
+
+        def route_fn(*a, **k):
+            return _run_sync(compute_route(*a, **k))
+    try:
+        route = route_fn(o_lat, o_lng, d_lat, d_lng, mode, user_id=user_id)
+    except RouteUnavailable:
+        reply = {"hi": f"{ROUTE_UNAVAILABLE['hi']} Seedhi doori {straight} hai.",
+                 "en": f"{ROUTE_UNAVAILABLE['en']} In a straight line it's {straight}."}[lang]
+        return ToolResult(reply, action="travel_time", error_code="routes_unavailable", google_calls=calls)
+    except (RouteNotFound, ValueError):
+        reply = {"hi": f"Wahan tak ka route nahi mila. Seedhi doori {straight} hai.",
+                 "en": f"I couldn't find a route there. In a straight line it's {straight}."}[lang]
+        return ToolResult(reply, action="travel_time", error_code="no_route", google_calls=calls)
+    if calls is not None and not route.get("cached"):
+        calls += 1
+    dist, dur = spoken_distance(route["distance_m"]), spoken_duration(route["duration_s"], lang)
+    words = MODE_WORDS[lang][mode]
+    if lang == "hi":
+        src = f"{from_name} se" if from_name else "yahan se"
+        reply = f"{name} {src} {dist} hai, {words} {dur}."
+    else:
+        src = f"from {from_name}" if from_name else "from here"
+        reply = f"{name} is {dist} {src}, {dur} {words}."
+    # Google's route warning (walk / bike) goes on screen, not in the spoken reply.
+    note = route.get("warning") if mode != "drive" else None
+    return ToolResult(reply, action="travel_time", google_calls=calls, note=note)
 
 
 # ---------------- weather (Open-Meteo via weather_service)

@@ -18,7 +18,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from voice import pages
 from voice.lang import detect_lang
@@ -55,6 +55,8 @@ Call exactly one tool when it fits:
   * query = the place's usual written name, fixing speech-to-text spelling: "4 minar" -> "Charminar",
     "taaj mahal" -> "Taj Mahal". If the last reply offered a choice ("A ya B?"), the answer is the place.
   General "ghoomne ki jagah dikhao" / things to do -> navigate to explore instead.
+- get_travel_time: how far / how long to a NAMED place ("Hawa Mahal kitni door hai", "airport kitni der
+  lagegi bike se", "how far is India Gate"). mode: drive (default, car/cab), two_wheeler (bike/scooty), walk (paidal).
 - answer_question: other travel questions (timings, tickets, prices, food, culture, transport, tips).
   Do NOT answer these from memory. Set facts=true for timings, opening hours, prices, entry fees.
   ("Where can I eat" / "khana kahan milega" nearby -> navigate to food instead.)
@@ -156,6 +158,23 @@ WEATHER_TOOL: Dict[str, Any] = {
         },
     },
 }
+TRAVEL_TIME_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "get_travel_time",
+        "description": "Road distance and travel time from the user's location (or the open trip's destination) "
+                       "to a named place in India. Read-only.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "place": {"type": "string", "description": "The place's usual written name, e.g. 'Hawa Mahal Jaipur', 'Jaipur airport'."},
+                "mode": {"type": _nullable("string"), "enum": ["drive", "two_wheeler", "walk", None],
+                         "description": "drive (car, default) | two_wheeler (bike, scooty) | walk (paidal)."},
+            },
+            "required": ["place"],
+        },
+    },
+}
 LIST_TRIPS_TOOL: Dict[str, Any] = {
     "type": "function",
     "function": {
@@ -224,7 +243,7 @@ CANCEL_DRAFT_TOOL: Dict[str, Any] = {
         "parameters": {"type": "object", "properties": {}},
     },
 }
-TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL, CANT_HELP_TOOL,
+TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, TRAVEL_TIME_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL, CANT_HELP_TOOL,
          UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL]
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
@@ -403,7 +422,7 @@ def _navigate(args: Dict[str, Any], lang: str, has_trip: bool) -> AgentResult:
 def _from_tool(r) -> AgentResult:
     return AgentResult(r.reply_text, ui_actions=list(r.ui_actions), action=r.action, error_code=r.error_code,
                        pending_actions=list(getattr(r, "pending_actions", []) or []),
-                       google_calls=getattr(r, "google_calls", None))
+                       google_calls=getattr(r, "google_calls", None), note=getattr(r, "note", None))
 
 
 def _norm_text(s: str) -> str:
@@ -498,8 +517,10 @@ def cancel_trip(redis_conn, user_id: str, conversation_id: str, lang: str) -> Ag
 
 def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str, has_trip: bool,
             user_id: Optional[str] = None, trip: Optional[TripInfo] = None,
-            conversation_id: Optional[str] = None, redis_conn=None) -> AgentResult:
-    """Check the model's choice and run the tool. user_id comes from the session, never from the model."""
+            conversation_id: Optional[str] = None, redis_conn=None,
+            location: Optional[Tuple[float, float]] = None) -> AgentResult:
+    """Check the model's choice and run the tool. user_id comes from the session, never from the model;
+    location from the app (the user's own position, this turn only), never from the model."""
     call = next((c for c in tool_calls if c.get("name") in TOOL_NAMES), None)
     if call is None:
         if tool_calls:  # a tool we don't offer
@@ -532,6 +553,9 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
     from voice.tools import lookups
     if name == "search_places":
         return _from_tool(lookups.search_place(str(args.get("query") or ""), lang, show=args.get("show") is not False))
+    if name == "get_travel_time":
+        return _from_tool(lookups.get_travel_time(str(args.get("place") or ""), args.get("mode"), lang, user_id=user_id,
+                                                  trip_id=trip.id if trip else None, origin=location))
     if name == "get_weather":
         return _from_tool(lookups.get_weather(args.get("place"), args.get("day"), lang, user_id=user_id,
                                               trip_id=trip.id if trip else None))
@@ -558,7 +582,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 
 
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
-              screen: Optional[str], trip: Optional[TripInfo], redis_conn=None) -> AgentResult:
+              screen: Optional[str], trip: Optional[TripInfo], redis_conn=None,
+              location: Optional[Tuple[float, float]] = None) -> AgentResult:
     """Blocking (HTTP): call from a threadpool. Never raises."""
     from groq_client import GroqError, GroqRateLimited, GroqTransient, groq_chat_tools
 
@@ -624,7 +649,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                                          timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             llm_done = time.perf_counter()
             result = _decide(answer["tool_calls"], answer["content"], lang, has_trip=trip is not None,
-                             user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn)
+                             user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn,
+                             location=location)
             if confirm_pending and not result.action.startswith("trip_"):
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
         except GroqRateLimited:

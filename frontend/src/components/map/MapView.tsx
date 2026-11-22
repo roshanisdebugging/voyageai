@@ -4,7 +4,7 @@ import { useTrip } from '../../features/trip/TripContext';
 import { useNavigation } from '../../context/NavigationContext';
 import {
   Crosshair, ExternalLink, Volume2, VolumeX, Loader2,
-  Plus, Check, ArrowLeft, Search, X, MapPin, Bookmark, Layers, Box, MapPinOff
+  Plus, Check, ArrowLeft, Search, X, MapPin, Bookmark, Layers, Box, MapPinOff, Navigation
 } from 'lucide-react';
 import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer';
 import './mapView.css';
@@ -27,7 +27,9 @@ import { MAP_ID, loadGoogleLibrary, onMapsAuthFailure, MapUnavailableError } fro
 import {
   CLUSTER_OPTIONS, MAP_TYPES, type MapTypeKey, easeInOutCubic, flyDurationMs, flyZoom, formatDistance,
   formatStraightLine, haversineMeters, pinStyle, shouldCluster,
+  DEFAULT_ROUTE_MODE, ROUTE_MODES, type RouteMode, canRoute, formatRouteSummary,
 } from './mapLogic';
+import { computeRoute, RouteError, type RouteResult } from '../../services/routesApi';
 import { createClusterBubble, createPlacePin, createSearchPin, createUserDot, setPinSelected } from './mapPins';
 
 // Shown when there is no location and no trip yet, so search still works.
@@ -52,6 +54,8 @@ export interface PlaceItem {
   rating?: number;
   price_approx?: string;
   description?: string;
+  /** mock / sample data: never routed */
+  isMock?: boolean;
 }
 
 const CATEGORY_FILTERS = [
@@ -104,6 +108,14 @@ export const MapView: React.FC = () => {
   const [mapType, setMapType] = useState<MapTypeKey>('roadmap');
   const [is3D, setIs3D] = useState(false);
   const [showTypes, setShowTypes] = useState(false);
+
+  // Route for the place in the sheet: only fetched on a Route tap or a mode change (never per pin)
+  const [routeMode, setRouteMode] = useState<RouteMode>(DEFAULT_ROUTE_MODE);
+  const [route, setRoute] = useState<{
+    placeId: string; status: 'loading' | 'ok' | 'error' | 'needs_location'; result?: RouteResult; message?: string;
+  } | null>(null);
+  const routeLinesRef = useRef<google.maps.Polyline[]>([]);
+  const routeSeqRef = useRef(0);
 
   // Audio Guide hooks
   const { playBase64Audio, stopAudio } = useAudioGuide();
@@ -267,6 +279,7 @@ export const MapView: React.FC = () => {
               rating: typeof p.rating === 'number' ? p.rating : undefined,
               price_approx: p.price_approx || undefined,
               description: p.description || undefined,
+              isMock: Boolean(p.is_mock || p._isMock),
             };
           });
           setAllPlaces(fetchedPlaces);
@@ -388,6 +401,8 @@ export const MapView: React.FC = () => {
       userMarkerRef.current = null;
       if (searchMarkerRef.current) searchMarkerRef.current.map = null;
       searchMarkerRef.current = null;
+      routeLinesRef.current.forEach((l) => l.setMap(null));
+      routeLinesRef.current = [];
       if (mapRef.current) google.maps.event.clearInstanceListeners(mapRef.current);
       mapRef.current = null;
       container.replaceChildren();
@@ -692,6 +707,131 @@ export const MapView: React.FC = () => {
       setIsFollowMode(true);
       flyTo(targetCoords[0], targetCoords[1], 16);
     }
+  };
+
+  const clearRouteLine = useCallback(() => {
+    routeLinesRef.current.forEach((l) => l.setMap(null));
+    routeLinesRef.current = [];
+  }, []);
+
+  /** Draw the route (decoded with the Maps geometry library) and fit the camera to it. */
+  const drawRoute = useCallback(async (encoded: string) => {
+    const map = mapRef.current;
+    if (!map) return;
+    try {
+      const geometry = await loadGoogleLibrary('geometry');
+      const path = geometry.encoding.decodePath(encoded);
+      clearRouteLine();
+      routeLinesRef.current = [
+        new google.maps.Polyline({ map, path, strokeColor: '#FFFFFF', strokeOpacity: 0.95, strokeWeight: 9, zIndex: 1 }),
+        new google.maps.Polyline({ map, path, strokeColor: '#1A73E8', strokeOpacity: 1, strokeWeight: 5, zIndex: 2 }),
+      ];
+      const bounds = new google.maps.LatLngBounds();
+      path.forEach((pt) => bounds.extend(pt));
+      cancelFly();
+      map.fitBounds(bounds, { top: 170, bottom: 330, left: 50, right: 60 });
+    } catch {
+      clearRouteLine(); // no line; the sheet still shows the time
+    }
+  }, [clearRouteLine, cancelFly]);
+
+  const requestRoute = useCallback(async (place: PlaceItem, mode: RouteMode) => {
+    const seq = ++routeSeqRef.current;
+    setRouteMode(mode);
+    if (!userLocation) {
+      clearRouteLine();
+      setRoute({ placeId: place.id, status: 'needs_location' });
+      return;
+    }
+    setRoute({ placeId: place.id, status: 'loading' });
+    try {
+      const result = await computeRoute({ lat: userLocation[0], lng: userLocation[1] },
+        { lat: place.latitude, lng: place.longitude }, mode);
+      if (seq !== routeSeqRef.current) return;
+      setRoute({ placeId: place.id, status: 'ok', result });
+      setIsFollowMode(false);
+      if (result.polyline) await drawRoute(result.polyline);
+      else clearRouteLine();
+    } catch (err) {
+      if (seq !== routeSeqRef.current) return;
+      clearRouteLine();
+      setRoute({
+        placeId: place.id, status: 'error',
+        message: err instanceof RouteError && err.status === 503 ? err.message : "Couldn't get a route right now.",
+      });
+    }
+  }, [userLocation, clearRouteLine, drawRoute, setIsFollowMode]);
+
+  // A different place in the sheet (or none): forget the old route and its line.
+  const sheetPlaceId = sheetPlace?.id;
+  useEffect(() => {
+    routeSeqRef.current++;
+    setRoute(null);
+    clearRouteLine();
+  }, [sheetPlaceId, clearRouteLine, mapGen]);
+
+  const renderRouteSection = (place: PlaceItem) => {
+    if (!canRoute(place)) return null;
+    const mine = route && route.placeId === place.id ? route : null;
+    const straight = userLocation ? haversineMeters(userLocation[0], userLocation[1], place.latitude, place.longitude) : null;
+    if (!mine) {
+      return (
+        <button
+          type="button"
+          onClick={() => requestRoute(place, routeMode)}
+          className="w-full min-h-[44px] rounded-xl bg-[#1A73E8] hover:bg-[#1765CC] text-white font-semibold text-sm flex items-center justify-center gap-2 press-scale"
+        >
+          <Navigation className="w-4 h-4" aria-hidden="true" /> Route
+        </button>
+      );
+    }
+    return (
+      <div className="space-y-2 pt-1 border-t border-gray-100 dark:border-zinc-800">
+        <div role="radiogroup" aria-label="Travel mode" className="flex gap-2 pt-2">
+          {ROUTE_MODES.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              role="radio"
+              aria-checked={routeMode === m.key}
+              disabled={mine.status === 'loading'}
+              onClick={() => { if (m.key !== routeMode || mine.status !== 'ok') requestRoute(place, m.key); }}
+              className={`flex-1 min-h-[36px] rounded-full text-xs font-semibold border transition-colors ${routeMode === m.key
+                ? 'bg-[#1A73E8] text-white border-[#1A73E8]'
+                : 'bg-white dark:bg-zinc-800 text-gray-700 dark:text-zinc-200 border-gray-200 dark:border-zinc-700'}`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <div className="text-sm" role="status" aria-live="polite">
+          {mine.status === 'loading' && (
+            <span className="flex items-center gap-2 text-[color:var(--color-text-secondary)]">
+              <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Finding the route…
+            </span>
+          )}
+          {mine.status === 'ok' && mine.result && (
+            <>
+              <p className="font-bold tabular-nums text-[color:var(--color-text-primary)]">
+                {formatRouteSummary(mine.result.distance_m, mine.result.duration_s, mine.result.mode)}
+              </p>
+              {mine.result.mode !== 'drive' && mine.result.warning && (
+                <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">{mine.result.warning}</p>
+              )}
+            </>
+          )}
+          {mine.status === 'error' && (
+            <p className="text-[color:var(--color-text-secondary)]">
+              {straight != null && <span className="font-bold tabular-nums text-[color:var(--color-text-primary)]">{formatStraightLine(straight)} (straight-line) · </span>}
+              {mine.message}
+            </p>
+          )}
+          {mine.status === 'needs_location' && (
+            <p className="text-[color:var(--color-text-secondary)]">Please turn on location to get a route from where you are.</p>
+          )}
+        </div>
+      </div>
+    );
   };
 
   /** 3D: tilt the vector map (3D buildings show from about zoom 17) or flatten it again. */
@@ -1060,6 +1200,7 @@ export const MapView: React.FC = () => {
               <X className="w-4 h-4" aria-hidden="true" />
             </button>
             {renderCardBody(sheetPlace)}
+            {renderRouteSection(sheetPlace)}
           </div>
         </div>
       ) : sortedPlaces.length > 0 ? (
