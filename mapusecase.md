@@ -68,6 +68,16 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
 - One key name per side, `GOOGLE_MAPS_SERVER_KEY` and `VITE_GOOGLE_MAPS_BROWSER_KEY`. Keep reading the old names for one release, and update the `.env.example` files.
 - Done (stage 4): `/api/places/autocomplete` removed (nothing called it); comments naming other providers removed.
 - Show "Google Maps" attribution wherever Places data appears outside a Google map.
-- Before real users: a billed key with per-API daily caps, a restricted server key, and the call counts from the logs checked against the budget.
+- Before real users: see the checklist below.
+
+## Before real users (checklist)
+
+- [ ] Two keys, never the same one: `VITE_GOOGLE_MAPS_BROWSER_KEY` (frontend) and `GOOGLE_MAPS_SERVER_KEY` (backend). `python -m scripts.check_keys --strict` passes.
+- [ ] **Browser key:** restricted by HTTP referrer (localhost for dev, the Netlify domain) and to the **Maps JavaScript API** only.
+- [ ] **Server key:** restricted to the server's IP address and to **Places API (New)**, **Geocoding API** and **Routes API** only.
+- [ ] A daily cap per API in Google Cloud Console (Quotas), and a budget alert.
+- [ ] Add billing only after the caps and the alert are in place.
+- [ ] `ROUTES_CACHE_TTL_S=0`, and the Places/Geocoding caches reviewed against the Service Specific Terms (see Stage 4).
+- [ ] The call counts in the logs (`google_calls=`, `[ROUTES]`) checked against the budget.
 
 Weather stays on Open-Meteo (`weather_service.py`). It is not a map provider, and moving it to Google's Weather API is outside these four stages.

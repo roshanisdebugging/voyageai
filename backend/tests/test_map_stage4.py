@@ -71,5 +71,30 @@ r3 = vmsg.reply("t3", "x", None, "audio/wav", 0, note="Details badal sakti hain.
 check("reply sends note_attribution only with a note", r1.get("note_attribution") == "Google Maps"
       and "note_attribution" not in r2 and "note_attribution" not in r3)
 
+# ---------------- 5. key safety check (no network; never prints a key)
+from scripts import check_keys as ck  # noqa: E402
+FAKE = "AIza" + "B" * 35            # key-shaped test value, built so the tracked-file scan stays clean
+FAKE2 = "AIza" + "C" * 35
+err, warn = ck.check_envs({"GOOGLE_MAPS_SERVER_KEY": FAKE}, {"VITE_GOOGLE_MAPS_BROWSER_KEY": FAKE2})
+check("good setup: no errors, no warnings", err == [] and warn == [], (err, warn))
+err, warn = ck.check_envs({"GOOGLE_MAPS_API_KEY": FAKE}, {"VITE_GOOGLE_MAP_DEMO_KEY": FAKE})
+check("old names -> warnings naming the new names", any("GOOGLE_MAPS_SERVER_KEY" in w for w in warn)
+      and any("VITE_GOOGLE_MAPS_BROWSER_KEY" in w for w in warn) and err == [], warn)
+check("same key on both sides -> warning (fine for the demo key)", any("same key" in w for w in warn))
+err, _ = ck.check_envs({"GOOGLE_MAPS_SERVER_KEY": FAKE}, {"VITE_GOOGLE_MAPS_SERVER_KEY": FAKE})
+check("server key in a VITE_ variable -> error", any("shipped to every browser" in e for e in err), err)
+err, _ = ck.check_envs({}, {"VITE_MY_KEY": FAKE})
+check("a Google key in another VITE_ variable -> error", any("VITE_MY_KEY" in e for e in err), err)
+err, warn = ck.check_envs({}, {})
+check("no keys -> warnings that say what stops working", len(warn) == 2 and err == [], warn)
+everything = " ".join(ck.check_envs({"GOOGLE_MAPS_SERVER_KEY": FAKE}, {"VITE_GOOGLE_MAPS_SERVER_KEY": FAKE})[0]
+                      + ck.check_envs({"GOOGLE_MAPS_API_KEY": FAKE}, {"VITE_GOOGLE_MAP_DEMO_KEY": FAKE})[1])
+check("messages never contain a key", "AIza" not in everything)
+check("no key string in any tracked file", ck.tracked_key_hits() == [], ck.tracked_key_hits()[:5])
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    rc = ck.main([])
+check("the real check prints no key", "AIza" not in buf.getvalue() and rc in (0, 1))
+
 print(f"\n{sum(results)}/{len(results)} passed", flush=True)
 sys.exit(0 if all(results) else 1)

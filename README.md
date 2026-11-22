@@ -284,7 +284,8 @@ The map uses two Google keys: a **server** key (`GOOGLE_MAPS_SERVER_KEY`, backen
 both before real users (see `mapusecase.md`). For Docker, pass the browser key at build time
 (`VITE_GOOGLE_MAPS_BROWSER_KEY` in the root `.env`); on Netlify, set it in the site's environment variables.
 The old names `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAP_DEMO_KEY` and `VITE_GOOGLE_MAP_DEMO_KEY` still work for one
-release and log a warning.
+release and log a warning. Check the setup with `python -m scripts.check_keys` from `backend/`
+(no network calls; `--strict` before real users).
 
 ---
 
