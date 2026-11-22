@@ -27,6 +27,7 @@ def _run_sync(coro):
 
 MAX_SUGGESTIONS = 6          # autocomplete suggestions resolved with Place Details (unchanged: 1 + up to 6 calls)
 MAX_CHOICES = 3              # an ambiguous search offers at most 3 places
+DUPLICATE_RADIUS_M = 300     # same name this close = the same place
 
 # Tier 3: what a traveller usually means. Landmarks, and real places/addresses (city, area, road, the premise
 # itself) are equal: Google's own order decides between them (its #1 for "Golden Temple" is typed 'premise', for
@@ -150,6 +151,19 @@ def rank_places(query: str, results: List[Dict[str, Any]]) -> PlaceSearch:
         r["kind"] = place_kind(r.get("types"))
         scored.append((-(2 if tier is None else tier), 0 if score >= 0.9 else 1, i, score, tier, r))
     scored.sort(key=lambda x: x[:3])
+    # One place often comes back several times (the landmark, its address, its area) a few metres apart.
+    # Keep only the best-ranked of results with the same name within DUPLICATE_RADIUS_M, before judging ambiguity.
+    kept = []
+    for x in scored:
+        r = x[5]
+        name = _norm_name(r.get("name") or "")
+        if any(_norm_name(k[5].get("name") or "") == name
+               and haversine_meters(float(r["latitude"]), float(r["longitude"]),
+                                    float(k[5]["latitude"]), float(k[5]["longitude"])) <= DUPLICATE_RADIUS_M
+               for k in kept):
+            continue
+        kept.append(x)
+    scored = kept
     ranked = [x[5] for x in scored]
     out = PlaceSearch(results=ranked)
     if not scored:

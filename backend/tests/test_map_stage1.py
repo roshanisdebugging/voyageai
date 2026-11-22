@@ -231,6 +231,21 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
           names("Gate way of India", [("Gate Way Of India", ["transit_station", "bus_stop", "establishment"]),
                                       ("Gateway of India", ["historical_landmark", "establishment"])])[0] == "Gateway of India")
 
+    # Same place returned several times (the Hawa Mahal voice case, 22 Nov 2026): merged before judging ambiguity.
+    def place(n, lat, lng, t):
+        return {"name": n, "latitude": lat, "longitude": lng, "types": t}
+    dup = places.rank_places("Sjohawamahal", [place("Hawa Mahal", 26.92390, 75.82670, MONUMENT),
+                                              place("Hawa Mahal", 26.92430, 75.82680, ["premise", "geocode"]),
+                                              place("hawa mahal", 26.92400, 75.82640, ["neighborhood", "political"])])
+    check("same name 50 m apart -> one result, no choice question", len(dup.results) == 1 and not dup.ambiguous
+          and dup.results[0]["kind"] == "landmark", [(r["name"], r["kind"]) for r in dup.results])
+    far = places.rank_places("Hawa Mahal", [place("Hawa Mahal", 26.9239, 75.8267, MONUMENT),
+                                            place("Hawa Mahal", 26.9689, 75.8267, MONUMENT)])   # ~5 km north
+    check("same name 5 km apart -> stays two", len(far.results) == 2, len(far.results))
+    near_other = places.rank_places("ghat", [place("Assi Ghat", 25.2900, 83.0060, TEMPLE),
+                                             place("Tulsi Ghat", 25.2905, 83.0062, TEMPLE)])
+    check("different names close together -> both kept", len(near_other.results) == 2)
+
     check("untyped results keep Google's order and are not ambiguous",
           [r["name"] for r in places.rank_places("x", [{"name": "B", "latitude": 26, "longitude": 75},
                                                         {"name": "A", "latitude": 26, "longitude": 75}]).results] == ["B", "A"])
