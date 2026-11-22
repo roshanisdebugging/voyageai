@@ -41,6 +41,8 @@ import { SavedPlacesPage } from './components/places/SavedPlacesPage';
 import { RefreshCw, AlertTriangle } from 'lucide-react';
 
 const PlaceDetailsPage = React.lazy(() => import('./components/places/PlaceDetailsPage'));
+// DEV ONLY: Google Maps feature probe (/dev/map-lab). Not linked, and dropped from production builds.
+const MapLab = import.meta.env.DEV ? React.lazy(() => import('./dev/MapLab')) : null;
 const MapView = React.lazy(() =>
   import('./components/map/MapView').then((mod) => ({ default: mod.MapView }))
 );
@@ -292,6 +294,9 @@ export default function App() {
                   <ToastProvider>
                   <MicLayoutProvider>
                   <Routes>
+                    {MapLab && (
+                      <Route path="/dev/map-lab" element={<React.Suspense fallback={null}><MapLab /></React.Suspense>} />
+                    )}
                     {/* Public Auth Route */}
                     <Route path="/login" element={<LoginScreen />} />
 

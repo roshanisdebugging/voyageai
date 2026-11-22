@@ -4,14 +4,12 @@ import { useTrip } from '../../features/trip/TripContext';
 import { useNavigation } from '../../context/NavigationContext';
 import {
   Crosshair, ExternalLink, Volume2, VolumeX, Loader2,
-  Plus, Check, ArrowLeft, Search, X, MapPin, Bookmark
+  Plus, Check, ArrowLeft, Search, X, MapPin, Bookmark, Layers, Box, MapPinOff
 } from 'lucide-react';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer';
 import './mapView.css';
 import { getApiBaseUrl, DEFAULT_HEADERS } from '../../config/apiConfig';
 import { useAudioGuide } from '../../hooks/useAudioGuide';
-import { createUserLocationIcon, createPoiIcon } from './mapIcons';
 import { AddToItineraryModal } from '../itinerary/AddToItineraryModal';
 import { usePlaceItineraryAdd } from '../itinerary/usePlaceItineraryAdd';
 import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
@@ -19,26 +17,28 @@ import { useSavedPlaceToggle } from '../places/useSavedPlaceToggle';
 import { useNavigate } from 'react-router-dom';
 import { getCanonicalCategory, type CanonicalCategoryKey } from './mapCategoryConfig';
 import { useTheme } from '../../context/ThemeContext';
-import { GOOGLE_MAP_DARK_STYLES } from '../../utils/googleMapStyles';
 import { wsClient } from '../../services/wsClient';
 import { memoize } from '../../services/memoCache';
 import { CACHE_TTL } from '../../store/cache/cacheTypes';
 import { isInIndia, placeSubtitle } from '../../features/trip/components/PlaceSearchField';
 import { mapSearchErrorMessage } from '../../utils/mapSearchError';
 import type { DestinationReference } from '../../features/trip/types';
+import { MAP_ID, loadGoogleLibrary, onMapsAuthFailure, MapUnavailableError } from './googleMapsLoader';
+import {
+  CLUSTER_OPTIONS, MAP_TYPES, type MapTypeKey, easeInOutCubic, flyDurationMs, flyZoom, formatDistance,
+  formatStraightLine, haversineMeters, pinStyle, shouldCluster,
+} from './mapLogic';
+import { createClusterBubble, createPlacePin, createSearchPin, createUserDot, setPinSelected } from './mapPins';
 
 // Shown when there is no location and no trip yet, so search still works.
 const INDIA_CENTER: [number, number] = [22.9734, 78.6569];
 // Where the map was when the user opened a place's Details page; restored once on the way back.
 let returnView: { center: [number, number]; zoom: number } | null = null;
 const SEARCH_DEBOUNCE_MS = 300;
-
-/** "850 m" / "4.2 km" / "240 km" */
-const formatSearchDistance = (meters: number): string => {
-  if (meters < 1000) return `${Math.round(meters)} m`;
-  const km = meters / 1000;
-  return km < 10 ? `${km.toFixed(1)} km` : `${Math.round(km)} km`;
-};
+const formatSearchDistance = formatStraightLine;
+const calculateDistance = haversineMeters;
+/** Room for the search bar on top and the card row at the bottom when fitting markers. */
+const FIT_PADDING = { top: 120, bottom: 240, left: 40, right: 40 };
 
 export interface PlaceItem {
   id: string;
@@ -54,17 +54,6 @@ export interface PlaceItem {
   description?: string;
 }
 
-// Google Maps Platform Basemap
-const googleApiKey = import.meta.env.VITE_GOOGLE_MAP_DEMO_KEY || '';
-const GOOGLE_MAPS_TILES = {
-  url: googleApiKey
-    ? `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key=${googleApiKey}`
-    : 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
-  subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-  maxZoom: 20,
-  attribution: '&copy; Google Maps',
-};
-
 const CATEGORY_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'sights', label: 'Sights' },
@@ -75,29 +64,20 @@ const CATEGORY_FILTERS = [
 
 const sentenceCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s);
 
-const formatDistance = (meters?: number) => {
-  if (meters === undefined || meters === null) return 'Nearby';
-  if (meters < 1000) return `${Math.round(meters)} m away`;
-  return `${(meters / 1000).toFixed(1)} km away`;
-};
+type MapStatus = 'loading' | 'ready' | 'unavailable';
+interface MarkerRecord { marker: google.maps.marker.AdvancedMarkerElement; el: HTMLElement; place: PlaceItem }
+/** The view kept across a theme switch (Google sets the colour scheme only when a map is created). */
+interface SavedView { center: google.maps.LatLngLiteral; zoom: number; tilt: number; heading: number; mapType: MapTypeKey }
 
-export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+export const MapView: React.FC = () => {
   const { userLocation, isFollowMode, setIsFollowMode } = useApp();
   const { currentTrip } = useTrip();
   const { mapFocusTarget, setMapFocusTarget, navigateToExplore } = useNavigation();
   const navigate = useNavigate();
   const { theme } = useTheme();
-
-  // If a Google Maps JS API map instance is supplied, apply custom dark JSON styles dynamically
-  useEffect(() => {
-    if (mapInstance && typeof mapInstance.setOptions === 'function') {
-      mapInstance.setOptions({
-        styles: theme === 'dark' ? GOOGLE_MAP_DARK_STYLES : [],
-      });
-    }
-  }, [theme, mapInstance]);
-
-  const tileLayerRef = useRef<L.TileLayer | null>(null);
 
   // Coordinates anchor - dynamically resolved exclusively from GPS or trip destination
   const activeCoords: [number, number] | null = useMemo(() => {
@@ -112,8 +92,18 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
 
   const [allPlaces, setAllPlaces] = useState<PlaceItem[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<PlaceItem | null>(null);
+  /** The place shown in the slide-up sheet (a pin tap, or a place sent here from Explore). */
+  const [sheetPlace, setSheetPlace] = useState<PlaceItem | null>(null);
   const [activeCategory, setActiveCategory] = useState<CanonicalCategoryKey>('all');
   const [isLoadingPlaces, setIsLoadingPlaces] = useState<boolean>(false);
+
+  // Google map state
+  const [mapStatus, setMapStatus] = useState<MapStatus>('loading');
+  const [mapGen, setMapGen] = useState(0);           // bumps each time a map is (re)created
+  const [isVector, setIsVector] = useState(false);   // tilt / 3D only on vector maps (weak GPUs get raster)
+  const [mapType, setMapType] = useState<MapTypeKey>('roadmap');
+  const [is3D, setIs3D] = useState(false);
+  const [showTypes, setShowTypes] = useState(false);
 
   // Audio Guide hooks
   const { playBase64Audio, stopAudio } = useAudioGuide();
@@ -132,31 +122,75 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<DestinationReference | null>(null);
-  const searchMarkerRef = useRef<L.Marker | null>(null);
   const searchSeqRef = useRef(0);
 
-  // Refs for Leaflet event closures
-  const activeCategoryRef = useRef(activeCategory);
   const isFollowModeRef = useRef(isFollowMode);
   const hasUserPannedRef = useRef(false);
   // Read once per mount into a ref, so React's dev double-run of effects restores it too.
   const restoreViewRef = useRef(returnView);
   const hadCoordsRef = useRef<boolean>(!!activeCoords);
   const isProgrammaticMoveRef = useRef(false);
+  const fittedRef = useRef(false);
 
-  useEffect(() => { activeCategoryRef.current = activeCategory; }, [activeCategory]);
   useEffect(() => { isFollowModeRef.current = isFollowMode; }, [isFollowMode]);
 
-  // Leaflet map & layer refs
+  // Google map & marker refs (markers are created once and updated in place; React never re-renders per frame)
   const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const markersLayerRef = useRef<L.LayerGroup | null>(null);
-  const userMarkerRef = useRef<L.Marker | null>(null);
-  const markersMapRef = useRef<Map<string, L.Marker>>(new Map());
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const markerLibRef = useRef<google.maps.MarkerLibrary | null>(null);
+  const clustererRef = useRef<MarkerClusterer | null>(null);
+  const recordsRef = useRef<Map<string, MarkerRecord>>(new Map());
+  const userMarkerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  const searchMarkerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
+  const savedViewRef = useRef<SavedView | null>(null);
+  const flyRafRef = useRef<number | null>(null);
+  const onPinTapRef = useRef<(place: PlaceItem) => void>(() => {});
 
   // Card scroller refs: lets a marker tap scroll its matching card into view
   const cardScrollRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // ── Camera ──
+  const cancelFly = useCallback(() => {
+    if (flyRafRef.current != null) cancelAnimationFrame(flyRafRef.current);
+    flyRafRef.current = null;
+    isProgrammaticMoveRef.current = false;
+  }, []);
+
+  /** Smooth fly-to (per-frame camera moves on the map itself, no React renders). Raster/reduced motion: jump. */
+  const flyTo = useCallback((lat: number, lng: number, zoom: number) => {
+    const map = mapRef.current;
+    if (!map) return;
+    cancelFly();
+    const c = map.getCenter();
+    const fromZoom = map.getZoom() ?? zoom;
+    if (!c || prefersReducedMotion()) {
+      map.moveCamera({ center: { lat, lng }, zoom });
+      return;
+    }
+    const from = { lat: c.lat(), lng: c.lng() };
+    const dist = haversineMeters(from.lat, from.lng, lat, lng);
+    const duration = flyDurationMs(dist);
+    const start = performance.now();
+    isProgrammaticMoveRef.current = true;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const e = easeInOutCubic(t);
+      map.moveCamera({
+        center: { lat: from.lat + (lat - from.lat) * e, lng: from.lng + (lng - from.lng) * e },
+        zoom: flyZoom(fromZoom, zoom, dist, t),
+      });
+      if (t < 1) flyRafRef.current = requestAnimationFrame(step);
+      else { flyRafRef.current = null; isProgrammaticMoveRef.current = false; }
+    };
+    flyRafRef.current = requestAnimationFrame(step);
+  }, [cancelFly]);
+
+  const saveReturnView = useCallback(() => {
+    const map = mapRef.current;
+    const c = map?.getCenter();
+    if (map && c) returnView = { center: [c.lat(), c.lng()], zoom: map.getZoom() ?? 15 };
+  }, []);
 
   // Handle Play TTS Narration
   const handlePlayNarration = useCallback(async (place: PlaceItem, e?: React.MouseEvent) => {
@@ -216,6 +250,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
           : (data.places || data.results || []);
 
         if (Array.isArray(rawItems) && rawItems.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const fetchedPlaces: PlaceItem[] = rawItems.map((p: any) => {
             const rawCat = p.category || 'Sight';
             const canonical = getCanonicalCategory(rawCat, p.name || '');
@@ -238,7 +273,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
           return;
         }
       }
-    } catch (err: any) {
+    } catch (err) {
       console.warn('[MAP] Failed to fetch nearby POIs:', err);
     } finally {
       setIsLoadingPlaces(false);
@@ -254,112 +289,152 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     fetchMapPlaces(lat, lng);
   }, [activeCoords, fetchMapPlaces]);
 
-  // ── MAP INITIALIZATION & CLEANUP ──
+  // ── GOOGLE MAP: create (again on a theme switch, keeping the view) and clean up ──
   useEffect(() => {
     const container = mapContainerRef.current;
     if (!container) return;
-    if (mapInstanceRef.current) return; // Initialize once
+    let cancelled = false;
+    const listeners: google.maps.MapsEventListener[] = [];
+    const records = recordsRef.current;
 
-    // Back from a place's Details page: reopen exactly there (once); follow mode and the first GPS fix
-    // leave it alone. Otherwise the current location (or trip destination), or all of India.
-    const restore = restoreViewRef.current;
-    returnView = null;
-    if (restore) {
-      hasUserPannedRef.current = true;
-      hadCoordsRef.current = true;
-    }
-    const [initialLat, initialLng] = restore?.center || activeCoords || INDIA_CENTER;
-    const hasResizeObserver = typeof ResizeObserver !== 'undefined';
-
-    const map = L.map(container, {
-      center: [initialLat, initialLng],
-      zoom: restore?.zoom ?? (activeCoords ? 15 : 5),
-      zoomControl: false,
-      attributionControl: false,
-      trackResize: !hasResizeObserver,
+    const unsubscribeAuth = onMapsAuthFailure(() => {
+      console.warn('[MAP] map unavailable: key refused or paused');
+      setMapStatus('unavailable');
     });
-    L.control.attribution({ prefix: false }).addTo(map);
 
-    const resizeObserver = hasResizeObserver
-      ? new ResizeObserver(() => map.invalidateSize({ debounceMoveend: true }))
-      : null;
-    resizeObserver?.observe(container);
+    (async () => {
+      try {
+        const [mapsLib, markerLib, coreLib] = await Promise.all([
+          loadGoogleLibrary('maps'), loadGoogleLibrary('marker'), loadGoogleLibrary('core'),
+        ]);
+        if (cancelled) return;
 
-    const tileLayer = L.tileLayer(GOOGLE_MAPS_TILES.url, {
-      maxZoom: GOOGLE_MAPS_TILES.maxZoom,
-      subdomains: GOOGLE_MAPS_TILES.subdomains,
-      attribution: GOOGLE_MAPS_TILES.attribution,
-    }).addTo(map);
-    tileLayerRef.current = tileLayer;
-
-    const markersLayer = L.layerGroup().addTo(map);
-    markersLayerRef.current = markersLayer;
-    mapInstanceRef.current = map;
-
-    // Handle user manual pan event
-    const handleDragStart = () => {
-      if (!isProgrammaticMoveRef.current) {
-        hasUserPannedRef.current = true;
-        if (isFollowModeRef.current) {
-          setIsFollowMode(false);
+        // Back from a place's Details page: reopen exactly there (once); follow mode and the first GPS fix
+        // leave it alone. A theme switch keeps the current view. Otherwise the location, or all of India.
+        const kept = savedViewRef.current;
+        const restore = restoreViewRef.current;
+        returnView = null;
+        restoreViewRef.current = null;
+        if (restore) {
+          hasUserPannedRef.current = true;
+          hadCoordsRef.current = true;
+          fittedRef.current = true;
         }
-      }
-    };
+        const [lat0, lng0] = restore?.center || activeCoordsRef.current || INDIA_CENTER;
+        const center = kept?.center || { lat: lat0, lng: lng0 };
+        const zoom = kept?.zoom ?? restore?.zoom ?? (activeCoordsRef.current ? 15 : 5);
 
-    map.on('dragstart', handleDragStart);
+        const map = new mapsLib.Map(container, {
+          center,
+          zoom,
+          tilt: kept?.tilt ?? 0,
+          heading: kept?.heading ?? 0,
+          mapId: MAP_ID,
+          renderingType: mapsLib.RenderingType.VECTOR,
+          colorScheme: theme === 'dark' ? coreLib.ColorScheme.DARK : coreLib.ColorScheme.LIGHT,
+          mapTypeId: kept?.mapType || 'roadmap',
+          disableDefaultUI: true,
+          clickableIcons: false,
+          gestureHandling: 'greedy',
+          isFractionalZoomEnabled: true,
+          tiltInteractionEnabled: true,
+          headingInteractionEnabled: true,
+          keyboardShortcuts: true,
+        });
+        mapRef.current = map;
+        markerLibRef.current = markerLib;
+        // DEV only: lets the browser checks read zoom/tilt/center. Not in production builds.
+        if (import.meta.env.DEV) (window as unknown as { __vgMap?: google.maps.Map }).__vgMap = map;
+
+        listeners.push(map.addListener('dragstart', () => {
+          cancelFly();
+          hasUserPannedRef.current = true;
+          if (isFollowModeRef.current) setIsFollowMode(false);
+        }));
+        listeners.push(map.addListener('idle', () => {
+          const c = map.getCenter();
+          if (!c) return;
+          savedViewRef.current = {
+            center: { lat: c.lat(), lng: c.lng() }, zoom: map.getZoom() ?? zoom,
+            tilt: map.getTilt() ?? 0, heading: map.getHeading() ?? 0,
+            mapType: (map.getMapTypeId() as MapTypeKey) || 'roadmap',
+          };
+          setIs3D((map.getTilt() ?? 0) > 10);
+        }));
+        google.maps.event.addListenerOnce(map, 'tilesloaded', () => {
+          if (cancelled) return;
+          setIsVector(map.getRenderingType() === mapsLib.RenderingType.VECTOR);
+        });
+        setMapStatus('ready');
+        setMapGen((g) => g + 1);
+      } catch (err) {
+        if (cancelled) return;
+        console.warn('[MAP] map unavailable:', err instanceof MapUnavailableError ? err.code : 'error');
+        setMapStatus('unavailable');
+      }
+    })();
 
     return () => {
-      resizeObserver?.disconnect();
-      map.off('dragstart', handleDragStart);
-      markersLayer.clearLayers();
+      cancelled = true;
+      unsubscribeAuth();
+      listeners.forEach((l) => l.remove());
+      cancelFly();
+      clustererRef.current?.clearMarkers();
+      clustererRef.current?.setMap(null);
+      clustererRef.current = null;
+      records.forEach((r) => { r.marker.map = null; });
+      records.clear();
+      if (userMarkerRef.current) userMarkerRef.current.map = null;
+      userMarkerRef.current = null;
+      if (searchMarkerRef.current) searchMarkerRef.current.map = null;
       searchMarkerRef.current = null;
-      if (userMarkerRef.current) {
-        userMarkerRef.current.remove();
-        userMarkerRef.current = null;
-      }
-      map.remove();
-      mapInstanceRef.current = null;
-      markersLayerRef.current = null;
-      markersMapRef.current.clear();
-      tileLayerRef.current = null;
+      if (mapRef.current) google.maps.event.clearInstanceListeners(mapRef.current);
+      mapRef.current = null;
+      container.replaceChildren();
     };
-  }, []); // Run once on mount
+    // Re-created only when the theme changes; everything else updates the existing map in place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme]);
 
-  // Update User Radar Marker
+  // Latest coordinates for the (theme-keyed) init effect without re-running it.
+  const activeCoordsRef = useRef(activeCoords);
+  useEffect(() => { activeCoordsRef.current = activeCoords; }, [activeCoords]);
+
+  // Map type switch
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !activeCoords) return;
+    mapRef.current?.setMapTypeId(mapType);
+  }, [mapType, mapGen]);
+
+  // Pulsing user-location dot (one marker, moved in place)
+  useEffect(() => {
+    const map = mapRef.current;
+    const lib = markerLibRef.current;
+    if (!map || !lib || !activeCoords) return;
 
     const [lat, lng] = userLocation || activeCoords;
-
     if (!userMarkerRef.current) {
-      const userIcon = createUserLocationIcon();
-      const marker = L.marker([lat, lng], { icon: userIcon, zIndexOffset: 3000 }).addTo(map);
-      userMarkerRef.current = marker;
+      userMarkerRef.current = new lib.AdvancedMarkerElement({
+        map, position: { lat, lng }, content: createUserDot(), zIndex: 3000, title: 'Your location',
+      });
     } else {
-      if (!map.hasLayer(userMarkerRef.current)) {
-        userMarkerRef.current.addTo(map);
-      }
-      userMarkerRef.current.setLatLng([lat, lng]);
+      userMarkerRef.current.position = { lat, lng };
+      if (!userMarkerRef.current.map) userMarkerRef.current.map = map;
     }
 
     if (isFollowMode && !hasUserPannedRef.current) {
       isProgrammaticMoveRef.current = true;
-      map.panTo([lat, lng], { animate: true, duration: 0.8 });
+      map.panTo({ lat, lng });
       setTimeout(() => { isProgrammaticMoveRef.current = false; }, 850);
     }
-  }, [userLocation, activeCoords, isFollowMode]);
+  }, [userLocation, activeCoords, isFollowMode, mapGen]);
 
   // The map may start before GPS answers: move to the location the first time it arrives.
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !activeCoords || hadCoordsRef.current) return;
+    if (!mapRef.current || !activeCoords || hadCoordsRef.current) return;
     hadCoordsRef.current = true;
     if (searchResult) return; // don't pull the map away from a place the user searched for
-    isProgrammaticMoveRef.current = true;
-    map.flyTo(activeCoords, 15, { animate: true, duration: 1.2 });
-    setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1300);
-  }, [activeCoords, searchResult]);
+    flyTo(activeCoords[0], activeCoords[1], 15);
+  }, [activeCoords, searchResult, flyTo, mapGen]);
 
   // Suggestions while typing (debounced), India only, using the backend place search.
   useEffect(() => {
@@ -395,9 +470,9 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     return () => clearTimeout(timer);
   }, [searchQuery, searchResult]);
 
+  /** A chosen search result (or voice "X dikhao"): pin + fly there. Works without a map too (card + distance). */
   const selectSearchResult = useCallback((place: DestinationReference) => {
-    const map = mapInstanceRef.current;
-    if (!map || place.latitude == null || place.longitude == null) return;
+    if (place.latitude == null || place.longitude == null) return;
     searchSeqRef.current++; // ignore any search still in flight
     setSearchResult(place);
     setSearchQuery(place.name);
@@ -405,18 +480,24 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     setSearchMessage(null);
     setIsSearching(false);
     setSelectedPlace(null);
+    setSheetPlace(null);
     setIsFollowMode(false);
 
-    const coords: [number, number] = [place.latitude, place.longitude];
+    const map = mapRef.current;
+    const lib = markerLibRef.current;
+    if (!map || !lib) return;
+    const position = { lat: place.latitude, lng: place.longitude };
     if (searchMarkerRef.current) {
-      searchMarkerRef.current.setLatLng(coords);
+      searchMarkerRef.current.position = position;
+      searchMarkerRef.current.title = place.name;
+      if (!searchMarkerRef.current.map) searchMarkerRef.current.map = map;
     } else {
-      searchMarkerRef.current = L.marker(coords, { icon: createPoiIcon('sights', true), zIndexOffset: 2500 }).addTo(map);
+      searchMarkerRef.current = new lib.AdvancedMarkerElement({
+        map, position, content: createSearchPin(place.name), zIndex: 2500, title: place.name,
+      });
     }
-    isProgrammaticMoveRef.current = true;
-    map.flyTo(coords, 14, { animate: true, duration: 1.5 });
-    setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1600);
-  }, [setIsFollowMode]);
+    flyTo(place.latitude, place.longitude, 15);
+  }, [setIsFollowMode, flyTo]);
 
   const clearSearch = useCallback(() => {
     searchSeqRef.current++;
@@ -425,22 +506,18 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     setSearchMessage(null);
     setIsSearching(false);
     setSearchResult(null);
-    searchMarkerRef.current?.remove();
-    searchMarkerRef.current = null;
+    if (searchMarkerRef.current) searchMarkerRef.current.map = null;
 
-    const map = mapInstanceRef.current;
-    if (!map) return;
+    if (!mapRef.current) return;
     const home = userLocation || activeCoords;
     hasUserPannedRef.current = false;
-    isProgrammaticMoveRef.current = true;
     if (home) {
       setIsFollowMode(true);
-      map.flyTo(home, 15, { animate: true, duration: 1.2 });
+      flyTo(home[0], home[1], 15);
     } else {
-      map.flyTo(INDIA_CENTER, 5, { animate: true, duration: 1.2 });
+      flyTo(INDIA_CENTER[0], INDIA_CENTER[1], 5);
     }
-    setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1300);
-  }, [userLocation, activeCoords, setIsFollowMode]);
+  }, [userLocation, activeCoords, setIsFollowMode, flyTo]);
 
   const searchDistanceMeters = searchResult && userLocation && searchResult.latitude != null && searchResult.longitude != null
     ? calculateDistance(userLocation[0], userLocation[1], searchResult.latitude, searchResult.longitude)
@@ -467,301 +544,179 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
     return [...filteredPlaces].sort((a, b) => (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity));
   }, [filteredPlaces]);
 
-  // Selects a place from either a marker tap or a card tap, and flies the map to it
+  // Selects a place from a card tap, and flies the map to it
   const focusPlace = useCallback((place: PlaceItem) => {
     setSelectedPlace(place);
     setIsFollowMode(false);
-    const map = mapInstanceRef.current;
-    if (map) {
-      map.flyTo([place.latitude, place.longitude], 17, { animate: true, duration: 1.2 });
-    }
-  }, [setIsFollowMode]);
+    flyTo(place.latitude, place.longitude, 17);
+  }, [setIsFollowMode, flyTo]);
 
-  // When a marker is tapped (or a deep link focuses a place), scroll its card into view
+  // A pin tap also opens the slide-up sheet for that place.
+  useEffect(() => {
+    onPinTapRef.current = (place: PlaceItem) => {
+      focusPlace(place);
+      setSheetPlace(place);
+    };
+  }, [focusPlace]);
+
+  // When a place is selected, scroll its card into view
   useEffect(() => {
     if (!selectedPlace) return;
     cardRefs.current.get(selectedPlace.id)?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
   }, [selectedPlace]);
 
+  // ── Place markers: created once per place, kept across filter changes, clustered when crowded ──
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    const layer = markersLayerRef.current;
-    if (!map || !layer) return;
+    const map = mapRef.current;
+    const lib = markerLibRef.current;
+    if (!map || !lib) return;
+    const records = recordsRef.current;
+    const nextIds = new Set(filteredPlaces.map((p) => p.id));
 
-    const existingMap = markersMapRef.current;
-    const nextIds = new Set(filteredPlaces.map(p => p.id));
+    if (!clustererRef.current) {
+      clustererRef.current = new MarkerClusterer({
+        map,
+        markers: [],
+        algorithm: new SuperClusterAlgorithm({ radius: CLUSTER_OPTIONS.radius, maxZoom: CLUSTER_OPTIONS.maxZoom }),
+        renderer: {
+          render: ({ count, position }) => new lib.AdvancedMarkerElement({
+            position, content: createClusterBubble(count), zIndex: 1000 + count, title: `${count} places`,
+          }),
+        },
+        onClusterClick: (_e, cluster, m) => {
+          if (cluster.bounds) m.fitBounds(cluster.bounds, 80);
+        },
+      });
+    }
+    const clusterer = clustererRef.current;
 
-    // Remove obsolete markers
-    existingMap.forEach((marker, id) => {
-      if (!nextIds.has(id)) {
-        layer.removeLayer(marker);
-        existingMap.delete(id);
-      }
+    records.forEach((r, id) => {
+      if (!nextIds.has(id)) { r.marker.map = null; records.delete(id); }
+    });
+    let created = 0;
+    filteredPlaces.forEach((place) => {
+      const existing = records.get(place.id);
+      if (existing) { existing.place = place; return; }
+      const el = createPlacePin(pinStyle(place.category, place.name), place.name, created++ * 30);
+      const marker = new lib.AdvancedMarkerElement({
+        position: { lat: place.latitude, lng: place.longitude }, content: el, title: place.name, gmpClickable: true,
+      });
+      const record: MarkerRecord = { marker, el, place };
+      marker.addEventListener('gmp-click', () => onPinTapRef.current(record.place));
+      records.set(place.id, record);
     });
 
-    // Add or update markers
-    filteredPlaces.forEach(place => {
-      const isSelected = selectedPlace?.id === place.id;
-      const icon = createPoiIcon(place.category, isSelected);
+    const markers = filteredPlaces.map((p) => records.get(p.id)!.marker);
+    clusterer.clearMarkers(true);
+    if (shouldCluster(markers.length)) {
+      clusterer.addMarkers(markers);
+    } else {
+      clusterer.render();
+      markers.forEach((m) => { m.map = map; });
+    }
+  }, [filteredPlaces, mapGen]);
 
-      let marker = existingMap.get(place.id);
-      if (!marker) {
-        marker = L.marker([place.latitude, place.longitude], { icon });
-        marker.on('click', () => focusPlace(place));
-        layer.addLayer(marker);
-        existingMap.set(place.id, marker);
-      } else {
-        marker.setIcon(icon);
-      }
-    });
-  }, [filteredPlaces, selectedPlace, focusPlace]);
-
-  // ── BRIDGE LOGIC: Deep Link Target from Explore Mode ──
+  // Selected pin: larger and glowing (a class toggle; markers are not rebuilt)
   useEffect(() => {
-    if (mapFocusTarget && mapInstanceRef.current) {
-      const map = mapInstanceRef.current;
-      const { coordinates, id, name, category, zoom, address } = mapFocusTarget;
+    recordsRef.current.forEach((r, id) => {
+      const sel = selectedPlace?.id === id;
+      setPinSelected(r.el, sel);
+      r.marker.zIndex = sel ? 2000 : null;
+    });
+  }, [selectedPlace, filteredPlaces, mapGen]);
 
-      // Voice "Hawa Mahal dikhao": same as choosing a search result (pin + distance from the user).
-      if (mapFocusTarget.pin) {
-        selectSearchResult({
-          id: id || `voice-${coordinates[0]}-${coordinates[1]}`,
-          name: name || 'Place',
-          country: 'India',
-          latitude: coordinates[0],
-          longitude: coordinates[1],
-          ...(address ? { displayName: address } : {}),
-        } as DestinationReference);
-        setMapFocusTarget(null);
-        return;
-      }
+  // First load: fit every place (and the user) on screen once, unless the view was restored or a place is focused.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || fittedRef.current || filteredPlaces.length === 0 || searchResult || mapFocusTarget) return;
+    fittedRef.current = true;
+    const bounds = new google.maps.LatLngBounds();
+    filteredPlaces.forEach((p) => bounds.extend({ lat: p.latitude, lng: p.longitude }));
+    if (userLocation) bounds.extend({ lat: userLocation[0], lng: userLocation[1] });
+    map.fitBounds(bounds, FIT_PADDING);
+  }, [filteredPlaces, mapGen, searchResult, mapFocusTarget, userLocation]);
 
-      isProgrammaticMoveRef.current = true;
-      map.flyTo(coordinates, zoom || 17, { animate: true, duration: 1.5 });
-      setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1600);
+  // ── BRIDGE LOGIC: Deep Link Target from Explore Mode / voice ──
+  useEffect(() => {
+    if (!mapFocusTarget || mapStatus === 'loading') return;
+    const { coordinates, id, name, category, zoom, address } = mapFocusTarget;
 
-      const targetPlace: PlaceItem = {
-        id: id || `focus-${Date.now()}`,
-        name: name || 'Target Place',
-        category: (category || 'sights').toLowerCase(),
+    // Voice "Hawa Mahal dikhao": same as choosing a search result (pin + distance from the user).
+    if (mapFocusTarget.pin) {
+      selectSearchResult({
+        id: id || `voice-${coordinates[0]}-${coordinates[1]}`,
+        name: name || 'Place',
+        country: 'India',
         latitude: coordinates[0],
         longitude: coordinates[1],
-        address: address || 'Targeted location from Explore',
-        distanceMeters: calculateDistance(
-          (userLocation ? userLocation[0] : (activeCoords ? activeCoords[0] : coordinates[0])),
-          (userLocation ? userLocation[1] : (activeCoords ? activeCoords[1] : coordinates[1])),
-          coordinates[0],
-          coordinates[1]
-        ),
-      };
-
-      setSelectedPlace(targetPlace);
-      setIsFollowMode(false);
-
-      // Clear bridge state after focusing
-      const timer = setTimeout(() => {
-        setMapFocusTarget(null);
-      }, 2500);
-
-      return () => clearTimeout(timer);
+        ...(address ? { displayName: address } : {}),
+      } as DestinationReference);
+      setMapFocusTarget(null);
+      return;
     }
-  }, [mapFocusTarget, userLocation, activeCoords, setMapFocusTarget, setIsFollowMode, selectSearchResult]);
+
+    flyTo(coordinates[0], coordinates[1], zoom || 17);
+
+    const targetPlace: PlaceItem = {
+      id: id || `focus-${Date.now()}`,
+      name: name || 'Target Place',
+      category: (category || 'sights').toLowerCase(),
+      latitude: coordinates[0],
+      longitude: coordinates[1],
+      address: address || '',
+      distanceMeters: calculateDistance(
+        (userLocation ? userLocation[0] : (activeCoords ? activeCoords[0] : coordinates[0])),
+        (userLocation ? userLocation[1] : (activeCoords ? activeCoords[1] : coordinates[1])),
+        coordinates[0],
+        coordinates[1]
+      ),
+    };
+
+    setSelectedPlace(targetPlace);
+    setSheetPlace(targetPlace);
+    setIsFollowMode(false);
+
+    // Clear bridge state after focusing
+    const timer = setTimeout(() => {
+      setMapFocusTarget(null);
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, [mapFocusTarget, mapStatus, userLocation, activeCoords, setMapFocusTarget, setIsFollowMode, selectSearchResult, flyTo]);
 
   // Recenter handler
   const handleRecenter = () => {
-    const map = mapInstanceRef.current;
     const targetCoords = userLocation || activeCoords;
-    if (map && targetCoords) {
+    if (mapRef.current && targetCoords) {
       hasUserPannedRef.current = false;
       setIsFollowMode(true);
-      isProgrammaticMoveRef.current = true;
-      map.flyTo(targetCoords, 16, { animate: true, duration: 1.2 });
-      setTimeout(() => { isProgrammaticMoveRef.current = false; }, 1300);
+      flyTo(targetCoords[0], targetCoords[1], 16);
     }
   };
 
-  return (
-    <div
-      className="map-view relative isolate w-full min-h-0 flex-1 overflow-hidden bg-[#EFF1ED] dark:bg-zinc-950 select-none transition-colors"
-      data-map-search-result={Boolean(searchResult) || undefined}
-    >
-      {/* Map */}
-      <div ref={mapContainerRef} className="absolute inset-0 z-0" />
+  /** 3D: tilt the vector map (3D buildings show from about zoom 17) or flatten it again. */
+  const toggle3D = () => {
+    const map = mapRef.current;
+    if (!map || !isVector) return;
+    cancelFly();
+    const fromTilt = map.getTilt() ?? 0;
+    const toTilt = fromTilt > 10 ? 0 : 60;
+    const fromZoom = map.getZoom() ?? 15;
+    const toZoom = toTilt ? Math.max(fromZoom, 17) : fromZoom;
+    if (prefersReducedMotion()) { map.moveCamera({ tilt: toTilt, zoom: toZoom }); return; }
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / 700);
+      const e = easeInOutCubic(t);
+      map.moveCamera({ tilt: fromTilt + (toTilt - fromTilt) * e, zoom: fromZoom + (toZoom - fromZoom) * e });
+      if (t < 1) flyRafRef.current = requestAnimationFrame(step);
+      else flyRafRef.current = null;
+    };
+    flyRafRef.current = requestAnimationFrame(step);
+  };
 
-      {/* Top controls: back + recenter */}
-      <div className="map-overlay-controls absolute top-3 inset-x-3 z-[510] flex items-center justify-between pointer-events-none">
-        <button
-          type="button"
-          aria-label="Back to Explore"
-          onClick={() => navigateToExplore()}
-          className="pointer-events-auto min-h-[40px] px-3.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800 text-[#1F2522] dark:text-zinc-100 border border-gray-200 dark:border-zinc-800 shadow-sm font-semibold text-xs flex items-center gap-1.5 press-scale transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
-          <span className="hidden sm:inline">Explore</span>
-        </button>
-
-        <div className="pointer-events-auto relative flex-1 min-w-0 mx-2">
-          <div className="min-h-[40px] flex items-center gap-2 px-3 rounded-full bg-[var(--color-surface)] border border-[var(--color-text-tertiary)] shadow-sm outline-[var(--color-primary)] dark:outline-[var(--color-primary-light)] has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-3">
-            {isSearching
-              ? <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none text-[color:var(--color-primary)] dark:text-[color:var(--color-primary-light)]" aria-hidden="true" />
-              : <Search className="w-4 h-4 shrink-0 text-[color:var(--color-text-secondary)]" aria-hidden="true" />}
-            <span className="sr-only" role="status">{isSearching ? 'Searching for places…' : ''}</span>
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                if (searchResult) setSearchResult(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && searchSuggestions[0]) selectSearchResult(searchSuggestions[0]);
-                if (e.key === 'Escape') clearSearch();
-              }}
-              placeholder="Search a place in India"
-              aria-label="Search a place on the map"
-              className="flex-1 min-w-0 bg-transparent text-sm text-[color:var(--color-text-primary)] placeholder:text-[color:var(--color-text-secondary)] placeholder:opacity-100 caret-[var(--color-primary)] dark:caret-[var(--color-primary-light)] outline-none [&::-webkit-search-cancel-button]:hidden"
-            />
-            {(searchQuery || searchResult) && (
-              <button
-                type="button"
-                onClick={clearSearch}
-                aria-label="Clear search"
-                className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-[color:var(--color-text-secondary)] hover:bg-[var(--color-surface-elevated)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:focus-visible:outline-[var(--color-primary-light)]"
-              >
-                <X className="w-4 h-4" aria-hidden="true" />
-              </button>
-            )}
-          </div>
-
-          {(searchSuggestions.length > 0 || searchMessage) && !searchResult && (
-            <div className="absolute top-full left-0 right-0 mt-1.5 rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-lg overflow-hidden" role="listbox" aria-label="Search suggestions">
-              {searchSuggestions.map((s) => (
-                <button
-                  key={s.id || `${s.name}-${s.latitude}-${s.longitude}`}
-                  type="button"
-                  role="option"
-                  aria-selected={false}
-                  onClick={() => selectSearchResult(s)}
-                  className="w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b last:border-b-0 border-gray-100 dark:border-zinc-800 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:focus-visible:outline-[var(--color-primary-light)]"
-                >
-                  <MapPin className="w-4 h-4 mt-0.5 shrink-0 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-[#1F2522] dark:text-zinc-100 truncate">{s.name}</span>
-                    <span className="block text-[11px] text-[color:var(--color-text-secondary)] truncate">{(s as any).displayName || placeSubtitle(s)}</span>
-                  </span>
-                </button>
-              ))}
-              {searchMessage && (
-                <div className="px-3.5 py-3 text-xs text-[color:var(--color-text-secondary)]">{searchMessage}</div>
-              )}
-            </div>
-          )}
-        </div>
-
-        <button
-          type="button"
-          onClick={handleRecenter}
-          aria-label="Recenter on my location"
-          title="Recenter on my location"
-          className={`pointer-events-auto w-10 h-10 shrink-0 rounded-full border shadow-sm transition-colors press-scale flex items-center justify-center ${isFollowMode
-              ? 'bg-[#1F5A3F] dark:bg-emerald-600 text-white border-[#1F5A3F] dark:border-emerald-600'
-              : 'bg-white dark:bg-zinc-900 text-gray-600 dark:text-zinc-300 border-gray-200 dark:border-zinc-800 hover:border-[#1F5A3F]/40'
-            }`}
-        >
-          <Crosshair className="w-4 h-4" aria-hidden="true" />
-        </button>
-      </div>
-
-      {searchResult && (
-        <div className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] pointer-events-auto rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-md p-3.5 flex items-start gap-3 animate-fadeIn" role="status">
-          <div className="w-9 h-9 rounded-xl bg-[#E8F0EE] dark:bg-emerald-950 text-[#1F5A3F] dark:text-emerald-400 flex items-center justify-center shrink-0">
-            <MapPin className="w-4.5 h-4.5" aria-hidden="true" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold text-[#1F2522] dark:text-zinc-100 truncate">{searchResult.name}</div>
-            <div className="text-[11px] text-[color:var(--color-text-secondary)] truncate">{(searchResult as any).displayName || placeSubtitle(searchResult)}</div>
-            {searchDistanceMeters != null ? (
-              <div className="text-xs font-bold tabular-nums text-[color:var(--color-text-secondary)] mt-1">{formatSearchDistance(searchDistanceMeters)} from you <span className="font-normal">(straight line)</span></div>
-            ) : (
-              <div className="text-xs text-[color:var(--color-text-secondary)] mt-1">Turn on location to see distance</div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {!activeCoords && !searchResult && (
-        <div className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] pointer-events-none flex justify-center">
-          <span className="px-3 py-1.5 rounded-full bg-white/95 dark:bg-zinc-900/95 border border-gray-200 dark:border-zinc-800 text-[11px] font-medium text-gray-600 dark:text-zinc-300 shadow-sm">
-            Turn on location to see places near you, or search above
-          </span>
-        </div>
-      )}
-
-      {/* Category filter row */}
-      {!searchResult && activeCoords && (
-      <div
-        role="group"
-        aria-label="Filter places by category"
-        className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] flex items-center gap-2 overflow-x-auto no-scrollbar pointer-events-auto py-1"
-      >
-        {CATEGORY_FILTERS.map(({ key, label }) => {
-          const count = categoryCounts[key] ?? 0;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => {
-                // Instant client-side filter — NO redundant network requests!
-                setActiveCategory(key);
-              }}
-              aria-pressed={activeCategory === key}
-              className={`shrink-0 min-h-[32px] px-3.5 rounded-full text-xs font-semibold transition-all border shadow-sm flex items-center gap-1.5 press-scale ${activeCategory === key
-                  ? 'bg-[#1F5A3F] dark:bg-emerald-600 text-white border-[#1F5A3F] dark:border-emerald-600'
-                  : 'bg-white dark:bg-zinc-900 text-gray-600 dark:text-zinc-300 border-gray-200 dark:border-zinc-800 hover:text-gray-900 dark:hover:text-zinc-100'
-                }`}
-            >
-              <span>{label}</span>
-              {count > 0 && (
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                  activeCategory === key ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400'
-                }`}>
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-      )}
-
-      {/* Bottom sheet: scrollable row of place cards, nearest first */}
-      {sortedPlaces.length > 0 ? (
-        <div
-          ref={cardScrollRef}
-          className="map-places-overlay absolute inset-x-0 z-[500] flex gap-3 px-3 pb-1 snap-x snap-mandatory pointer-events-auto animate-slideUp"
-        >
-          {sortedPlaces.map((place) => {
-            const isSelected = selectedPlace?.id === place.id;
-            return (
-              <div
-                key={place.id}
-                ref={(el) => {
-                  if (el) cardRefs.current.set(place.id, el);
-                  else cardRefs.current.delete(place.id);
-                }}
-                role="button"
-                tabIndex={0}
-                onClick={() => focusPlace(place)}
-                onKeyDown={(e) => {
-                  if (e.target !== e.currentTarget) return;
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    focusPlace(place);
-                  }
-                }}
-                className={`w-[270px] sm:w-[300px] max-w-full shrink-0 snap-center rounded-3xl bg-white dark:bg-zinc-900 border p-4 shadow-lg space-y-3 cursor-pointer transition-colors ${isSelected ? 'border-[#1F5A3F] dark:border-emerald-500 ring-2 ring-[#1F5A3F]/20 dark:ring-emerald-500/20' : 'border-gray-200 dark:border-zinc-800'
-                  }`}
-              >
+  const renderCardBody = (place: PlaceItem) => (
+    <>
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 space-y-0.5">
                     <div className="flex items-center gap-2">
@@ -857,11 +812,7 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      const map = mapInstanceRef.current;
-                      if (map) {
-                        const c = map.getCenter();
-                        returnView = { center: [c.lat, c.lng], zoom: map.getZoom() };
-                      }
+                      saveReturnView();
                       navigate(`/details/${encodeURIComponent(place.id)}`, {
                         state: {
                           place: {
@@ -884,6 +835,261 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                     <ExternalLink className="w-3.5 h-3.5 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
                   </button>
                 </div>
+    </>
+  );
+
+  return (
+    <div
+      className="map-view relative isolate w-full min-h-0 flex-1 overflow-hidden bg-[#EFF1ED] dark:bg-zinc-950 select-none transition-colors"
+      data-map-search-result={Boolean(searchResult) || undefined}
+    >
+      {/* Map (Google Maps JavaScript API) */}
+      <div ref={mapContainerRef} className="absolute inset-0 z-0" aria-label="Map" role="region" />
+
+      {mapStatus === 'unavailable' && (
+        <div className="absolute inset-0 z-[1] flex items-center justify-center p-6 pointer-events-none">
+          <div className="max-w-xs text-center rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] shadow-sm p-5 space-y-2" role="status">
+            <MapPinOff className="w-6 h-6 mx-auto text-[color:var(--color-text-secondary)]" aria-hidden="true" />
+            <p className="text-sm font-semibold text-[color:var(--color-text-primary)]">Map isn&apos;t available right now</p>
+            <p className="text-xs text-[color:var(--color-text-secondary)]">Search and the places list still work.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Top controls: back + search + recenter */}
+      <div className="map-overlay-controls absolute top-3 inset-x-3 z-[510] flex items-center justify-between pointer-events-none">
+        <button
+          type="button"
+          aria-label="Back to Explore"
+          onClick={() => navigateToExplore()}
+          className="pointer-events-auto min-h-[40px] px-3.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-800 text-[#1F2522] dark:text-zinc-100 border border-gray-200 dark:border-zinc-800 shadow-sm font-semibold text-xs flex items-center gap-1.5 press-scale transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
+          <span className="hidden sm:inline">Explore</span>
+        </button>
+
+        <div className="pointer-events-auto relative flex-1 min-w-0 mx-2">
+          <div className="min-h-[40px] flex items-center gap-2 px-3 rounded-full bg-[var(--color-surface)] border border-[var(--color-text-tertiary)] shadow-sm outline-[var(--color-primary)] dark:outline-[var(--color-primary-light)] has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-3">
+            {isSearching
+              ? <Loader2 className="w-4 h-4 shrink-0 animate-spin motion-reduce:animate-none text-[color:var(--color-primary)] dark:text-[color:var(--color-primary-light)]" aria-hidden="true" />
+              : <Search className="w-4 h-4 shrink-0 text-[color:var(--color-text-secondary)]" aria-hidden="true" />}
+            <span className="sr-only" role="status">{isSearching ? 'Searching for places…' : ''}</span>
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (searchResult) setSearchResult(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && searchSuggestions[0]) selectSearchResult(searchSuggestions[0]);
+                if (e.key === 'Escape') clearSearch();
+              }}
+              placeholder="Search a place in India"
+              aria-label="Search a place on the map"
+              className="flex-1 min-w-0 bg-transparent text-sm text-[color:var(--color-text-primary)] placeholder:text-[color:var(--color-text-secondary)] placeholder:opacity-100 caret-[var(--color-primary)] dark:caret-[var(--color-primary-light)] outline-none [&::-webkit-search-cancel-button]:hidden"
+            />
+            {(searchQuery || searchResult) && (
+              <button
+                type="button"
+                onClick={clearSearch}
+                aria-label="Clear search"
+                className="w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-[color:var(--color-text-secondary)] hover:bg-[var(--color-surface-elevated)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:focus-visible:outline-[var(--color-primary-light)]"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+
+          {(searchSuggestions.length > 0 || searchMessage) && !searchResult && (
+            <div className="absolute top-full left-0 right-0 mt-1.5 rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-lg overflow-hidden" role="listbox" aria-label="Search suggestions">
+              {searchSuggestions.map((s) => (
+                <button
+                  key={s.id || `${s.name}-${s.latitude}-${s.longitude}`}
+                  type="button"
+                  role="option"
+                  aria-selected={false}
+                  onClick={() => selectSearchResult(s)}
+                  className="w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b last:border-b-0 border-gray-100 dark:border-zinc-800 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:focus-visible:outline-[var(--color-primary-light)]"
+                >
+                  <MapPin className="w-4 h-4 mt-0.5 shrink-0 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-[#1F2522] dark:text-zinc-100 truncate">{s.name}</span>
+                    <span className="block text-[11px] text-[color:var(--color-text-secondary)] truncate">{(s as any).displayName || placeSubtitle(s)}</span>
+                  </span>
+                </button>
+              ))}
+              {searchMessage && (
+                <div className="px-3.5 py-3 text-xs text-[color:var(--color-text-secondary)]">{searchMessage}</div>
+              )}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={handleRecenter}
+          aria-label="Recenter on my location"
+          title="Recenter on my location"
+          className={`pointer-events-auto w-10 h-10 shrink-0 rounded-full border shadow-sm transition-colors press-scale flex items-center justify-center ${isFollowMode
+              ? 'bg-[#1F5A3F] dark:bg-emerald-600 text-white border-[#1F5A3F] dark:border-emerald-600'
+              : 'bg-white dark:bg-zinc-900 text-gray-600 dark:text-zinc-300 border-gray-200 dark:border-zinc-800 hover:border-[#1F5A3F]/40'
+            }`}
+        >
+          <Crosshair className="w-4 h-4" aria-hidden="true" />
+        </button>
+      </div>
+
+      {/* Glass controls: map type switch + 3D (vector maps only) */}
+      {mapStatus === 'ready' && (
+        <div className="map-type-controls absolute right-3 z-[505] flex flex-col items-end gap-2 pointer-events-auto">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowTypes((v) => !v)}
+              aria-expanded={showTypes}
+              aria-label="Map type"
+              title="Map type"
+              className="map-glass w-10 h-10 rounded-full flex items-center justify-center text-[color:var(--color-text-primary)] press-scale"
+            >
+              <Layers className="w-4 h-4" aria-hidden="true" />
+            </button>
+            {showTypes && (
+              <div role="radiogroup" aria-label="Map type" className="map-glass absolute right-12 top-0 rounded-2xl p-1 flex gap-1">
+                {MAP_TYPES.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={mapType === t.key}
+                    onClick={() => { setMapType(t.key); setShowTypes(false); }}
+                    className={`min-h-[36px] px-3 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors ${mapType === t.key
+                      ? 'bg-[#1F5A3F] dark:bg-emerald-600 text-white'
+                      : 'text-[color:var(--color-text-primary)] hover:bg-[var(--color-surface-elevated)]'}`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {isVector && (
+            <button
+              type="button"
+              onClick={toggle3D}
+              aria-pressed={is3D}
+              aria-label={is3D ? 'Flat map' : '3D view'}
+              title={is3D ? 'Flat map' : '3D view'}
+              className={`map-glass w-10 h-10 rounded-full flex items-center justify-center press-scale ${is3D ? 'text-[#1F5A3F] dark:text-emerald-400' : 'text-[color:var(--color-text-primary)]'}`}
+            >
+              <Box className="w-4 h-4" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {searchResult && (
+        <div className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] pointer-events-auto rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-md p-3.5 flex items-start gap-3 animate-fadeIn" role="status">
+          <div className="w-9 h-9 rounded-xl bg-[#E8F0EE] dark:bg-emerald-950 text-[#1F5A3F] dark:text-emerald-400 flex items-center justify-center shrink-0">
+            <MapPin className="w-4.5 h-4.5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold text-[#1F2522] dark:text-zinc-100 truncate">{searchResult.name}</div>
+            <div className="text-[11px] text-[color:var(--color-text-secondary)] truncate">{(searchResult as any).displayName || placeSubtitle(searchResult)}</div>
+            {searchDistanceMeters != null ? (
+              <div className="text-xs font-bold tabular-nums text-[color:var(--color-text-secondary)] mt-1">{formatSearchDistance(searchDistanceMeters)} from you <span className="font-normal">(straight line)</span></div>
+            ) : (
+              <div className="text-xs text-[color:var(--color-text-secondary)] mt-1">Turn on location to see distance</div>
+            )}
+          </div>
+        </div>
+      )}
+      {!activeCoords && !searchResult && (
+        <div className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] pointer-events-none flex justify-center">
+          <span className="px-3 py-1.5 rounded-full bg-white/95 dark:bg-zinc-900/95 border border-gray-200 dark:border-zinc-800 text-[11px] font-medium text-gray-600 dark:text-zinc-300 shadow-sm">
+            Turn on location to see places near you, or search above
+          </span>
+        </div>
+      )}
+
+      {/* Category filter row */}
+      {!searchResult && activeCoords && (
+      <div
+        role="group"
+        aria-label="Filter places by category"
+        className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] flex items-center gap-2 overflow-x-auto no-scrollbar pointer-events-auto py-1"
+      >
+        {CATEGORY_FILTERS.map(({ key, label }) => {
+          const count = categoryCounts[key] ?? 0;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                // Instant client-side filter — NO redundant network requests!
+                setActiveCategory(key);
+              }}
+              aria-pressed={activeCategory === key}
+              className={`shrink-0 min-h-[32px] px-3.5 rounded-full text-xs font-semibold transition-all border shadow-sm flex items-center gap-1.5 press-scale ${activeCategory === key
+                  ? 'bg-[#1F5A3F] dark:bg-emerald-600 text-white border-[#1F5A3F] dark:border-emerald-600'
+                  : 'bg-white dark:bg-zinc-900 text-gray-600 dark:text-zinc-300 border-gray-200 dark:border-zinc-800 hover:text-gray-900 dark:hover:text-zinc-100'
+                }`}
+            >
+              <span>{label}</span>
+              {count > 0 && (
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  activeCategory === key ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400'
+                }`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      )}
+      {/* Selected place (pin tap): slides up over the card row */}
+      {sheetPlace ? (
+        <div className="map-places-overlay absolute inset-x-3 z-[506] pointer-events-auto" role="dialog" aria-label={sheetPlace.name}>
+          <div className="map-selected-sheet relative rounded-3xl bg-white dark:bg-zinc-900 border border-[#1F5A3F]/30 dark:border-emerald-800/50 p-4 shadow-2xl space-y-3">
+            <button
+              type="button"
+              onClick={() => setSheetPlace(null)}
+              aria-label="Close"
+              className="absolute -top-3 right-4 w-8 h-8 rounded-full bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 shadow flex items-center justify-center text-gray-600 dark:text-zinc-300 press-scale"
+            >
+              <X className="w-4 h-4" aria-hidden="true" />
+            </button>
+            {renderCardBody(sheetPlace)}
+          </div>
+        </div>
+      ) : sortedPlaces.length > 0 ? (
+        <div
+          ref={cardScrollRef}
+          className="map-places-overlay absolute inset-x-0 z-[500] flex gap-3 px-3 pb-1 snap-x snap-mandatory pointer-events-auto animate-slideUp"
+        >
+          {sortedPlaces.map((place) => {
+            const isSelected = selectedPlace?.id === place.id;
+            return (
+              <div
+                key={place.id}
+                ref={(el) => {
+                  if (el) cardRefs.current.set(place.id, el);
+                  else cardRefs.current.delete(place.id);
+                }}
+                role="button"
+                tabIndex={0}
+                onClick={() => focusPlace(place)}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    focusPlace(place);
+                  }
+                }}
+                className={`w-[270px] sm:w-[300px] max-w-full shrink-0 snap-center rounded-3xl bg-white dark:bg-zinc-900 border p-4 shadow-lg space-y-3 cursor-pointer transition-colors ${isSelected ? 'border-[#1F5A3F] dark:border-emerald-500 ring-2 ring-[#1F5A3F]/20 dark:ring-emerald-500/20' : 'border-gray-200 dark:border-zinc-800'
+                  }`}
+              >
+                {renderCardBody(place)}
               </div>
             );
           })}
@@ -918,24 +1124,8 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
           </div>
         </div>
       )}
-
       {/* Interactive Day Selection Modal */}
       <AddToItineraryModal {...itineraryAdd.modalProps} />
     </div>
   );
 };
-
-// Distance calculation helper (Haversine Formula)
-function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000; // Earth radius in meters
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-    Math.cos((lat2 * Math.PI) / 180) *
-    Math.sin(dLon / 2) *
-    Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return Math.round(R * c);
-}

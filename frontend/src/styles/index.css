@@ -76,10 +76,6 @@
   --itinerary-error-surface: #45232d;
 }
 
-/* Nighttime dark theme filter for Leaflet basemap tiles */
-.dark .leaflet-tile-pane {
-  filter: brightness(0.6) invert(1) contrast(3) hue-rotate(200deg) saturate(0.3) brightness(0.7);
-}
 
 /* ── Base ── */
 html {
@@ -393,30 +389,6 @@ h6 {
   animation: pulseGlow 2s infinite ease-in-out;
 }
 
-/* ── Leaflet Light Map Overrides ── */
-.leaflet-container {
-  background-color: #F0F2EF !important;
-  font-family: 'Inter', sans-serif !important;
-}
-
-.leaflet-popup-content-wrapper {
-  background: #FFFFFF !important;
-  color: #1F2522 !important;
-  border: 1px solid #D9DEDA !important;
-  border-radius: 16px !important;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08) !important;
-  padding: 4px !important;
-}
-
-/* ── Leaflet DivIcon Transparent Overrides ── */
-.leaflet-div-icon,
-.custom-user-marker,
-.custom-poi-marker,
-.custom-cluster-marker {
-  background: transparent !important;
-  border: none !important;
-}
-
 @keyframes livePulse {
   0% {
     transform: scale(1);
@@ -434,41 +406,6 @@ h6 {
   }
 }
 
-/* ── Dark-Matter Canvas styling for Map Tiles ── */
-.crazy-dark-tiles .leaflet-tile {
-  filter: brightness(0.6) invert(1) contrast(2.4) hue-rotate(200deg) saturate(0.35) brightness(0.75) !important;
-  transition: filter 0.3s ease;
-}
-
-.crazy-dark-tiles {
-  background-color: #090f1d !important;
-}
-
-/* User Location Radar Pulse */
-@keyframes radar-ping {
-  0% {
-    transform: scale(0.6);
-    opacity: 0.9;
-  }
-
-  100% {
-    transform: scale(2.8);
-    opacity: 0;
-  }
-}
-
-.user-radar-ring {
-  position: absolute;
-  top: -6px;
-  left: -6px;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(16, 185, 129, 0.6) 0%, rgba(16, 185, 129, 0) 75%);
-  border: 1.5px solid rgba(52, 211, 153, 0.8);
-  animation: radar-ping 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
-  pointer-events: none;
-}
 
 /* Glow Marker Shadows */
 .poi-marker-glow {

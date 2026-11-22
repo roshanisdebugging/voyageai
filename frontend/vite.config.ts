@@ -28,8 +28,8 @@ export default defineConfig({
             if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
               return 'vendor-react';
             }
-            if (id.includes('leaflet')) {
-              return 'vendor-leaflet';
+            if (/@googlemaps|supercluster|kdbush|fast-equals/.test(id)) {
+              return 'vendor-maps'; // only the map page loads it
             }
             if (id.includes('lucide-react')) {
               return 'vendor-icons';

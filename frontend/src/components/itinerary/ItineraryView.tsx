@@ -7,6 +7,7 @@ import { getApiBaseUrl, getAuthHeaders } from '../../config/apiConfig';
 import { useToast } from '../common/UndoToast';
 import { isPastTrip } from '../../features/trip/tripRepository';
 import { ItineraryAiDialog } from './ItineraryAiDialog';
+import { Trip3DFlyoverButton } from '../map/Trip3DFlyover';
 
 const aiActionClassName =
   'flex min-h-11 items-center gap-1.5 rounded-full border border-[#355F58]/30 bg-[#E8F0EE] px-3 py-1.5 text-xs font-bold text-(--color-primary) press-scale hover:bg-[#D4E4E0] max-sm:px-3.5 dark:border-emerald-800 dark:bg-[#12332B] dark:hover:bg-[#194437]';
@@ -410,6 +411,8 @@ export const ItineraryView: React.FC = () => {
         <p className="text-xs text-[var(--color-text-secondary)] font-medium">
           {days.length} Days Detailed AI Itinerary{travellerCount > 0 ? ` · ${travellerCount} Travelers` : ''}
         </p>
+        {/* Optional, VITE_MAP_3D=true only */}
+        <Trip3DFlyoverButton />
       </div>
 
       {recommendedTransport.length > 0 && (

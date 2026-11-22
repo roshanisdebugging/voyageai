@@ -1,5 +1,6 @@
 .map-view {
-  --map-attribution-height: 1.25rem;
+  /* Google draws its own logo/attribution at the bottom edge; cards sit just above it. */
+  --map-attribution-height: 1.5rem;
   --map-controls-clearance: 6.5rem;
 }
 
@@ -7,13 +8,6 @@
   --map-controls-clearance: 9rem;
 }
 
-.map-view .leaflet-container .leaflet-control-attribution {
-  display: flex;
-  align-items: center;
-  min-height: var(--map-attribution-height);
-  background: var(--color-surface);
-  color: var(--color-text-secondary);
-}
 
 .map-overlay-controls > button {
   min-width: 2.75rem;
@@ -69,4 +63,150 @@
     inset-inline-end: 0.5rem;
     inline-size: var(--map-places-width);
   }
+}
+
+/* ── Google advanced-marker pins (mapPins.ts) ── */
+.vg-pin {
+  --pin-color: #1F5A3F;
+  --pin-ink: #1F5A3F;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform-origin: 50% 100%;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), filter 0.22s ease;
+  cursor: pointer;
+  will-change: transform;
+}
+.vg-pin__badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  line-height: 1;
+  background: #fff;
+  border: 2px solid var(--pin-color);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.22);
+}
+.vg-pin__tip {
+  width: 10px;
+  height: 10px;
+  margin-top: -6px;
+  background: #fff;
+  border-right: 2px solid var(--pin-color);
+  border-bottom: 2px solid var(--pin-color);
+  transform: rotate(45deg);
+}
+.vg-pin--selected {
+  transform: scale(1.32);
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--pin-color) 70%, transparent));
+  z-index: 2;
+}
+.vg-pin--selected .vg-pin__badge,
+.vg-pin--selected .vg-pin__tip {
+  background: var(--pin-color);
+  border-color: #fff;
+}
+.vg-pin--drop {
+  animation: vg-drop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes vg-drop {
+  0% { transform: translateY(-28px) scale(0.6); opacity: 0; }
+  60% { opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+.vg-pin--selected.vg-pin--drop { animation: none; }
+
+.vg-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  font-weight: 800;
+  font-size: 13px;
+  color: #fff;
+  background: radial-gradient(circle at 35% 30%, #2E7A57, #1F5A3F 70%);
+  border: 3px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 5px rgba(31, 90, 63, 0.18), 0 4px 12px rgba(15, 23, 42, 0.25);
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+.vg-cluster:hover { transform: scale(1.06); }
+
+.vg-user {
+  position: relative;
+  width: 22px;
+  height: 22px;
+}
+.vg-user__dot {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: #1A73E8;
+  border: 3px solid #fff;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.3);
+}
+.vg-user__pulse {
+  position: absolute;
+  inset: -14px;
+  border-radius: 9999px;
+  background: rgba(26, 115, 232, 0.25);
+  animation: vg-pulse 2s ease-out infinite;
+}
+@keyframes vg-pulse {
+  0% { transform: scale(0.4); opacity: 0.9; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+.vg-search {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform-origin: 50% 100%;
+  filter: drop-shadow(0 0 12px rgba(220, 38, 38, 0.55));
+}
+.vg-search__head {
+  width: 30px;
+  height: 30px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  background: #DC2626;
+  border: 3px solid #fff;
+}
+.vg-search__tip {
+  width: 6px;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+/* Glass controls over the map (map type switch, 3D toggle) */
+.map-glass {
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.14);
+}
+
+/* Selected-place sheet slides up over the card row */
+.map-selected-sheet {
+  animation: vg-sheet-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes vg-sheet-up {
+  from { transform: translateY(110%); opacity: 0.4; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vg-pin--drop, .map-selected-sheet, .vg-user__pulse { animation: none; }
+  .vg-pin, .vg-cluster { transition: none; }
+}
+
+/* Map type + 3D controls: right edge, below the search bar and chips (or the search result card) */
+.map-type-controls {
+  top: calc(var(--map-controls-clearance) + 0.25rem);
 }
