@@ -495,6 +495,66 @@ async def autocomplete_places(
     return []
 
 
+TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+# No photos, reviews, ratings or hours: just what a named lookup needs.
+TEXT_SEARCH_FIELDS = "places.id,places.displayName,places.formattedAddress,places.location,places.types"
+TEXT_SEARCH_CACHE_VERSION = "v1"
+TEXT_SEARCH_PAGE = 6
+
+
+async def text_search_places(query: str, counter: Optional[GoogleCallCounter] = None) -> List[Dict[str, Any]]:
+    """
+    Named lookup with ONE Places Text Search (New) call (regionCode IN): name, address, coordinates and types for
+    up to 6 places. Cached 1 hour like autocomplete. Raises GoogleQuotaError on a quota/paused error; other
+    failures return [].
+    """
+    clean_q = (query or "").strip()
+    if len(clean_q) < 2:
+        return []
+    cache_key = f"places:textsearch:{TEXT_SEARCH_CACHE_VERSION}:{clean_q.lower()}"
+    cached_val = await cache.get(cache_key)
+    if cached_val is not None:
+        return cached_val
+    if not GOOGLE_MAPS_SERVER_KEY:
+        return []
+    if await is_paused("textsearch"):
+        raise GoogleQuotaError("textsearch")
+    headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY,
+               "X-Goog-FieldMask": TEXT_SEARCH_FIELDS}
+    payload = {"textQuery": clean_q, "regionCode": "IN", "languageCode": "en", "pageSize": TEXT_SEARCH_PAGE}
+    try:
+        _count(counter)
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            res = await client.post(TEXT_SEARCH_URL, headers=headers, json=payload)
+        if is_quota_error(res):
+            await mark_paused("textsearch", res)
+            raise GoogleQuotaError("textsearch")
+        if res.status_code != 200:
+            print(f"[GOOGLE TEXT SEARCH] HTTP {res.status_code}", flush=True)
+            return []
+        results: List[Dict[str, Any]] = []
+        for p in (res.json() or {}).get("places") or []:
+            loc = p.get("location") or {}
+            name = (p.get("displayName") or {}).get("text")
+            if not name or loc.get("latitude") is None or loc.get("longitude") is None:
+                continue   # never invent a name or a position
+            address = p.get("formattedAddress") or ""
+            results.append({
+                "id": p.get("id"), "place_id": p.get("id"), "name": name,
+                "city": address, "region": address, "country": "India",
+                "latitude": loc["latitude"], "longitude": loc["longitude"],
+                "displayName": address or name, "display_name": address or name,
+                "types": [t for t in (p.get("types") or []) if isinstance(t, str)],
+            })
+        await cache.set(cache_key, results, ttl_seconds=3600)
+        return results
+    except GoogleQuotaError:
+        raise
+    except Exception as e:
+        print(f"[GOOGLE TEXT SEARCH EXCEPTION] {type(e).__name__}", flush=True)
+        return []
+
+
 # Google place IDs are URL-safe base64-like strings. Anything else (slashes, our own "poi-..." IDs) is rejected.
 PLACE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,300}$")
 # BASIC: what address search needs (cheap). FULL: what the place details page shows (one call per place).

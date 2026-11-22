@@ -15,7 +15,8 @@ from models_trip import TripModel
 from models_itinerary import ItineraryModel, ItineraryDayModel, ItineraryActivityModel
 from models_package import TripStayModel, TripTransportModel, TripExpenseModel
 from media_service import media_service
-from places import (MAP_SEARCH_UNAVAILABLE_MESSAGE, MapSearchUnavailable, search_places, search_nearby_restaurants,
+from places import (MAP_SEARCH_UNAVAILABLE_MESSAGE, MapSearchUnavailable, resolve_place, search_places, suggest_places,
+                    search_nearby_restaurants,
                     validate_destination_payload)
 import auth
 from trip_lifecycle import create_trip_for_user, serialize_trip, close_finished_trips, TripValidationError
@@ -942,7 +943,7 @@ async def websocket_location_endpoint(
 WS_PUBLIC_ACTIONS = {
     "auth:login", "auth:session", "auth:logout",
     "location:update", "location:latest", "location:search",
-    "places:search", "places:nearby",
+    "places:search", "places:suggest", "places:resolve", "places:nearby",
     "tour_guide:get_nearby", "tour_guide:visit",
 }
 
@@ -1071,6 +1072,24 @@ async def process_ws_action(
             return await run_in_threadpool(search_places, q)
         except MapSearchUnavailable:
             raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
+
+    elif reqname == "places:suggest":
+        # Typing: autocomplete only (3+ characters), no Place Details.
+        q = data.get("query") or data.get("q") or ""
+        try:
+            return await run_in_threadpool(suggest_places, q)
+        except MapSearchUnavailable:
+            raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
+
+    elif reqname == "places:resolve":
+        # The suggestion the user picked: one Place Details call for that place only.
+        try:
+            place = await run_in_threadpool(resolve_place, str(data.get("place_id") or data.get("placeId") or ""))
+        except MapSearchUnavailable:
+            raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
+        if not place:
+            raise HTTPException(status_code=404, detail="Place not found.")
+        return place
 
     elif reqname == "places:nearby":
         q = data.get("query") or data.get("q") or ""

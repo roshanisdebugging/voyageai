@@ -1,10 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Search, MapPin, Loader2, AlertCircle, X } from 'lucide-react';
 import type { DestinationReference } from '../types';
-import { wsClient } from '../../../services/wsClient';
-import { memoize } from '../../../services/memoCache';
-import { CACHE_TTL } from '../../../store/cache/cacheTypes';
 import { mapSearchErrorMessage } from '../../../utils/mapSearchError';
+import { resolvePlace, suggestPlaces, SUGGEST_MIN_CHARS, type PlaceSuggestion } from '../../../services/placesApi';
 import { GoogleMapsAttribution } from '../../../components/common/GoogleMapsAttribution';
 
 /** India-only place search used for the destination and the starting city. */
@@ -32,12 +30,14 @@ interface Props {
 
 export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, value, onChange, optional }) => {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<DestinationReference[]>([]);
+  const [results, setResults] = useState<PlaceSuggestion[]>([]);
+  const [picking, setPicking] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (query.trim().length < 2) {
+    // Suggestions while typing: autocomplete only (3+ characters); coordinates only for the one picked.
+    if (query.trim().length < SUGGEST_MIN_CHARS) {
       setResults([]);
       setIsSearching(false);
       setError(null);
@@ -47,18 +47,12 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
     setError(null);
     const timer = setTimeout(async () => {
       try {
-        const data: DestinationReference[] = await memoize(
-          `places:search:${query.trim().toLowerCase()}`,
-          CACHE_TTL.placesSearch,
-          () => wsClient.sendRequest('places:search', { query: query.trim() }),
-        );
-        const india = Array.isArray(data) ? data.filter(isInIndia) : [];
-        if (Array.isArray(data) && data.length > 0 && india.length === 0) {
-          setError('Cruiser supports places in India only. Pick a city or region in India.');
-        } else if (india.length === 0) {
+        const data = await suggestPlaces(query);
+        const list = Array.isArray(data) ? data : [];
+        if (list.length === 0) {
           setError('No places found in India. Try a nearby city or a more specific name.');
         }
-        setResults(india);
+        setResults(list);
       } catch (err) {
         setError(mapSearchErrorMessage(err, "Couldn't search places. Check your connection and try again."));
         setResults([]);
@@ -118,18 +112,32 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
               ) : (
                 results.map(result => (
                   <button
-                    key={result.id || result.displayName || `${result.name}-${result.latitude}`}
+                    key={result.placeId}
                     type="button"
-                    onClick={() => {
-                      onChange(result);
-                      setQuery('');
+                    disabled={picking !== null}
+                    onClick={async () => {
+                      // One Place Details call, for this place only.
+                      setPicking(result.placeId);
+                      try {
+                        const place = await resolvePlace(result.placeId);
+                        if (place && isInIndia(place)) {
+                          onChange({ ...place, name: place.name || result.name });
+                          setQuery('');
+                        } else {
+                          setError('Cruiser supports places in India only. Pick a city or region in India.');
+                        }
+                      } catch (err) {
+                        setError(mapSearchErrorMessage(err, "Couldn't search places. Check your connection and try again."));
+                      } finally {
+                        setPicking(null);
+                      }
                     }}
                     className="w-full p-3 rounded-2xl border text-left flex items-start gap-3 bg-slate-900/90 border-slate-800 text-slate-300 hover:border-teal-500/40 active:scale-[0.98] transition-all"
                   >
                     <MapPin className="w-5 h-5 shrink-0 mt-0.5 text-slate-500" />
                     <div className="min-w-0 flex-1">
                       <div className="font-bold text-sm text-white">{result.name}</div>
-                      <div className="text-[11px] text-slate-400 truncate">{placeSubtitle(result)}</div>
+                      <div className="text-[11px] text-slate-400 truncate">{result.secondary}</div>
                     </div>
                   </button>
                 ))

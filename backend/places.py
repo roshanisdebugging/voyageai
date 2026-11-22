@@ -24,7 +24,7 @@ def _run_sync(coro):
 
 # ---------------- place search (Google only): one function for voice, the map search box and trip destinations
 
-MAX_SUGGESTIONS = 6          # autocomplete suggestions resolved with Place Details (unchanged: 1 + up to 6 calls)
+MAX_SUGGESTIONS = 6          # suggestions shown while typing (autocomplete only; Details only for the one picked)
 MAX_CHOICES = 3              # an ambiguous search offers at most 3 places
 DUPLICATE_RADIUS_M = 300     # same name this close = the same place
 
@@ -181,9 +181,10 @@ def rank_places(query: str, results: List[Dict[str, Any]]) -> PlaceSearch:
 
 def search_places_detailed(query: str) -> PlaceSearch:
     """
-    THE place search (Google Places Autocomplete (New) + Place Details (New), nothing else): 1 autocomplete call
-    plus up to 6 detail calls, each cached. Used by voice look-ups, the map search box and trip destination search.
-    On a Google quota/paused error it stops at once (no retry, no other provider) and sets unavailable=True.
+    THE named lookup (voice "kahan hai" / "dikhao", map search on Enter, anything calling search_places):
+    ONE Places Text Search (New) call, cached 1 hour, then landmark-first ranking and the same-name merge.
+    Typing suggestions use suggest_places (autocomplete only); a picked suggestion uses resolve_place (one
+    Place Details call). Google only. On a quota/paused error it stops at once and sets unavailable=True.
     Logs the Google call count only (never the query or the key).
     """
     if not query or len(query.strip()) < 2:
@@ -191,42 +192,12 @@ def search_places_detailed(query: str) -> PlaceSearch:
 
     clean_query = query.strip()
     started = time.perf_counter()
-    from services.google_maps_service import (GoogleCallCounter, GoogleQuotaError, autocomplete_places,
-                                              get_place_details, is_paused)
+    from services.google_maps_service import GoogleCallCounter, GoogleQuotaError, text_search_places
     counter = GoogleCallCounter()
-
-    async def _google_resolve():
-        if await is_paused("autocomplete", "details"):   # a quota error earlier today: no request at all
-            raise GoogleQuotaError("paused")
-        suggs = await autocomplete_places(clean_query, counter=counter)
-        if not suggs:
-            return []
-        suggs = [s for s in suggs[:MAX_SUGGESTIONS] if s.get("placeId")]
-        details = await asyncio.gather(*[get_place_details(s["placeId"], counter=counter) for s in suggs],
-                                       return_exceptions=True)
-        if any(isinstance(d, GoogleQuotaError) for d in details):
-            raise GoogleQuotaError("details")
-        results = []
-        for s, d in zip(suggs, details):
-            if isinstance(d, dict) and d.get("latitude") is not None and d.get("longitude") is not None:
-                results.append({
-                    "id": s.get("placeId") or d.get("id"),
-                    "place_id": s.get("placeId") or d.get("id"),
-                    "name": s.get("name") or d.get("name") or clean_query,
-                    "city": s.get("city") or d.get("name"),
-                    "region": s.get("city"),
-                    "country": "India",
-                    "latitude": d["latitude"],
-                    "longitude": d["longitude"],
-                    "displayName": s.get("displayName") or d.get("address") or s.get("name"),
-                    "display_name": s.get("displayName") or d.get("address") or s.get("name"),
-                    "types": list(s.get("types") or []),   # from autocomplete (no extra call, no extra field)
-                })
-        return results
 
     out = PlaceSearch()
     try:
-        out = rank_places(clean_query, _run_sync(_google_resolve()))
+        out = rank_places(clean_query, _run_sync(text_search_places(clean_query, counter=counter)))
     except GoogleQuotaError:
         out = PlaceSearch(unavailable=True)
     except Exception as e:
@@ -235,6 +206,48 @@ def search_places_detailed(query: str) -> PlaceSearch:
     print(f"[PLACES SEARCH] google_calls={out.google_calls} results={len(out.results)} ambiguous={out.ambiguous} "
           f"unavailable={out.unavailable} ms={int((time.perf_counter() - started) * 1000)}", flush=True)
     return out
+
+
+SUGGEST_MIN_CHARS = 3
+
+
+def suggest_places(query: str) -> List[Dict[str, Any]]:
+    """Suggestions while typing: ONE autocomplete call (cached), no coordinates and no Place Details.
+    [{placeId, name, secondary, types}]. Raises MapSearchUnavailable on a quota/paused error."""
+    clean = (query or "").strip()
+    if len(clean) < SUGGEST_MIN_CHARS:
+        return []
+    from services.google_maps_service import GoogleCallCounter, GoogleQuotaError, autocomplete_places
+    counter = GoogleCallCounter()
+    try:
+        suggs = _run_sync(autocomplete_places(clean, counter=counter))
+    except GoogleQuotaError:
+        raise MapSearchUnavailable(counter.count)
+    print(f"[PLACES SUGGEST] google_calls={counter.count} results={len(suggs)}", flush=True)
+    return [{"placeId": s["placeId"], "id": s["placeId"], "name": s.get("name") or s.get("displayName") or "",
+             "secondary": s.get("city") or "", "types": list(s.get("types") or [])}
+            for s in suggs[:MAX_SUGGESTIONS] if s.get("placeId") and (s.get("name") or s.get("displayName"))]
+
+
+def resolve_place(place_id: str) -> Optional[Dict[str, Any]]:
+    """The suggestion the user picked: ONE Place Details call (cached) for that place only.
+    A destination-shaped dict, or None (bad ID, not found, outside India). Raises MapSearchUnavailable on quota."""
+    from services.google_maps_service import GoogleCallCounter, GoogleQuotaError, get_place_details, is_valid_place_id
+    pid = (place_id or "").strip()
+    if not is_valid_place_id(pid):
+        return None
+    counter = GoogleCallCounter()
+    try:
+        d = _run_sync(get_place_details(pid, counter=counter))
+    except GoogleQuotaError:
+        raise MapSearchUnavailable(counter.count)
+    print(f"[PLACES RESOLVE] google_calls={counter.count} found={bool(d)}", flush=True)
+    if not d or d.get("latitude") is None or not in_india(d.get("latitude"), d.get("longitude")):
+        return None
+    address = d.get("address") or ""
+    return {"id": d.get("id") or pid, "place_id": d.get("id") or pid, "name": d.get("name") or "",
+            "city": address, "region": address, "country": "India",
+            "latitude": d["latitude"], "longitude": d["longitude"], "displayName": address or d.get("name") or ""}
 
 
 def search_places(query: str) -> PlaceResults:

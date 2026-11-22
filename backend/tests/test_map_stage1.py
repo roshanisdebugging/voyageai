@@ -90,8 +90,9 @@ QUOTA_403 = (403, {"error": {"code": 403, "status": "PERMISSION_DENIED", "messag
 
 
 class FakeGoogle:
-    """Answers autocomplete by the query text and details by place ID. Records every request."""
+    """Answers Text Search and autocomplete by the query text, details by place ID. Records every request."""
     calls = []
+    textsearch = {}     # query -> (status, body)
     autocomplete = {}   # query -> (status, body)
     details = {}        # place_id -> (status, body)
     geocode = []        # queue of (status, body) for GET geocode / POST searchNearby
@@ -107,6 +108,8 @@ class FakeGoogle:
 
     async def post(self, url, headers=None, json=None):
         FakeGoogle.calls.append(("POST", url, headers, json))
+        if url.endswith("places:searchText"):
+            return resp(*FakeGoogle.textsearch.get(json["textQuery"], (200, {})))
         if url.endswith("places:autocomplete"):
             return resp(*FakeGoogle.autocomplete.get(json["input"], (200, {})))
         return resp(*(FakeGoogle.geocode.pop(0) if FakeGoogle.geocode else (500, {})))
@@ -131,6 +134,9 @@ def detail(pid, name, lat, lng):
 def setup(query, items):
     """items: (pid, name, secondary, types, lat, lng). Google's order is the list order."""
     FakeGoogle.autocomplete[query] = (200, {"suggestions": [suggestion(p, n, s, t) for p, n, s, t, _, _ in items]})
+    FakeGoogle.textsearch[query] = (200, {"places": [
+        {"id": p, "displayName": {"text": n}, "formattedAddress": f"{n}, {s}", "location": {"latitude": la, "longitude": ln},
+         "types": t} for p, n, s, t, la, ln in items]})
     for p, n, _, _, la, ln in items:
         FakeGoogle.details[p] = detail(p, n, la, ln)
 
@@ -168,10 +174,10 @@ setup("Eiffel", [
 # More than 6 suggestions: details only for the first 6.
 setup("Jaipur", [(f"ChIJjaipur_place_{i:03d}", f"Jaipur place {i}", "Jaipur, Rajasthan, India", ["locality", "political"], 26.9, 75.8)
                  for i in range(8)])
-FakeGoogle.autocomplete["xyzzy nothing"] = (200, {})
-FakeGoogle.autocomplete["quota please"] = QUOTA_429
-FakeGoogle.autocomplete["paused please"] = QUOTA_403
-FakeGoogle.autocomplete["minute please"] = QUOTA_MINUTE
+for q, answer in (("xyzzy nothing", (200, {})), ("quota please", QUOTA_429), ("paused please", QUOTA_403),
+                  ("minute please", QUOTA_MINUTE)):
+    FakeGoogle.autocomplete[q] = answer
+    FakeGoogle.textsearch[q] = answer
 setup("details quota", [("ChIJdetails_quota_01", "Some Fort", "Jaipur, Rajasthan, India", MONUMENT, 26.9, 75.8)])
 FakeGoogle.details["ChIJdetails_quota_01"] = QUOTA_429
 
@@ -185,9 +191,12 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
           and found.results[0]["kind"] == "landmark", [r["name"] for r in found.results])
     check("shop is kept, but last", found.results[-1]["kind"] == "shop" and len(found.results) == 2)
     check("clear landmark -> not ambiguous", found.ambiguous is False)
-    check("Google calls = 1 autocomplete + 2 details", found.google_calls == 3 and len(FakeGoogle.calls) == 3, found.google_calls)
-    check("types come from autocomplete; details field mask unchanged",
-          all(c[2].get("X-Goog-FieldMask") == gms.PLACE_FIELDS_BASIC for c in FakeGoogle.calls if c[0] == "GET"))
+    check("named lookup = exactly 1 Google call (Text Search), no Details", found.google_calls == 1 and len(FakeGoogle.calls) == 1
+          and FakeGoogle.calls[0][1].endswith("places:searchText"), (found.google_calls, [c[1] for c in FakeGoogle.calls]))
+    ts = FakeGoogle.calls[0]
+    check("Text Search: regionCode IN, field mask id/name/address/location/types only (no photos, reviews)",
+          ts[3]["regionCode"] == "IN" and ts[2]["X-Goog-FieldMask"] == "places.id,places.displayName,places.formattedAddress,places.location,places.types",
+          ts[2]["X-Goog-FieldMask"])
 
     reset()
     found = places.search_places_detailed("4 minar")
@@ -211,7 +220,7 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
 
     reset()
     found = places.search_places_detailed("Jaipur")
-    check("8 suggestions -> 1 autocomplete + 6 details (unchanged)", found.google_calls == 7 and len(FakeGoogle.calls) == 7, found.google_calls)
+    check("8 places found -> still 1 Google call", found.google_calls == 1 and len(FakeGoogle.calls) == 1, found.google_calls)
     again = places.search_places_detailed("Jaipur")
     check("cached search -> 0 Google calls, same order", again.google_calls == 0
           and [r["id"] for r in again.results] == [r["id"] for r in found.results])
@@ -262,22 +271,48 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
     again = places.search_places_detailed("Charminar")
     check("after a quota error the next search calls Google 0 times", again.unavailable and again.google_calls == 0
           and len(FakeGoogle.calls) == n)
-    ttl = gms.cache.ttl.get("gmaps:paused:autocomplete", 0)
+    ttl = gms.cache.ttl.get("gmaps:paused:textsearch", 0)
     check("daily limit -> paused until Google's reset (midnight Pacific)", 60 < ttl <= 86400 + 60, ttl)
     reset()
     places.search_places_detailed("minute please")
-    check("per-minute limit -> paused 60 s only", gms.cache.ttl.get("gmaps:paused:autocomplete") == 60, gms.cache.ttl)
+    check("per-minute limit -> paused 60 s only", gms.cache.ttl.get("gmaps:paused:textsearch") == 60, gms.cache.ttl)
+
+    # ---------------- typing suggestions (autocomplete only) and picking one (one Place Details call)
     reset()
-    found = places.search_places_detailed("details quota")
-    check("quota on Place Details -> unavailable", found.unavailable and found.results == [])
-    check("Place Details paused too", gms.cache.d.get("gmaps:paused:details") is True)
+    sugg = places.suggest_places("Charminar")
+    check("suggestions while typing: 1 autocomplete call, no Details, no coordinates",
+          len(FakeGoogle.calls) == 1 and FakeGoogle.calls[0][1].endswith("places:autocomplete")
+          and sugg and all("latitude" not in s for s in sugg) and sugg[1]["name"] == "Charminar", [c[1] for c in FakeGoogle.calls])
+    reset()
+    check("fewer than 3 characters -> no call", places.suggest_places("ch") == [] and FakeGoogle.calls == [])
+    reset()
+    picked = places.resolve_place("ChIJlandmark_charmi1")
+    check("picking a suggestion = exactly 1 Place Details call", len(FakeGoogle.calls) == 1 and FakeGoogle.calls[0][0] == "GET"
+          and "/v1/places/ChIJlandmark_charmi1" in FakeGoogle.calls[0][1] and picked["name"] == "Charminar"
+          and abs(picked["latitude"] - 17.3616) < 1e-6, (len(FakeGoogle.calls), picked))
+    reset()
+    check("picking a place outside India -> None", places.resolve_place("ChIJeiffel_paris_001") is None)
+    check("bad place ID -> None, no call", places.resolve_place("../etc") is None and len(FakeGoogle.calls) == 1)
+    reset()
+    try:
+        places.resolve_place("ChIJdetails_quota_01")
+        check("quota on Place Details (picking) -> MapSearchUnavailable", False)
+    except places.MapSearchUnavailable:
+        check("quota on Place Details (picking) -> MapSearchUnavailable", True)
+    check("Place Details paused", gms.cache.d.get("gmaps:paused:details") is True)
+    reset()
+    try:
+        places.suggest_places("quota please")
+        check("quota on autocomplete (typing) -> MapSearchUnavailable", False)
+    except places.MapSearchUnavailable:
+        check("quota on autocomplete (typing) -> MapSearchUnavailable", True)
     reset()
     try:
         places.search_places("quota please")
         check("search_places raises MapSearchUnavailable", False)
     except places.MapSearchUnavailable:
         check("search_places raises MapSearchUnavailable", True)
-    check("quota results are not cached", not any(k.startswith("places:autocomplete") for k in gms.cache.d))
+    check("quota results are not cached", not any(k.startswith("places:textsearch") for k in gms.cache.d))
 
     reset()
     r = client.get("/api/places/search", params={"q": "quota please"})
@@ -300,6 +335,18 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
         f = call("places:search", {"query": "Charminar"})
         check("WS places:search: landmark first, JSON list as before", f["status"] == 200 and isinstance(f["data"], list)
               and f["data"][0]["name"] == "Charminar")
+        reset()
+        f = call("places:suggest", {"query": "Charminar"})
+        check("WS places:suggest: suggestions, 1 autocomplete call", f["status"] == 200 and len(f["data"]) == 2
+              and len(FakeGoogle.calls) == 1, (f.get("status"), len(FakeGoogle.calls)))
+        f = call("places:resolve", {"place_id": "ChIJlandmark_charmi1"})
+        check("WS places:resolve: the picked place with coordinates, 1 Details call", f["status"] == 200
+              and f["data"]["name"] == "Charminar" and f["data"]["latitude"] and len(FakeGoogle.calls) == 2, f.get("data"))
+        f = call("places:resolve", {"place_id": "ChIJeiffel_paris_001"})
+        check("WS places:resolve outside India -> 404", f["status"] == 404)
+        reset()
+        f = call("places:suggest", {"query": "quota please"})
+        check("WS places:suggest quota -> 503 'Map search ...'", f["status"] == 503 and str(f["error"]).startswith("Map search"))
     r = client.get("/api/places/autocomplete", params={"q": "quota please"})
     check("unused /api/places/autocomplete removed (stage 4)", r.status_code in (404, 405), r.status_code)
 
@@ -318,9 +365,9 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
     reset()
     t = lookups.search_place("Charminar", "hi", show=True)
     check("voice: landmark shown on the map", t.action == "map_focus" and t.ui_actions[0]["name"] == "Charminar"
-          and t.google_calls == 3, (t.reply_text, t.google_calls))
+          and t.google_calls == 1, (t.reply_text, t.google_calls))
     res = agent._from_tool(t)
-    check("agent result carries the Google call count (turn log)", res.google_calls == 3)
+    check("agent result carries the Google call count (turn log)", res.google_calls == 1)
 
     reset()
     t = lookups.search_place("Varanasi ghat", "hi", show=True)
@@ -343,7 +390,7 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
         places.search_places_detailed("quota please")
         places.search_places_detailed("Charminar")
     log = buf.getvalue()
-    check("search log has google_calls", "[PLACES SEARCH] google_calls=3" in log and "google_calls=1" in log and "google_calls=0" in log, log.strip())
+    check("search log has google_calls", "[PLACES SEARCH] google_calls=1" in log and "google_calls=1" in log and "google_calls=0" in log, log.strip())
     check("search log has no query text and no key", "Charminar" not in log and "quota please" not in log
           and "test-key-not-real" not in log)
 

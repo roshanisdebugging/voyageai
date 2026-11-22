@@ -2,20 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Portal } from './Portal';
 import { useApp } from '../../context/AppContext';
 import { Search, MapPin, Navigation, AlertTriangle, CheckCircle2, X, Loader2, Crosshair } from 'lucide-react';
-import { wsClient } from '../../services/wsClient';
-import { memoize } from '../../services/memoCache';
-import { CACHE_TTL } from '../../store/cache/cacheTypes';
-
-interface LocationSearchResult {
-  id: string;
-  name: string;
-  city?: string;
-  region?: string;
-  country?: string;
-  latitude: number;
-  longitude: number;
-  displayName: string;
-}
+import { resolvePlace, suggestPlaces, SUGGEST_MIN_CHARS, type PlaceSuggestion } from '../../services/placesApi';
+import { GoogleMapsAttribution } from './GoogleMapsAttribution';
 
 export const ManualLocationModal: React.FC = () => {
   const {
@@ -30,13 +18,14 @@ export const ManualLocationModal: React.FC = () => {
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<LocationSearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<PlaceSuggestion[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
 
   // Debounced place search via WebSocket
   useEffect(() => {
-    if (!searchQuery || searchQuery.trim().length < 2) {
+    // Suggestions while typing: autocomplete only (3+ characters); coordinates only for the one picked.
+    if (!searchQuery || searchQuery.trim().length < SUGGEST_MIN_CHARS) {
       setSearchResults([]);
       return;
     }
@@ -44,11 +33,7 @@ export const ManualLocationModal: React.FC = () => {
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const data = await memoize(
-          `location:search:${searchQuery.trim().toLowerCase()}`,
-          CACHE_TTL.placesSearch,
-          () => wsClient.sendRequest('location:search', { query: searchQuery }),
-        );
+        const data = await suggestPlaces(searchQuery);
         if (Array.isArray(data)) {
           setSearchResults(data);
         }
@@ -177,18 +162,29 @@ export const ManualLocationModal: React.FC = () => {
           <div className="max-h-48 overflow-y-auto space-y-1.5 no-scrollbar bg-slate-900/90 p-2 rounded-2xl border border-white/10">
             {searchResults.map((item) => (
               <button
-                key={item.id || item.displayName}
+                key={item.placeId}
                 type="button"
-                onClick={() => handleSelectLocation(item.latitude, item.longitude, item.name || item.displayName)}
+                onClick={async () => {
+                  // One Place Details call, for this place only.
+                  try {
+                    const place = await resolvePlace(item.placeId);
+                    if (place?.latitude != null && place?.longitude != null) {
+                      await handleSelectLocation(place.latitude, place.longitude, place.name || item.name);
+                    }
+                  } catch (err) {
+                    console.warn('Location resolve error:', err);
+                  }
+                }}
                 className="w-full text-left p-2.5 rounded-xl hover:bg-teal-500/20 border border-transparent hover:border-teal-500/40 transition-all flex items-start gap-2.5"
               >
                 <MapPin className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-bold text-white truncate">{item.name || item.city}</div>
-                  <div className="text-[10px] text-slate-400 truncate">{item.displayName}</div>
+                  <div className="text-xs font-bold text-white truncate">{item.name}</div>
+                  <div className="text-[10px] text-slate-400 truncate">{item.secondary}</div>
                 </div>
               </button>
             ))}
+            <div className="flex justify-end px-1"><GoogleMapsAttribution className="text-slate-400" /></div>
           </div>
         )}
 

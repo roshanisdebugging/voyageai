@@ -17,11 +17,9 @@ import { useSavedPlaceToggle } from '../places/useSavedPlaceToggle';
 import { useNavigate } from 'react-router-dom';
 import { getCanonicalCategory, type CanonicalCategoryKey } from './mapCategoryConfig';
 import { useTheme } from '../../context/ThemeContext';
-import { wsClient } from '../../services/wsClient';
-import { memoize } from '../../services/memoCache';
-import { CACHE_TTL } from '../../store/cache/cacheTypes';
 import { isInIndia, placeSubtitle } from '../../features/trip/components/PlaceSearchField';
 import { mapSearchErrorMessage } from '../../utils/mapSearchError';
+import { lookupPlace, resolvePlace, suggestPlaces, SUGGEST_MIN_CHARS, type PlaceSuggestion } from '../../services/placesApi';
 import type { DestinationReference } from '../../features/trip/types';
 import { MAP_ID, loadGoogleLibrary, onMapsAuthFailure, MapUnavailableError } from './googleMapsLoader';
 import {
@@ -131,7 +129,7 @@ export const MapView: React.FC = () => {
 
   // Map search (India only, straight-line distance from the current location)
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [searchSuggestions, setSearchSuggestions] = useState<DestinationReference[]>([]);
+  const [searchSuggestions, setSearchSuggestions] = useState<PlaceSuggestion[]>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<DestinationReference | null>(null);
@@ -452,11 +450,12 @@ export const MapView: React.FC = () => {
     flyTo(activeCoords[0], activeCoords[1], 15);
   }, [activeCoords, searchResult, flyTo, mapGen]);
 
-  // Suggestions while typing (debounced), India only, using the backend place search.
+  // Suggestions while typing (debounced, 3+ characters): autocomplete only, no coordinates and no Place Details.
+  // A picked suggestion is resolved with one Details call; Enter does one named lookup (Text Search).
   useEffect(() => {
     const q = searchQuery.trim();
     if (searchResult && q === searchResult.name) return; // the box shows the chosen place
-    if (q.length < 2) {
+    if (q.length < SUGGEST_MIN_CHARS) {
       setSearchSuggestions([]);
       setSearchMessage(null);
       setIsSearching(false);
@@ -466,15 +465,11 @@ export const MapView: React.FC = () => {
     const timer = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const data: DestinationReference[] = await memoize(
-          `places:search:${q.trim().toLowerCase()}`,
-          CACHE_TTL.placesSearch,
-          () => wsClient.sendRequest('places:search', { query: q }),
-        );
+        const data = await suggestPlaces(q);
         if (seq !== searchSeqRef.current) return;
-        const india = Array.isArray(data) ? data.filter(isInIndia) : [];
-        setSearchSuggestions(india);
-        setSearchMessage(india.length === 0 ? 'No places found in India.' : null);
+        const list = Array.isArray(data) ? data : [];
+        setSearchSuggestions(list);
+        setSearchMessage(list.length === 0 ? 'No places found in India.' : null);
       } catch (err) {
         if (seq !== searchSeqRef.current) return;
         setSearchSuggestions([]);
@@ -534,6 +529,41 @@ export const MapView: React.FC = () => {
       flyTo(INDIA_CENTER[0], INDIA_CENTER[1], 5);
     }
   }, [userLocation, activeCoords, setIsFollowMode, flyTo]);
+
+  /** A picked suggestion: one Place Details call for that place, then pin + fly there. */
+  const pickSuggestion = useCallback(async (s: PlaceSuggestion) => {
+    const seq = ++searchSeqRef.current;
+    setIsSearching(true);
+    try {
+      const place = await resolvePlace(s.placeId);
+      if (seq !== searchSeqRef.current) return;
+      if (place && isInIndia(place)) selectSearchResult({ ...place, name: place.name || s.name });
+      else setSearchMessage('No places found in India.');
+    } catch (err) {
+      if (seq !== searchSeqRef.current) return;
+      setSearchMessage(mapSearchErrorMessage(err, "Search isn't available right now. Please try again."));
+    } finally {
+      if (seq === searchSeqRef.current) setIsSearching(false);
+    }
+  }, [selectSearchResult]);
+
+  /** Enter: one named lookup (Text Search, landmark-first) and the top result. */
+  const submitSearch = useCallback(async (raw: string) => {
+    const seq = ++searchSeqRef.current;
+    setIsSearching(true);
+    try {
+      const data = await lookupPlace(raw);
+      if (seq !== searchSeqRef.current) return;
+      const top = (Array.isArray(data) ? data : []).find(isInIndia);
+      if (top) selectSearchResult(top);
+      else { setSearchSuggestions([]); setSearchMessage('No places found in India.'); }
+    } catch (err) {
+      if (seq !== searchSeqRef.current) return;
+      setSearchMessage(mapSearchErrorMessage(err, "Search isn't available right now. Please try again."));
+    } finally {
+      if (seq === searchSeqRef.current) setIsSearching(false);
+    }
+  }, [selectSearchResult]);
 
   const searchDistanceMeters = searchResult && userLocation && searchResult.latitude != null && searchResult.longitude != null
     ? calculateDistance(userLocation[0], userLocation[1], searchResult.latitude, searchResult.longitude)
@@ -1025,7 +1055,7 @@ export const MapView: React.FC = () => {
                 if (searchResult) setSearchResult(null);
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && searchSuggestions[0]) selectSearchResult(searchSuggestions[0]);
+                if (e.key === 'Enter' && searchQuery.trim().length >= 2) void submitSearch(searchQuery);
                 if (e.key === 'Escape') clearSearch();
               }}
               placeholder="Search a place in India"
@@ -1048,17 +1078,17 @@ export const MapView: React.FC = () => {
             <div className="absolute top-full left-0 right-0 mt-1.5 rounded-2xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 shadow-lg overflow-hidden" role="listbox" aria-label="Search suggestions">
               {searchSuggestions.map((s) => (
                 <button
-                  key={s.id || `${s.name}-${s.latitude}-${s.longitude}`}
+                  key={s.placeId}
                   type="button"
                   role="option"
                   aria-selected={false}
-                  onClick={() => selectSearchResult(s)}
+                  onClick={() => void pickSuggestion(s)}
                   className="w-full text-left px-3.5 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-zinc-800 border-b last:border-b-0 border-gray-100 dark:border-zinc-800 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-primary)] dark:focus-visible:outline-[var(--color-primary-light)]"
                 >
                   <MapPin className="w-4 h-4 mt-0.5 shrink-0 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold text-[#1F2522] dark:text-zinc-100 truncate">{s.name}</span>
-                    <span className="block text-[11px] text-[color:var(--color-text-secondary)] truncate">{(s as any).displayName || placeSubtitle(s)}</span>
+                    <span className="block text-[11px] text-[color:var(--color-text-secondary)] truncate">{s.secondary}</span>
                   </span>
                 </button>
               ))}
