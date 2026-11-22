@@ -1,11 +1,9 @@
 """
-VoyageAI - Google Maps Platform Backend Proxy Service
-Replaces unreliable Overpass / Nominatim APIs with Google Places API (New) & Google Geocoding.
-Includes a Redis caching layer with an in-memory fallback
-to conserve API quota and eliminate synthetic mock fallbacks.
+VoyageAI - Google Maps Platform backend service: Places API (New), Geocoding API v4.
+Google only (no other provider, no fallback to one). Redis cache with an in-memory fallback; quota/pause
+detection (gmaps:paused:{api}); never invents a place.
 """
 
-import os
 import re
 import json
 import time

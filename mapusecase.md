@@ -36,7 +36,7 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
 
 ## Stage 2: Google map
 
-- Replace the Leaflet map drawn from `mt1.google.com/vt` tiles. That is Google's internal tile server, not an API, and using it breaks Google's terms. Use the **Maps JavaScript API** (`<gmp-map>`, `VITE_GOOGLE_MAPS_BROWSER_KEY`, `DEMO_MAP_ID` while testing).
+- Done: the old map library and Google's internal tile server URL are no longer used (that URL is not an API and broke Google's terms). Use the **Maps JavaScript API** (`<gmp-map>`, `VITE_GOOGLE_MAPS_BROWSER_KEY`, `DEMO_MAP_ID` while testing).
 - Keep what the map does today: user location, category markers, search pin, the place card and its Details page, light/dark theme.
 - If the Maps JavaScript key is paused or fails, show a plain "Map isn't available right now" panel. Lists and search results still work without the map.
 - **Cut Place Details use before this stage goes to users** (the 100/day limit). For example, resolve coordinates only for the result the user picks. Or use one Text Search (New) call that returns `location` for every result. This changes the call count, so the owner decides.
@@ -64,9 +64,9 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
 
 ## Stage 4: clean-up
 
-- Remove Leaflet, the `mt1.google.com` tile URL and `VITE_GOOGLE_MAP_DEMO_KEY` from the frontend once stage 2 is in.
+- Done (stage 2): the old map library, its CSS and the internal tile URL are removed.
 - One key name per side, `GOOGLE_MAPS_SERVER_KEY` and `VITE_GOOGLE_MAPS_BROWSER_KEY`. Keep reading the old names for one release, and update the `.env.example` files.
-- Remove `/api/places/autocomplete` if nothing calls it (nothing in the frontend does today). Remove code comments that still mention Overpass or Nominatim.
+- Done (stage 4): `/api/places/autocomplete` removed (nothing called it); comments naming other providers removed.
 - Show "Google Maps" attribution wherever Places data appears outside a Google map.
 - Before real users: a billed key with per-API daily caps, a restricted server key, and the call counts from the logs checked against the budget.
 

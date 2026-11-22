@@ -1,5 +1,4 @@
 import difflib
-import json
 import math
 import re
 import time
@@ -356,9 +355,7 @@ def get_progressive_nearby_places(
     **kwargs
 ) -> List[Dict[str, Any]]:
     """
-    Exclusively calls Google Places API (New) search_nearby_places.
-    Overpass API and synthetic mocks are completely eradicated.
-    Returns real places with authentic ratings, coords, and is_mock=False.
+    Google Places API (New) search_nearby_places only. Returns real places (is_mock=False); nothing invented.
     """
     from services.google_maps_service import search_nearby_places
 

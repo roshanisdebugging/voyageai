@@ -213,7 +213,7 @@ Done when: a trip that ended yesterday never opens by itself on `/trip`, appears
 #### Search on the map
 
 **What exists:**
-- `MapView.tsx` (Leaflet + Google tiles) shows the current location and nearby places.
+- `MapView.tsx` (Google Maps JavaScript API, map stage 2) shows the current location and nearby places.
 - It can already fly to a place and show its distance through `mapFocusTarget` + `calculateDistance()` (straight line).
 - The backend already has place search (`places:search` on the WebSocket; `autocomplete_places` in the Google Maps service).
 

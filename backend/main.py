@@ -1712,16 +1712,6 @@ async def location_reverse(lat: float, lng: float):
     from services.google_maps_service import reverse_geocode
     return await reverse_geocode(lat, lng)
 
-@app.get("/api/places/autocomplete", dependencies=[Depends(places_limiter)])
-async def places_autocomplete(q: str = "", lat: Optional[float] = None, lng: Optional[float] = None):
-    """Google Places Autocomplete proxy with Redis caching."""
-    if not q or len(query_clean := q.strip()) < 2:
-        return []
-    from services.google_maps_service import GoogleQuotaError, autocomplete_places
-    try:
-        return await autocomplete_places(q, lat, lng)
-    except GoogleQuotaError:
-        raise HTTPException(status_code=503, detail=MAP_SEARCH_UNAVAILABLE_MESSAGE)
 
 @app.get("/api/places/details", dependencies=[Depends(places_limiter)])
 async def places_details(place_id: str):
@@ -1793,10 +1783,7 @@ async def get_nearby_places(
     lng: Optional[float] = None,
     radius: Optional[int] = 5000
 ):
-    """
-    Direct Google Places API (New) discovery endpoint.
-    All Overpass network calls and synthetic mocks are completely eliminated.
-    """
+    """Nearby places from Google Places API (New) searchNearby (no other provider, no mock data)."""
     resolved_lng = lng if lng is not None else lon
     if lat is None or resolved_lng is None:
         raise HTTPException(status_code=400, detail="Latitude and Longitude are required.")

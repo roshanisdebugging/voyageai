@@ -42,8 +42,6 @@ class ToolResult:
 
 # ---------------- search a place on the map
 
-from places import in_india  # noqa: E402  (same India box as the frontend's isInIndia())
-
 MAPS_UNAVAILABLE = {"hi": "Map search abhi available nahi hai.", "en": "Map search isn't available right now."}
 
 
