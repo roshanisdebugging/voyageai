@@ -43,5 +43,16 @@ for old in ("GOOGLE_MAPS_API_KEY", "GOOGLE_MAP_DEMO_KEY"):
 key, log = resolve({})
 check("no key at all -> '' (callers then say 'not available')", key == "" and log == "")
 
+# ---------------- 2. Routes caching off by default (Google terms 19.3: only lat/lng may be cached)
+from services import routes_service  # noqa: E402
+_saved = os.environ.pop("ROUTES_CACHE_TTL_S", None)
+check("ROUTES_CACHE_TTL_S unset -> 0 (route results not cached)", routes_service.cache_ttl_s() == 0)
+with mock.patch.dict(os.environ, {"ROUTES_CACHE_TTL_S": "oops"}):
+    check("bad ROUTES_CACHE_TTL_S -> 0, not a cache", routes_service.cache_ttl_s() == 0)
+with mock.patch.dict(os.environ, {"ROUTES_CACHE_TTL_S": "1800"}):
+    check("setting kept: 1800 when asked", routes_service.cache_ttl_s() == 1800)
+if _saved is not None:
+    os.environ["ROUTES_CACHE_TTL_S"] = _saved
+
 print(f"\n{sum(results)}/{len(results)} passed", flush=True)
 sys.exit(0 if all(results) else 1)

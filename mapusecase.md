@@ -60,7 +60,7 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
 - Voice: the `get_travel_time` tool answers in one sentence, for example "Hawa Mahal yahan se 6.8 km hai, car se 23 minute."
   - Origin: the app's location, else the open trip's destination. Stays have no coordinates.
 - Quota: 503 "Route abhi available nahi hai", and Routes is skipped until Google's reset.
-- **Caching conflict:** Service Specific Terms 19.3 allow caching only latitude/longitude from the Routes API, not distance, duration or polyline. The 30-minute cache is on (`ROUTES_CACHE_TTL_S=1800`). Set it to 0 before real users, unless Google confirms otherwise.
+- **Route caching is off** (`ROUTES_CACHE_TTL_S=0`, Stage 4). Service Specific Terms 19.3 allow caching only latitude/longitude from the Routes API, not distance, duration or polyline. The browser doesn't keep route results either. The setting remains for a billed key with Google's written OK.
 
 ## Stage 4: clean-up
 

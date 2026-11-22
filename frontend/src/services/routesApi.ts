@@ -1,6 +1,7 @@
 /**
  * POST /api/routes/compute (Google Routes API on the server; login required, cached on the server).
  * Called only when the user taps Route / changes the mode chip, or for an itinerary leg that scrolled into view.
+ * Not cached (Google's Routes terms); the server caches only if ROUTES_CACHE_TTL_S > 0.
  */
 import { getApiBaseUrl, fetchWithAuth } from '../config/apiConfig';
 import { memoize } from './memoCache';
@@ -25,7 +26,9 @@ export class RouteError extends Error {
 }
 
 const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
-const CLIENT_TTL_MS = 30 * 60 * 1000;
+// Google's Routes terms (19.3) allow caching only lat/lng, so route results are not kept in memory either:
+// memoize only joins identical requests that are in flight at the same moment.
+const CLIENT_TTL_MS = 0;
 
 export function computeRoute(
   origin: { lat: number; lng: number },

@@ -6,9 +6,9 @@ compute_route(origin, destination, mode) -> {distance_m, duration_s, polyline, m
   (+ routes.warnings, the text Google says to show with the route). Never a wildcard mask.
 - DRIVE / TWO_WHEELER use routingPreference TRAFFIC_UNAWARE (static time, cheaper). WALK must not send one
   (Google: "You can specify this option only when the travelMode is DRIVE or TWO_WHEELER, otherwise the request fails").
-- Cache: ROUTES_CACHE_TTL_S seconds (default 1800) keyed by rounded origin/destination (3 decimals) + mode.
-  NOTE: Google Maps Platform Service Specific Terms 19.3 allow caching only lat/lng from the Routes API;
-  set ROUTES_CACHE_TTL_S=0 to stop caching route results before real users.
+- Cache: OFF by default (ROUTES_CACHE_TTL_S=0). Google Maps Platform Service Specific Terms 19.3 allow caching
+  only latitude/longitude from the Routes API, not distance, duration or the route line. The setting stays for
+  a billed key with Google's written OK; when > 0, routes are keyed by rounded origin/destination (3 decimals) + mode.
 - Quota / paused key: RouteUnavailable, and Routes is skipped until Google's reset (shared pause helper). No retry.
 - Logs carry counts and timings only: never coordinates, places or the key.
 Compute Route Matrix is refused on the demo key (probe 22 Nov 2026: 403 PERMISSION_DENIED), so it is not used.
@@ -42,9 +42,9 @@ class RouteNotFound(Exception):
 
 def cache_ttl_s() -> int:
     try:
-        return max(0, int(os.getenv("ROUTES_CACHE_TTL_S", "1800")))
+        return max(0, int(os.getenv("ROUTES_CACHE_TTL_S", "0")))
     except ValueError:
-        return 1800
+        return 0
 
 
 def _r3(x: float) -> float:
