@@ -110,10 +110,10 @@ async def compute_route(o_lat: float, o_lng: float, d_lat: float, d_lng: float, 
             print(f"[ROUTES] mode={mode} google_calls=0 cached=True ms={int((time.perf_counter() - started) * 1000)}", flush=True)
             return {**cached, "cached": True}
 
-    if not gms.GOOGLE_MAPS_API_KEY or await gms.is_paused("routes"):
+    if not gms.GOOGLE_MAPS_SERVER_KEY or await gms.is_paused("routes"):
         raise RouteUnavailable()
 
-    headers = {"Content-Type": "application/json", "X-Goog-Api-Key": gms.GOOGLE_MAPS_API_KEY, "X-Goog-FieldMask": FIELD_MASK}
+    headers = {"Content-Type": "application/json", "X-Goog-Api-Key": gms.GOOGLE_MAPS_SERVER_KEY, "X-Goog-FieldMask": FIELD_MASK}
     gms._count(counter)
     user_today = await count_user_call(user_id)
     try:

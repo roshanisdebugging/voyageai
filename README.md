@@ -270,12 +270,21 @@ COOKIE_DOMAIN=localhost
 GEMINI_API_KEY=<gemini-api-key>
 COST_GUARD_BACKEND=gemini
 COST_GUARD_MODEL=gemini-3.5-flash-lite
+GOOGLE_MAPS_SERVER_KEY=<google-maps-server-key>   # Places, Geocoding, Routes (server only)
 ```
 
 ### Frontend (`frontend/.env`)
 ```env
 VITE_API_BASE_URL=http://localhost:8000
+VITE_GOOGLE_MAPS_BROWSER_KEY=<google-maps-browser-key>   # the map (Maps JavaScript API)
 ```
+
+The map uses two Google keys: a **server** key (`GOOGLE_MAPS_SERVER_KEY`, backend only) and a **browser** key
+(`VITE_GOOGLE_MAPS_BROWSER_KEY`, built into the frontend, visible to anyone). Keep them separate and restrict
+both before real users (see `mapusecase.md`). For Docker, pass the browser key at build time
+(`VITE_GOOGLE_MAPS_BROWSER_KEY` in the root `.env`); on Netlify, set it in the site's environment variables.
+The old names `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAP_DEMO_KEY` and `VITE_GOOGLE_MAP_DEMO_KEY` still work for one
+release and log a warning.
 
 ---
 

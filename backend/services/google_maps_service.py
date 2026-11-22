@@ -19,7 +19,10 @@ from redis_client import redis_conn
 # Ensure environment variables are loaded
 load_dotenv()
 
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_MAP_DEMO_KEY") or ""
+from services.maps_keys import resolve_server_key  # noqa: E402
+
+# The server key (GOOGLE_MAPS_SERVER_KEY; the old names still work for one release, with a warning).
+GOOGLE_MAPS_SERVER_KEY = resolve_server_key()
 
 # In-memory LRU/TTL cache fallback when Redis is offline
 _in_memory_cache: Dict[str, tuple[float, Any]] = {}
@@ -226,10 +229,10 @@ async def reverse_geocode(lat: float, lng: float) -> Dict[str, Any]:
     if await is_paused("geocode"):
         return result
     # 1. Google Geocoding API v4 (reverse)
-    if GOOGLE_MAPS_API_KEY:
+    if GOOGLE_MAPS_SERVER_KEY:
         try:
             url = GEOCODE_V4_URL.format(lat=float(lat), lng=float(lng))
-            headers = {"X-Goog-Api-Key": GOOGLE_MAPS_API_KEY, "X-Goog-FieldMask": GEOCODE_V4_FIELDS}
+            headers = {"X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY, "X-Goog-FieldMask": GEOCODE_V4_FIELDS}
             async with httpx.AsyncClient(timeout=4.0) as client:
                 res = await client.get(url, headers=headers)
             if is_quota_error(res):
@@ -254,12 +257,12 @@ async def reverse_geocode(lat: float, lng: float) -> Dict[str, Any]:
             print(f"[REVERSE GEOCODE GOOGLE ERR] {type(e).__name__}", flush=True)
 
     # 2. Resilient Fallback: Google Places API (New) reverse address lookup
-    if GOOGLE_MAPS_API_KEY and (result["city"] == "Current Location" or not result.get("formatted_address")):
+    if GOOGLE_MAPS_SERVER_KEY and (result["city"] == "Current Location" or not result.get("formatted_address")):
         try:
             places_url = "https://places.googleapis.com/v1/places:searchNearby"
             headers = {
                 "Content-Type": "application/json",
-                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY,
                 "X-Goog-FieldMask": "places.id,places.formattedAddress,places.displayName,places.addressComponents"
             }
             payload = {
@@ -311,14 +314,14 @@ async def search_nearby_places(
     if cached_places is not None and isinstance(cached_places, list):
         return cached_places
 
-    if not GOOGLE_MAPS_API_KEY:
+    if not GOOGLE_MAPS_SERVER_KEY:
         print("[GOOGLE PLACES] No API key configured. Returning empty list.", flush=True)
         return []
 
     url = "https://places.googleapis.com/v1/places:searchNearby"
     headers = {
         "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY,
         "X-Goog-FieldMask": (
             "places.id,places.displayName,places.formattedAddress,places.location,"
             "places.rating,places.userRatingCount,places.primaryType,places.editorialSummary"
@@ -425,13 +428,13 @@ async def autocomplete_places(
     if cached_val is not None:
         return cached_val
 
-    if not GOOGLE_MAPS_API_KEY:
+    if not GOOGLE_MAPS_SERVER_KEY:
         return []
 
     url = "https://places.googleapis.com/v1/places:autocomplete"
     headers = {
         "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY,
     }
 
     payload: Dict[str, Any] = {
@@ -537,7 +540,7 @@ async def get_place_details(place_id: str, full: bool = False,
     Returns None for an invalid ID, a missing key, or when Google has no such place.
     Raises GoogleQuotaError on a quota/paused error.
     """
-    if not is_valid_place_id(place_id) or not GOOGLE_MAPS_API_KEY:
+    if not is_valid_place_id(place_id) or not GOOGLE_MAPS_SERVER_KEY:
         return None
 
     cache_key = f"places:detail:{DETAIL_CACHE_VERSION}:{'full' if full else 'basic'}:{place_id}"
@@ -548,7 +551,7 @@ async def get_place_details(place_id: str, full: bool = False,
     url = f"https://places.googleapis.com/v1/places/{place_id}"
     headers = {
         "Content-Type": "application/json",
-        "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+        "X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY,
         "X-Goog-FieldMask": PLACE_FIELDS_FULL if full else PLACE_FIELDS_BASIC,
     }
 

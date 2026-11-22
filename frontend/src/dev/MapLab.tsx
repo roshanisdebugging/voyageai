@@ -202,7 +202,7 @@ const MapLab: React.FC = () => {
   return (
     <div style={{ padding: 16, fontFamily: 'system-ui', background: '#fff', color: '#111', minHeight: '100vh', overflow: 'auto' }}>
       <h1 style={{ fontSize: 20, fontWeight: 700 }}>Map lab (dev only)</h1>
-      <p>Key present: {GOOGLE_MAPS_KEY ? 'yes' : 'NO (set VITE_GOOGLE_MAP_DEMO_KEY)'} · gm_authFailure: {authFailure ? 'YES' : 'no'} · {webglInfo()}</p>
+      <p>Key present: {GOOGLE_MAPS_KEY ? 'yes' : 'NO (set VITE_GOOGLE_MAPS_BROWSER_KEY)'} · gm_authFailure: {authFailure ? 'YES' : 'no'} · {webglInfo()}</p>
       <table data-testid="probe" style={{ borderCollapse: 'collapse', margin: '12px 0' }}>
         <tbody>
           {rows.map((r) => (

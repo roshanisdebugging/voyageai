@@ -3,7 +3,7 @@ Probe the Google Maps key once per API and report which calls the key accepts.
 
     python -m scripts.probe_google_demo_key
 
-Uses GOOGLE_MAPS_API_KEY or GOOGLE_MAP_DEMO_KEY from backend/.env. Makes 7 Google requests in total
+Uses GOOGLE_MAPS_SERVER_KEY (or an old name) from backend/.env. Makes 7 Google requests in total
 (one per endpoint below). Prints endpoint, HTTP status and Google's error status/message only:
 never the key, and the key is also scrubbed from anything Google echoes back.
 """
@@ -16,7 +16,9 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
-KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_MAP_DEMO_KEY") or ""
+from services.maps_keys import resolve_server_key  # noqa: E402
+
+KEY = resolve_server_key()
 
 # Charminar, Hyderabad
 LAT, LNG = 17.3616, 78.4747
@@ -54,7 +56,7 @@ def _report(name: str, url: str, res: requests.Response, extra: str = "") -> boo
 
 def main() -> int:
     if not KEY:
-        print("No GOOGLE_MAPS_API_KEY / GOOGLE_MAP_DEMO_KEY in backend/.env")
+        print("No GOOGLE_MAPS_SERVER_KEY in backend/.env")
         return 1
     base_headers = {"Content-Type": "application/json", "X-Goog-Api-Key": KEY}
     results = {}

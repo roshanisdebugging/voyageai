@@ -2,6 +2,12 @@
 
 # The frontend lives in frontend/. In the Netlify UI set "Base directory" to `frontend`
 # so Netlify finds this file; `publish` is relative to the base directory.
+# Environment variables are NOT kept in this file (it is committed). Set them in the Netlify UI
+# (Site configuration > Environment variables) so they reach `npm run build`:
+#   VITE_API_BASE_URL, VITE_API_URL, VITE_WS_URL   the backend URLs
+#   VITE_GOOGLE_MAPS_BROWSER_KEY                   the Google Maps browser key (restricted by HTTP referrer to the
+#                                                  Netlify domain and to the Maps JavaScript API). Without it the
+#                                                  map shows "Map isn't available right now".
 [build]
   base = "frontend"
   command = "npm run build"

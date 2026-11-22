@@ -20,7 +20,9 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
-KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("GOOGLE_MAP_DEMO_KEY") or ""
+from services.maps_keys import resolve_server_key  # noqa: E402
+
+KEY = resolve_server_key()
 
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 MATRIX_URL = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"

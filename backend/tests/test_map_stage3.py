@@ -20,7 +20,7 @@ import dotenv
 dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
-os.environ["GOOGLE_MAPS_API_KEY"] = "test-key-not-real"
+os.environ["GOOGLE_MAPS_SERVER_KEY"] = "test-key-not-real"
 os.environ.pop("ROUTES_CACHE_TTL_S", None)
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -50,7 +50,7 @@ main.SessionLocal = database.SessionLocal
 database.Base.metadata.create_all(bind=database.engine)
 for key in redis_conn.scan_iter("rl:*"):
     redis_conn.delete(key)
-gms.GOOGLE_MAPS_API_KEY = "test-key-not-real"
+gms.GOOGLE_MAPS_SERVER_KEY = "test-key-not-real"
 
 
 class MemCache:

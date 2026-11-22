@@ -64,7 +64,7 @@ def _is(hit, target):
 
 
 def main() -> int:
-    if not gms.GOOGLE_MAPS_API_KEY:
+    if not gms.GOOGLE_MAPS_SERVER_KEY:
         print("No Google key in backend/.env")
         return 1
     rows, total_calls, good = [], 0, 0

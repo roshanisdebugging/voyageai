@@ -2,11 +2,22 @@
  * The one place the Google Maps JavaScript API is loaded (official @googlemaps/js-api-loader, once per page).
  * Google only: if the key is missing, refused or paused, callers show "Map isn't available right now";
  * no other map provider is ever loaded.
- * The key comes only from VITE_GOOGLE_MAP_DEMO_KEY and is never logged.
+ * The browser key comes from VITE_GOOGLE_MAPS_BROWSER_KEY (the old name VITE_GOOGLE_MAP_DEMO_KEY is still read for
+ * one release, with a console warning naming the variable). The key itself is never logged.
  */
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 
-export const GOOGLE_MAPS_KEY: string = (import.meta.env.VITE_GOOGLE_MAP_DEMO_KEY || '').trim();
+function browserKey(): string {
+  const fresh = (import.meta.env.VITE_GOOGLE_MAPS_BROWSER_KEY || '').trim();
+  if (fresh) return fresh;
+  const old = (import.meta.env.VITE_GOOGLE_MAP_DEMO_KEY || '').trim();
+  if (old) {
+    console.warn('[MAP] Using the old key name VITE_GOOGLE_MAP_DEMO_KEY; rename it to VITE_GOOGLE_MAPS_BROWSER_KEY (old name read for one more release).');
+  }
+  return old;
+}
+
+export const GOOGLE_MAPS_KEY: string = browserKey();
 /** Google's demo Map ID: vector map + advanced markers (no Cloud Styling). */
 export const MAP_ID = 'DEMO_MAP_ID';
 

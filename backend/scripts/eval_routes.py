@@ -47,7 +47,7 @@ def fmt_dur(s):
 
 
 async def main() -> int:
-    if not gms.GOOGLE_MAPS_API_KEY:
+    if not gms.GOOGLE_MAPS_SERVER_KEY:
         print("No Google key in backend/.env")
         return 1
     print("| # | City | From | To | Mode | Distance | Time | ms | Warning |")
