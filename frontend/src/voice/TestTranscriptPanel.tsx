@@ -22,6 +22,7 @@ export interface PanelEntry {
   action?: string;  // "navigate:<page>" | "reply" | "error"
   llmMs?: number;
   navTo?: string;   // the route it navigated to
+  errorCode?: string; // test mode only: why the agent failed (e.g. "groq_transient_twice")
   at: number;
 }
 
@@ -88,6 +89,9 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
                       <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
                         {e.action ? `→ ${actionLabel(e.action, e.navTo)} · ` : ''}{e.llmMs != null ? `LLM ${e.llmMs} ms · ` : ''}TTS {e.ttsMs} ms{e.totalMs != null ? ` · total ${e.totalMs} ms (tap → sound)` : ''}
                       </p>
+                      {e.errorCode && (
+                        <p className="text-[10px] font-mono font-semibold text-rose-700 dark:text-rose-400 break-words">error: {e.errorCode}</p>
+                      )}
                     </>
                   )}
                 </div>

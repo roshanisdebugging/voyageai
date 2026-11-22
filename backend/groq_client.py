@@ -16,7 +16,23 @@ DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 
 
 class GroqError(RuntimeError):
-    """Groq call failed (missing key, HTTP error, empty or cut-off answer)."""
+    """Groq call failed (missing key, HTTP error, empty or cut-off answer).
+
+    Safe facts for error logs (never the request or Groq's response text, which can quote the user):
+      status       HTTP status, or None (no answer: timeout, connection error, no key)
+      code         Groq's error "code" field (e.g. tool_use_failed, rate_limit_exceeded), or a fixed reason
+                   name of ours (e.g. no_api_key, Timeout, malformed_tool_args)
+      model        the model asked
+      retry_after  the Retry-After header of a 429, as sent (digits only), or None
+    """
+
+    def __init__(self, message: str = "", *, status: Optional[int] = None, code: Optional[str] = None,
+                 model: Optional[str] = None, retry_after: Optional[str] = None):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.model = model
+        self.retry_after = retry_after
 
 
 class GroqTransient(GroqError):
@@ -30,6 +46,31 @@ class GroqRateLimited(GroqError):
 
 def groq_model() -> str:
     return (os.getenv("GROQ_MODEL") or DEFAULT_GROQ_MODEL).strip()
+
+
+def _error_code(res) -> Optional[str]:
+    """Groq's error "code" field only; never its message, which can quote the user."""
+    try:
+        body = res.json()
+        err = body.get("error") if isinstance(body, dict) else None
+        code = err.get("code") if isinstance(err, dict) else None
+    except Exception:
+        return None
+    if not isinstance(code, str):
+        return None
+    code = "".join(ch for ch in code if ch.isalnum() or ch in "_-.")[:40]
+    return code or None
+
+
+def _retry_after(res) -> Optional[str]:
+    try:
+        raw = res.headers.get("retry-after")
+    except Exception:
+        return None
+    if not isinstance(raw, str):
+        return None
+    raw = "".join(ch for ch in raw if ch.isdigit() or ch == ".")[:10]
+    return raw or None
 
 
 def groq_chat(
@@ -100,10 +141,10 @@ def groq_chat_tools(
     import json as _json
 
     api_key = (os.getenv("GROQ_API_KEY") or "").strip()
-    if not api_key:
-        raise GroqError("GROQ_API_KEY is not set")
-
     model = groq_model()
+    if not api_key:
+        raise GroqError("GROQ_API_KEY is not set", code="no_api_key", model=model)
+
     body: Dict[str, Any] = {
         "model": model,
         "messages": messages,
@@ -122,27 +163,24 @@ def groq_chat_tools(
             timeout=timeout,
         )
     except requests.RequestException as exc:
-        raise GroqTransient(f"Groq request failed: {type(exc).__name__}") from exc
+        raise GroqTransient(f"Groq request failed: {type(exc).__name__}", code=type(exc).__name__, model=model) from exc
 
     if res.status_code == 429:
-        raise GroqRateLimited("Groq rate limit reached")
+        raise GroqRateLimited("Groq rate limit reached", status=429, code=_error_code(res), model=model,
+                              retry_after=_retry_after(res))
     if res.status_code != 200:
-        code = ""
-        try:  # the error code only (e.g. tool_use_failed); never the message, which can quote the user
-            code = str((res.json().get("error") or {}).get("code") or "")[:40]
-        except Exception:
-            pass
-        if res.status_code >= 500 or code == "tool_use_failed":
-            raise GroqTransient(f"Groq HTTP {res.status_code} {code}".strip())
-        raise GroqError(f"Groq HTTP {res.status_code} {code}".strip())
+        code = _error_code(res)
+        err_cls = GroqTransient if res.status_code >= 500 or code == "tool_use_failed" else GroqError
+        raise err_cls(f"Groq HTTP {res.status_code} {code or ''}".strip(), status=res.status_code, code=code, model=model)
 
     try:
         choice = res.json()["choices"][0]
         message = choice.get("message") or {}
     except (ValueError, KeyError, IndexError) as exc:
-        raise GroqError("Groq returned an unexpected response") from exc
+        raise GroqError("Groq returned an unexpected response", status=200, code="unexpected_response", model=model) from exc
     if choice.get("finish_reason") not in (None, "stop", "tool_calls"):
-        raise GroqError(f"Groq answer incomplete ({choice.get('finish_reason')})")
+        reason = "".join(ch for ch in str(choice.get("finish_reason")) if ch.isalnum() or ch == "_")[:30]
+        raise GroqError(f"Groq answer incomplete ({reason})", status=200, code=f"incomplete_{reason}", model=model)
 
     calls = []
     for call in message.get("tool_calls") or []:
@@ -151,15 +189,17 @@ def groq_chat_tools(
         try:
             args = _json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
         except (ValueError, TypeError) as exc:
-            raise GroqTransient("Groq tool call had malformed arguments") from exc
+            raise GroqTransient("Groq tool call had malformed arguments", status=200, code="malformed_tool_args",
+                                model=model) from exc
         if not isinstance(args, dict):
-            raise GroqError("Groq tool call arguments were not an object")
+            raise GroqError("Groq tool call arguments were not an object", status=200, code="tool_args_not_object",
+                            model=model)
         calls.append({"name": fn.get("name") or "", "arguments": args})
 
     content = message.get("content")
     content = content.strip() if isinstance(content, str) and content.strip() else None
     if not calls and not content:
-        raise GroqError("Groq returned neither text nor a tool call")
+        raise GroqError("Groq returned neither text nor a tool call", status=200, code="empty_answer", model=model)
     return {"content": content, "tool_calls": calls}
 
 

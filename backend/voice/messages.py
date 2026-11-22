@@ -20,7 +20,9 @@ Server -> app (text frames, JSON):
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
    "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
    "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null),
-   "pending_confirmation": {"id", "summary", "title"?} | null}  step 4/5: show the Confirm card
+   "pending_confirmation": {"id", "summary", "title"?} | null,  step 4/5: show the Confirm card
+   "note_attribution"?,                                    "Google Maps" when the note is Google Maps content
+   "error_code"?}                                         test mode only (VOICE_DEBUG_STORE=true): why the agent failed
   {"type": "confirm_result", "pending_id", "ok", "reply_text", "ui_actions"}
                                                           answer to confirm / cancel (ok=false: nothing to confirm)
                                                           the agent's spoken reply (steps 1b + 2), after
@@ -88,7 +90,7 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
           ui_actions: Optional[list] = None, action: str = "reply", llm_ms: int = 0,
           tool_ms: int = 0, note: Optional[str] = None,
           pending_confirmation: Optional[Dict[str, Any]] = None,
-          note_attribution: Optional[str] = None) -> Dict[str, Any]:
+          note_attribution: Optional[str] = None, error_code: Optional[str] = None) -> Dict[str, Any]:
     out = {
         "type": "reply",
         "turn_id": turn_id,
@@ -105,6 +107,8 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
     }
     if note and note_attribution:
         out["note_attribution"] = note_attribution   # e.g. "Google Maps" for a Google route warning
+    if error_code:   # test mode only (VOICE_DEBUG_STORE=true): the test panel shows why the agent failed
+        out["error_code"] = error_code
     return out
 
 

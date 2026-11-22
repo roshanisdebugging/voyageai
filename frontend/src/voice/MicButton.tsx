@@ -184,7 +184,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         const update = (patch: Partial<PanelEntry>) =>
           setEntries((prev) => prev.map((e) => (e.id === turnId ? { ...e, ...patch } : e)));
         const navTo = (msg.ui_actions || []).find((a) => a.type === 'navigate')?.to;
-        update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo });
+        update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo, errorCode: msg.error_code });
         // Step 4: a reply with a pending confirmation shows the Confirm card; any other reply closes it.
         const pc = msg.pending_confirmation;
         setConfirmCard(pc && typeof pc.id === 'string' && typeof pc.summary === 'string'

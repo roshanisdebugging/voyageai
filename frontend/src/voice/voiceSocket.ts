@@ -30,6 +30,8 @@ export type VoiceServerMessage =
       note_attribution?: string;
       /** Step 4/5: show the Confirm card (title: e.g. "Add this expense?"). */
       pending_confirmation?: { id: string; summary: string; title?: string } | null;
+      /** Test mode only (VOICE_DEBUG_STORE=true): why the agent failed, e.g. "groq_transient_twice". */
+      error_code?: string;
     }
   | {
       type: 'confirm_result';

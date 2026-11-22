@@ -57,6 +57,8 @@ voice_speeches = Table(
     Column("tts_time_ms", Integer),
     Column("agent_action", Text),        # navigate:<page> | map_focus | where | answer | weather | decline | unclear | list_trips | open_trip | reply | error
     Column("llm_time_ms", Integer),
+    Column("agent_error_code", Text),    # why the agent failed (e.g. groq_transient_twice, answered_by_groq:<code>)
+    Column("agent_error_detail", Text),  # status / code names, model, attempt, tool, file:line. Never user words.
     Column("status", String(16), nullable=False),
     Column("error", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -81,6 +83,11 @@ _session_locks: dict = {}
 
 def _db_url() -> str:
     return (os.getenv("VOICE_DEBUG_DATABASE_URL") or "").strip()
+
+
+def test_mode() -> bool:
+    """VOICE_DEBUG_STORE=true: the error log file and the reply's error_code (test panel) are on."""
+    return (os.getenv("VOICE_DEBUG_STORE") or "").strip().lower() == "true"
 
 
 def enabled() -> bool:
@@ -118,6 +125,8 @@ def _engine_or_create() -> Engine:
                     conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS tts_time_ms INTEGER"))
                     conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS agent_action TEXT"))
                     conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS llm_time_ms INTEGER"))
+                    conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS agent_error_code TEXT"))
+                    conn.execute(text("ALTER TABLE voice_speeches ADD COLUMN IF NOT EXISTS agent_error_detail TEXT"))
                 _engine = engine
     return _engine
 
@@ -145,8 +154,8 @@ def _safe_dir_name(value: str) -> str:
     return "".join(ch for ch in value if ch.isalnum() or ch in "-_") or "unknown"
 
 
-def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: int) -> None:
-    """Saves the WAV (also for failed turns) and one voice_speeches row."""
+def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: int) -> int:
+    """Saves the WAV (also for failed turns) and one voice_speeches row. Returns the row's turn_index."""
     engine = _engine_or_create()
     session_dir = os.path.join(audio_root(), _safe_dir_name(ctx.session_id))
     os.makedirs(session_dir, exist_ok=True)
@@ -158,12 +167,13 @@ def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: 
         count = conn.execute(
             select(func.count()).select_from(voice_speeches).where(voice_speeches.c.session_id == ctx.session_id)
         ).scalar_one()
+        turn_index = count + 1
         conn.execute(voice_speeches.insert().values(
             speech_id=ctx.turn_id,
             session_id=ctx.session_id,
             user_id=ctx.user_id,
             conversation_id=ctx.conversation_id,
-            turn_index=count + 1,
+            turn_index=turn_index,
             audio_path=_rel(wav_path),
             audio_duration_ms=result.duration_ms,
             transcription=result.text if result.ok else None,
@@ -176,10 +186,13 @@ def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: 
             tts_time_ms=result.tts_ms if result.reply_text is not None else None,
             agent_action=result.action if result.reply_text is not None else None,
             llm_time_ms=result.llm_ms if result.reply_text is not None else None,
+            agent_error_code=result.agent_error_code,
+            agent_error_detail=result.agent_error_detail if result.agent_error_code else None,
             status="ok" if result.ok else "failed",
             error=None if result.ok else f"{result.error_code}: {result.error_detail}",
             created_at=ctx.started_at,
         ))
+    return turn_index
 
 
 def end_session(user_id: str, session_id: str) -> Optional[str]:

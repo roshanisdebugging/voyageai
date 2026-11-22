@@ -17,8 +17,10 @@ TTL refreshed each turn, deleted on end_session. Pending map actions: voice:pend
 """
 import json
 import logging
+import os
 import re
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -315,6 +317,10 @@ class AgentResult:
     llm_ms: int = 0                   # the deciding Groq call(s)
     tool_ms: int = 0                  # the tool (answer: cost guard + Gemini/Groq; look-ups: Google/DB/Open-Meteo)
     error_code: Optional[str] = None  # for logs only
+    # Why it failed, for the test-only error log / debug store. Status codes and code names only:
+    # never the user's words, the transcript, tool arguments or Groq's response body.
+    error_detail: Optional[str] = None
+    error_info: Dict[str, Any] = field(default_factory=dict)   # stage, attempt, attempts, model, status, tool, detail
     note: Optional[str] = None        # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
     pending_actions: List[Dict[str, Any]] = field(default_factory=list)
     pending_confirmation: Optional[Dict[str, Any]] = None   # {id, summary}: the app shows the Confirm card
@@ -623,6 +629,55 @@ def cancel_trip(redis_conn, user_id: str, conversation_id: str, lang: str) -> Ag
     return AgentResult(CANCELLED_REPLY[lang], action="trip_cancel", step="cancelled")
 
 
+LLM_ATTEMPTS = 2   # the first call plus one retry on a GroqTransient
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _join_detail(info: Dict[str, Any]) -> str:
+    """The one-line detail saved in the debug store: the short detail plus model, attempt and tool."""
+    parts = [info.get("detail") or ""]
+    if info.get("model"):
+        parts.append(f"model={info['model']}")
+    if info.get("attempt"):
+        parts.append(f"attempt {info['attempt']} of {info.get('attempts') or LLM_ATTEMPTS}")
+    if info.get("tool"):
+        parts.append(f"tool={info['tool']}")
+    return ", ".join(p for p in parts if p)
+
+
+def groq_error_info(err: Exception, attempt: int) -> Dict[str, Any]:
+    """HTTP status, Groq's error code name, Retry-After, model and attempt. Never the message or body."""
+    status = getattr(err, "status", None)
+    code = getattr(err, "code", None)
+    retry_after = getattr(err, "retry_after", None)
+    bits = [f"HTTP {status}" if status else "no HTTP status"]
+    if code:
+        bits.append(f"code={code}")
+    if retry_after:
+        bits.append(f"retry_after={retry_after}s")
+    return {"stage": "agent", "attempt": attempt, "attempts": LLM_ATTEMPTS, "status": status,
+            "model": getattr(err, "model", None), "detail": ", ".join(bits)}
+
+
+def crash_error_info(err: BaseException, tool: Optional[str] = None, stage: str = "agent") -> Dict[str, Any]:
+    """Exception class and the file:line of the frame that raised it. Never str(err): it can hold user data."""
+    where = "?"
+    frames = traceback.extract_tb(err.__traceback__) if err.__traceback__ else []
+    if frames:
+        last = frames[-1]
+        try:
+            path = os.path.relpath(last.filename, _BACKEND_DIR)
+        except ValueError:  # another drive on Windows
+            path = os.path.basename(last.filename)
+        where = f"{path.replace(os.sep, '/')}:{last.lineno} in {last.name}"
+    return {"stage": "tool" if tool else stage, "tool": tool, "status": None,
+            "detail": f"{type(err).__name__} at {where}"}
+
+
+def _failed(code: str, info: Dict[str, Any]) -> AgentResult:
+    return AgentResult(FALLBACK_REPLY, action="error", error_code=code, error_detail=_join_detail(info), error_info=info)
+
+
 def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str, has_trip: bool,
             user_id: Optional[str] = None, trip: Optional[TripInfo] = None,
             conversation_id: Optional[str] = None, redis_conn=None, trip_ctx=None,
@@ -646,7 +701,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 
     name, args = call["name"], call.get("arguments") or {}
     if not isinstance(args, dict):
-        return AgentResult(FALLBACK_REPLY, action="error", error_code="bad_tool_args")
+        return _failed("bad_tool_args", {"stage": "tool", "tool": name,
+                                         "detail": f"arguments were {type(args).__name__}, not an object"})
     if name == "navigate":
         return _navigate(args, lang, has_trip)
     if name == "cant_help":
@@ -656,7 +712,9 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 
     if name in ("update_trip_draft", "cancel_trip_draft"):
         if not user_id or not conversation_id or redis_conn is None:
-            return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user")
+            missing = [n for n, gone in (("user_id", not user_id), ("conversation_id", not conversation_id),
+                                         ("redis", redis_conn is None)) if gone]
+            return _failed("no_user", {"stage": "tool", "tool": name, "detail": f"missing {'/'.join(missing)}"})
         if name == "cancel_trip_draft":
             return cancel_trip(redis_conn, user_id, conversation_id, lang)
         return update_draft(redis_conn, user_id, conversation_id, args, lang)
@@ -691,7 +749,7 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         return _from_tool(lookups.get_weather(args.get("place"), args.get("day"), lang, user_id=user_id,
                                               trip_id=trip.id if trip else None))
     if not user_id:
-        return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user")
+        return _failed("no_user", {"stage": "tool", "tool": name, "detail": "missing user_id"})
     if name == "list_my_trips":
         return _from_tool(lookups.list_my_trips(user_id, lang, include_past=args.get("include_past") is True))
     if name == "open_trip":
@@ -776,28 +834,32 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         messages += load_memory(redis_conn, user_id, conversation_id)
         messages.append({"role": "user", "content": transcript})
         used_llm = True
+        attempt = 1
+        tool_name: Optional[str] = None
         try:
             try:
                 answer = groq_chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
                                          timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             except GroqTransient:
                 # e.g. 400 tool_use_failed: the model's tool call didn't validate. One retry.
+                attempt = 2
                 answer = groq_chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
                                          timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             llm_done = time.perf_counter()
+            tool_name = next((c.get("name") for c in answer["tool_calls"] if c.get("name") in TOOL_NAMES), None)
             result = _decide(answer["tool_calls"], answer["content"], lang, has_trip=trip is not None,
                              user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn,
                              trip_ctx=trip_ctx, screen_place=screen_place, location=location)
             if pending_conf and result.pending_confirmation is None and not result.action.startswith("trip_"):
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
-        except GroqRateLimited:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="rate_limited")
-        except GroqTransient:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_transient_twice")
-        except GroqError:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_error")
+        except GroqRateLimited as err:
+            result = _failed("rate_limited", groq_error_info(err, attempt))
+        except GroqTransient as err:
+            result = _failed("groq_transient_twice", groq_error_info(err, attempt))
+        except GroqError as err:
+            result = _failed("groq_error", groq_error_info(err, attempt))
         except Exception as err:
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code=type(err).__name__)
+            result = _failed(type(err).__name__, crash_error_info(err, tool_name))
     ended = time.perf_counter()
     result.llm_ms = int(((llm_done or ended) - started) * 1000) if used_llm else 0
     result.tool_ms = int((ended - llm_done) * 1000) if llm_done else (0 if used_llm else int((ended - started) * 1000))
