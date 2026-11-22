@@ -31,11 +31,13 @@ type MicPlace = 'shell' | 'wizard';
 const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | null; place: MicPlace }> = ({ raised, inlineTarget, place }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentTrip, trips, setCurrentTripId } = useTrip();
+  const { currentTrip, trips, setCurrentTripId, refetchItinerary } = useTrip();
   const { setMapFocusTarget } = useNavigation();
   // The socket handler is subscribed once: read the latest trips / setters through a ref.
-  const tripApiRef = useRef({ trips, setCurrentTripId, setMapFocusTarget });
-  useEffect(() => { tripApiRef.current = { trips, setCurrentTripId, setMapFocusTarget }; }, [trips, setCurrentTripId, setMapFocusTarget]);
+  const tripApiRef = useRef({ trips, setCurrentTripId, setMapFocusTarget, refetchItinerary });
+  useEffect(() => {
+    tripApiRef.current = { trips, setCurrentTripId, setMapFocusTarget, refetchItinerary };
+  }, [trips, setCurrentTripId, setMapFocusTarget, refetchItinerary]);
   const { showToast } = useToast();
   const [phase, setPhase] = useState<Phase>('idle');
   const [entries, setEntries] = useState<PanelEntry[]>([]);
@@ -160,6 +162,8 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           // Step 4: the filled, editable review page (the existing wizard); "haan" presses its Proceed.
           openReview: (prefill) => navigate('/trips/new', { state: { prefill } }),
           submitReview: requestSubmitReview,
+          // Step 6: voice changed the plan (weather / day / budget): reload it from the server.
+          refresh: () => { void tripApiRef.current.refetchItinerary(); },
         });
         if (!msg.reply_audio_base64) {
           setPhaseBoth('idle'); // the error ("Couldn't play the reply.") follows as its own message
@@ -181,7 +185,18 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         setConfirmBusy(false);
         setConfirmCard(null);
         if (msg.ok && kind === 'confirm') {
-          runUiActions(msg.ui_actions, { navigate: (to) => navigate(to), submitReview: requestSubmitReview });
+          const ran = runUiActions(msg.ui_actions, {
+            navigate: (to) => navigate(to),
+            submitReview: requestSubmitReview,
+            refresh: () => { void tripApiRef.current.refetchItinerary(); },
+          });
+          // Step 6: a smart action (no spoken reply on the button path) says what changed as small text.
+          const isSmart = Array.isArray(msg.ui_actions) && msg.ui_actions.some((a: { type?: string }) => a?.type === 'refresh');
+          if (isSmart || (ran === 0 && msg.reply_text)) {
+            if (noteTimerRef.current) clearTimeout(noteTimerRef.current);
+            setNote(typeof msg.reply_text === 'string' ? msg.reply_text.slice(0, 160) : null);
+            noteTimerRef.current = setTimeout(() => setNote(null), 8000);
+          }
         } else if (msg.ok && kind === 'cancel') {
           report(msg.reply_text || 'Okay, no trip was created.');
         } else if (!msg.ok && kind === 'confirm') {

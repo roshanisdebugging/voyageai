@@ -219,10 +219,11 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
         from redis_client import redis_conn as rc
         lang = detect_lang(str(msg.get("lang_hint") or ""), "hi")
         if kind == "confirm":
-            res = await run_in_threadpool(voice_agent.confirm_trip, rc, conn.user_id, conversation_id, lang, pending_id)
-            ok = res.action == "trip_confirm"
+            # Step 6: one confirm for every pending item (create_trip -> submit_review, smart actions -> applied).
+            res = await run_in_threadpool(voice_agent.confirm_pending, rc, conn.user_id, conversation_id, lang, pending_id)
+            ok = res.action in ("trip_confirm", "smart_applied", "smart_failed")   # a pending item was found and used
         elif kind == "cancel":
-            res = await run_in_threadpool(voice_agent.cancel_trip, rc, conn.user_id, conversation_id, lang)
+            res = await run_in_threadpool(voice_agent.cancel_pending, rc, conn.user_id, conversation_id, lang)
             ok = True
         else:
             await run_in_threadpool(voice_agent.cancel_trip, rc, conn.user_id, conversation_id, lang)

@@ -6,6 +6,7 @@
  * - open_trip {trip_id}: only an ID from the user's own loaded trip list (checked by the handler)
  * - open_review {prefill}: open the trip wizard's review page with the voice draft (checked shape, India only)
  * - submit_review: press Proceed on the wizard's review page (the wizard ignores it on any other step)
+ * - refresh {what: "itinerary"}: reload the open trip's itinerary after voice changed it (step 6)
  */
 import type { TripDraft } from '../features/trip/types';
 
@@ -18,6 +19,7 @@ export interface UiAction {
   place_id?: string;
   trip_id?: string;
   prefill?: unknown;
+  what?: string;
 }
 
 export interface MapFocusAction { lat: number; lng: number; name: string; placeId?: string }
@@ -29,6 +31,8 @@ export interface UiActionHandlers {
   openTrip?: (tripId: string) => boolean;
   openReview?: (prefill: TripDraft) => void;
   submitReview?: () => void;
+  /** Reload data that changed through /ws/voice (only "itinerary" is allowed). */
+  refresh?: (what: 'itinerary') => void;
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -118,6 +122,9 @@ export function runUiActions(actions: unknown, handlers: UiActionHandlers | ((to
       }
     } else if (action?.type === 'submit_review' && h.submitReview) {
       h.submitReview();
+      ran += 1;
+    } else if (action?.type === 'refresh' && h.refresh && action.what === 'itinerary') {
+      h.refresh('itinerary');
       ran += 1;
     } else if (action?.type === 'open_trip' && h.openTrip && typeof action.trip_id === 'string' && action.trip_id.length <= 80
       && h.openTrip(action.trip_id)) {

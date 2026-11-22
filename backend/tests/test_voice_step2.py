@@ -213,7 +213,12 @@ with mock.patch.object(groq_client.requests, "post", fake_groq):
     check("Groq 5xx twice -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.action == "error")
     FakeGroq.queue = [("http", 429)]
     r = ra("map dikha")
-    check("Groq rate limit -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.error_code == "rate_limited")
+    check("Groq rate limit -> 'try again later' reply (not 'I didn't understand')",
+          r.reply_text == agent.TRY_LATER_REPLY["hi"] and r.error_code == "rate_limited")
+    FakeGroq.queue = [("http", 429)]
+    r = ra("show the map")
+    check("Groq rate limit, English speaker -> English 'try again later'",
+          r.reply_text == agent.TRY_LATER_REPLY["en"] and r.error_code == "rate_limited", r.reply_text)
 
     # memory: capped at 10 turns, TTL, sent to Groq
     redis_conn.delete(f"voice:mem:{USER}:{CONV}")

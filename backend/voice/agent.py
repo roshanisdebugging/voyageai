@@ -30,6 +30,9 @@ MEMORY_TTL_SECONDS = 30 * 60
 PENDING_TTL_SECONDS = 120
 LLM_TIMEOUT_SECONDS = 8
 FALLBACK_REPLY = "Abhi samajh nahi paaya, phir se boliye."
+# The AI service is limited or down: say "try again later" (not "I didn't understand"), in the user's language.
+TRY_LATER_REPLY = {"hi": "Abhi jawab nahi de paa raha, thodi der baad phir try karein.",
+                   "en": "I can't answer right now, please try again in a little while."}
 
 # Garbled words have no reliable language, so "unclear" is always said in Hinglish (fixes-before-step4 item 6).
 UNCLEAR_REPLY = {"hi": "Samajh nahi aaya, phir se boliye.", "en": "Samajh nahi aaya, phir se boliye."}
@@ -75,6 +78,17 @@ Call exactly one tool when it fits:
   A destination alone counts as a detail ("plan a trip to Manali" -> update_trip_draft).
   "Nayi trip banani hai" / "plan a new trip" with NO details at all -> navigate to plan_trip.
 - cancel_trip_draft: the user wants to stop planning this trip ("cancel karo", "trip mat banao").
+- weather_replan: CHANGE the plan because of the weather ("aaj baarish hai, plan badlo", "kal ka plan mausam ke
+  hisaab se karo"). A weather QUESTION is get_weather, never this. day = today | tomorrow | day_after_tomorrow |
+  YYYY-MM-DD | the day number as text ("2"); leave it out for the whole trip. "kal" = tomorrow, "parso" =
+  day_after_tomorrow (NOT tomorrow). Needs an open trip.
+- optimize_day: reorder ONE day ("aaj ka route chhota karo", "day 2 optimize karo"). goal = MINIMIZE_TRAVEL_TIME
+  (default), RELAXED ("relaxed karo"), MORE_SIGHTS ("zyada jagah dikhao"). Needs an open trip.
+- optimize_budget: make the plan fit the budget ("budget mein fit karo", "kharcha kam karo"). Set budget_inr
+  ONLY when the user says an amount, e.g. the answer to "kitna budget hai?" ("50 hazaar" -> 50000).
+  While a trip is being planned by voice (see "Trip being planned" below), a budget amount or "budget X kar
+  do" is update_trip_draft, NEVER optimize_budget.
+  These three only ask first; our code does the rest. Never say the plan was changed yourself.
 - Never invent pages, routes, trips, places or facts.
 
 Current state:
@@ -224,8 +238,45 @@ CANCEL_DRAFT_TOOL: Dict[str, Any] = {
         "parameters": {"type": "object", "properties": {}},
     },
 }
+_DAY_ARG = {"type": _nullable("string"),
+            "description": "today | tomorrow | day_after_tomorrow | YYYY-MM-DD | the day number as text, e.g. '2'. Kal = tomorrow, parso = day_after_tomorrow."}
+WEATHER_REPLAN_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "weather_replan",
+        "description": "Change the open trip's plan because of bad weather (swap outdoor stops for indoor ones). Asks the user "
+                       "before anything changes. Not for weather questions (use get_weather).",
+        "parameters": {"type": "object", "properties": {"day": _DAY_ARG}},
+    },
+}
+OPTIMIZE_DAY_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "optimize_day",
+        "description": "Reorder one day of the open trip (shorter travel, more relaxed, or more sights). Asks before changing.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "day": _DAY_ARG,
+                "goal": {"type": _nullable("string"), "enum": ["MINIMIZE_TRAVEL_TIME", "RELAXED", "MORE_SIGHTS", None]},
+            },
+        },
+    },
+}
+OPTIMIZE_BUDGET_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "optimize_budget",
+        "description": "Make the open trip's plan fit its budget with cheaper swaps. Asks before changing.",
+        "parameters": {
+            "type": "object",
+            "properties": {"budget_inr": {"type": _nullable("number"),
+                                          "description": "Total budget in rupees, only if the user said an amount."}},
+        },
+    },
+}
 TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL, CANT_HELP_TOOL,
-         UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL]
+         UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL, WEATHER_REPLAN_TOOL, OPTIMIZE_DAY_TOOL, OPTIMIZE_BUDGET_TOOL]
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 
@@ -292,7 +343,10 @@ def trim_sentences(text: str, limit: int = 2) -> str:
 
 
 def is_garbled(text: str) -> bool:
-    """No real words at all (noise, a single letter, only symbols): no LLM call needed."""
+    """No real words at all (noise, a single letter, only symbols): no LLM call needed.
+    A number counts as content: "50000" is a real answer to "kitna budget hai?"."""
+    if re.search(r"\d", text or ""):
+        return False
     letters = re.findall(r"[^\W\d_]", text or "", re.UNICODE)
     return len(letters) < 2
 
@@ -499,6 +553,36 @@ def cancel_trip(redis_conn, user_id: str, conversation_id: str, lang: str) -> Ag
     return AgentResult(CANCELLED_REPLY[lang], action="trip_cancel", step="cancelled")
 
 
+SMART_CANCELLED = {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing was changed."}
+
+
+def confirm_pending(redis_conn, user_id: str, conversation_id: str, lang: str, pending_id: Optional[str] = None) -> AgentResult:
+    """
+    The ONE confirm action for every pending confirmation (voice "haan" and the Confirm button alike).
+    create_trip -> confirm_trip (step 4). Smart actions (step 6) -> taken once, then run by smart.apply_confirmed.
+    """
+    from voice import pending as P
+    from voice.tools import smart
+    pc = P.get(redis_conn, user_id, conversation_id)
+    if pc and pc.get("tool") in smart.SMART_TOOL_NAMES:
+        taken = P.take(redis_conn, user_id, conversation_id, pending_id or pc.get("id"))
+        if not taken:
+            return AgentResult(NOTHING_TO_CONFIRM[lang], action="trip_confirm_none", error_code="no_pending")
+        return smart.apply_confirmed(taken, user_id, lang, redis_conn)
+    return confirm_trip(redis_conn, user_id, conversation_id, lang, pending_id)
+
+
+def cancel_pending(redis_conn, user_id: str, conversation_id: str, lang: str) -> AgentResult:
+    """Cancel/no: a smart action just drops its pending item; a trip draft goes as before (step 4)."""
+    from voice import pending as P
+    from voice.tools import smart
+    pc = P.get(redis_conn, user_id, conversation_id)
+    if pc and pc.get("tool") in smart.SMART_TOOL_NAMES:
+        P.clear(redis_conn, user_id, conversation_id)
+        return AgentResult(SMART_CANCELLED[lang], action="smart_cancel", step="cancelled")
+    return cancel_trip(redis_conn, user_id, conversation_id, lang)
+
+
 def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str, has_trip: bool,
             user_id: Optional[str] = None, trip: Optional[TripInfo] = None,
             conversation_id: Optional[str] = None, redis_conn=None) -> AgentResult:
@@ -537,6 +621,16 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         if name == "cancel_trip_draft":
             return cancel_trip(redis_conn, user_id, conversation_id, lang)
         return update_draft(redis_conn, user_id, conversation_id, args, lang)
+
+    from voice.tools import smart
+    if name in smart.SMART_TOOL_NAMES:
+        if not user_id or not conversation_id or redis_conn is None:
+            return AgentResult(FALLBACK_REPLY, action="error", error_code="no_user",
+                               error_detail=f"tool {name} needs a signed-in user, a conversation id and Redis")
+        if trip is None or not trip.id:
+            return AgentResult(smart.TEXT["no_trip"][lang], ui_actions=[{"type": "navigate", "to": pages.ROUTES["my_trips"]}],
+                               action="smart_no_trip", error_code="no_trip")
+        return smart.propose(name, args, user_id, trip, lang, redis_conn, conversation_id)
 
     from voice.tools import lookups
     if name == "search_places":
@@ -582,18 +676,18 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     llm_done: Optional[float] = None
     used_llm = False
     from voice import draft as D, pending as P
-    confirm_pending = P.get(redis_conn, user_id, conversation_id)
+    open_pending = P.get(redis_conn, user_id, conversation_id)
     draft_state = D.load(redis_conn, user_id, conversation_id)
     said = yes_or_no(transcript)
     pending = pop_pending(redis_conn, user_id, conversation_id)
     answer_to_pending = said if pending else None
     result: Optional[AgentResult] = None
 
-    if confirm_pending and said == "yes":
+    if open_pending and said == "yes":
         # "haan" to the Confirm card: same action as the Confirm button.
-        result = confirm_trip(redis_conn, user_id, conversation_id, lang)
-    elif confirm_pending and said == "no":
-        result = cancel_trip(redis_conn, user_id, conversation_id, lang)
+        result = confirm_pending(redis_conn, user_id, conversation_id, lang)
+    elif open_pending and said == "no":
+        result = cancel_pending(redis_conn, user_id, conversation_id, lang)
     elif draft_state is not None and draft_state.awaiting == "date" and said == "yes":
         draft_state.dates_confirmed = True     # set only here, by code, after the read-back
         result = draft_next(redis_conn, user_id, conversation_id, draft_state, lang)
@@ -636,12 +730,12 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
             llm_done = time.perf_counter()
             result = _decide(answer["tool_calls"], answer["content"], lang, has_trip=trip is not None,
                              user_id=user_id, trip=trip, conversation_id=conversation_id, redis_conn=redis_conn)
-            if confirm_pending and not result.action.startswith("trip_"):
+            if open_pending and not result.action.startswith("trip_") and result.pending_confirmation is None:
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
         # Groq errors carry status + provider code only (never the message, which can quote the user).
         except GroqRateLimited as err:
             logger.warning("[VOICE AGENT] Groq rate limit: %s", err)
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="rate_limited",
+            result = AgentResult(TRY_LATER_REPLY[lang], action="error", error_code="rate_limited",
                                  error_detail=str(err)[:200])
         except GroqTransient as err:
             logger.warning("[VOICE AGENT] Groq failed twice: %s", err)
@@ -649,7 +743,7 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                                  error_detail=str(err)[:200])
         except GroqError as err:
             logger.warning("[VOICE AGENT] Groq error: %s", err)
-            result = AgentResult(FALLBACK_REPLY, action="error", error_code="groq_error",
+            result = AgentResult(TRY_LATER_REPLY[lang], action="error", error_code="groq_error",
                                  error_detail=str(err)[:200])
         except Exception as err:
             # Unexpected (a bug, or a tool/lookup failing): the full traceback goes to the server log.

@@ -18,7 +18,7 @@ Server -> app (text frames, JSON):
   {"type": "transcript", "turn_id", "text", "language", "duration_ms", "latency_ms", "truncated"}
                                                           sent as soon as speech-to-text finishes
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
-   "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
+   "ui_actions": [{"type": "navigate", "to": "/map"}, {"type": "refresh", "what": "itinerary"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
    "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null),
    "pending_confirmation": {"id", "summary"} | null,      step 4: show the Confirm card
    "error_code"?, "error_detail"?, "tts_error"?}          only when something failed: the reason (codes/status, no user text)
