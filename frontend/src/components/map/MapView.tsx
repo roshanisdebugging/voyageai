@@ -4,7 +4,7 @@ import { useTrip } from '../../features/trip/TripContext';
 import { useNavigation } from '../../context/NavigationContext';
 import {
   Crosshair, ExternalLink, Volume2, VolumeX, Loader2,
-  Plus, Check, ArrowLeft, Search, X, MapPin
+  Plus, Check, ArrowLeft, Search, X, MapPin, Bookmark
 } from 'lucide-react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -14,6 +14,8 @@ import { useAudioGuide } from '../../hooks/useAudioGuide';
 import { createUserLocationIcon, createPoiIcon } from './mapIcons';
 import { AddToItineraryModal } from '../itinerary/AddToItineraryModal';
 import { usePlaceItineraryAdd } from '../itinerary/usePlaceItineraryAdd';
+import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
+import { useSavedPlaceToggle } from '../places/useSavedPlaceToggle';
 import { useNavigate } from 'react-router-dom';
 import { getCanonicalCategory, type CanonicalCategoryKey } from './mapCategoryConfig';
 import { useTheme } from '../../context/ThemeContext';
@@ -121,6 +123,8 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
   // "Add to Itinerary" day picker (shared with the place details page)
   const itineraryAdd = usePlaceItineraryAdd();
   const addedPlaceDays = itineraryAdd.addedPlaceDays;
+  const tripOpen = useHasActiveTrip(); // "Add to Itinerary" only while a trip is open; "Save" always
+  const savedToggle = useSavedPlaceToggle();
 
   // Map search (India only, straight-line distance from the current location)
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -798,26 +802,55 @@ export const MapView: React.FC<{ mapInstance?: any }> = ({ mapInstance }) => {
                 </div>
 
                 <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-zinc-800">
+                  {tripOpen && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        itineraryAdd.open(place);
+                      }}
+                      className={`flex-1 min-h-[44px] px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors press-scale ${addedPlaceDays.has(place.id)
+                          ? 'bg-[#1F5A3F]/10 dark:bg-emerald-950/60 text-[#1F5A3F] dark:text-emerald-400 border border-[#1F5A3F]/30 dark:border-emerald-800/40'
+                          : 'bg-[#1F5A3F] hover:bg-[#194B34] text-white shadow-sm'
+                        }`}
+                    >
+                      {addedPlaceDays.has(place.id) ? (
+                        <>
+                          <Check className="w-4 h-4" aria-hidden="true" /> Added to Day {addedPlaceDays.get(place.id)}
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4" aria-hidden="true" /> Add to Itinerary
+                        </>
+                      )}
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      itineraryAdd.open(place);
+                      savedToggle.toggle({
+                        place_id: place.id,
+                        title: place.name,
+                        category: place.category,
+                        location_name: place.address,
+                        location: place.address,
+                        coordinates: [place.latitude, place.longitude],
+                        rating: place.rating,
+                        cost_text: place.price_approx,
+                        description: place.description,
+                      });
                     }}
-                    className={`flex-1 min-h-[44px] px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors press-scale ${addedPlaceDays.has(place.id)
-                        ? 'bg-[#1F5A3F]/10 dark:bg-emerald-950/60 text-[#1F5A3F] dark:text-emerald-400 border border-[#1F5A3F]/30 dark:border-emerald-800/40'
-                        : 'bg-[#1F5A3F] hover:bg-[#194B34] text-white shadow-sm'
+                    aria-label={savedToggle.isSaved(place.id) ? `Remove ${place.name} from saved places` : `Save ${place.name}`}
+                    aria-pressed={savedToggle.isSaved(place.id)}
+                    className={`min-h-[44px] min-w-[44px] px-3 rounded-xl border font-semibold text-xs flex items-center justify-center gap-1.5 press-scale transition-colors ${tripOpen ? '' : 'flex-1'} ${savedToggle.isSaved(place.id)
+                        ? 'bg-[#1F5A3F]/10 dark:bg-emerald-950/60 text-[#1F5A3F] dark:text-emerald-400 border-[#1F5A3F]/30 dark:border-emerald-800/40'
+                        : 'bg-white dark:bg-zinc-800 text-gray-900 dark:text-zinc-100 border-gray-200 dark:border-zinc-700 hover:bg-gray-50 dark:hover:bg-zinc-700'
                       }`}
                   >
-                    {addedPlaceDays.has(place.id) ? (
-                      <>
-                        <Check className="w-4 h-4" aria-hidden="true" /> Added to Day {addedPlaceDays.get(place.id)}
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-4 h-4" aria-hidden="true" /> Add to Itinerary
-                      </>
-                    )}
+                    <Bookmark className={`w-4 h-4 ${savedToggle.isSaved(place.id) ? 'fill-current' : ''}`} aria-hidden="true" />
+                    {!tripOpen && (savedToggle.isSaved(place.id) ? 'Saved' : 'Save place')}
                   </button>
 
                   <button

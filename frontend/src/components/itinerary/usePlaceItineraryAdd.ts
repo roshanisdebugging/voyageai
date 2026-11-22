@@ -43,7 +43,7 @@ export function usePlaceItineraryAdd() {
     const costInt = firstNumber ? parseInt(firstNumber[0].replace(/,/g, ''), 10) : 0;
     const loc = sanitizeLocationName(selected.address || userLocationName);
     const payload = {
-      trip_id: currentTrip?.id || 'active_trip',
+      trip_id: currentTrip?.id || '', // no trip open: the server refuses ("No trip is open"), never guesses one
       destination: currentTrip?.destination?.name || userLocationName || 'Local Area',
       item_id: selected.id,
       day_id: dayId,

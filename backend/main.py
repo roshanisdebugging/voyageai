@@ -2156,30 +2156,20 @@ def add_to_itinerary(
     db: Session = Depends(get_db)
 ):
     from redis_client import redis_conn
-    from models_trip import TripModel
     from models_itinerary import ItineraryModel, ItineraryDayModel, ItineraryActivityModel
 
     current_user, user_profile, user_prefs, is_authenticated = user_data
     if not is_authenticated or not current_user or current_user.id.startswith("guest_"):
         raise HTTPException(status_code=401, detail="Please log in to add places to a trip.")
 
-    req_trip_id = (req.trip_id or "active_trip").strip()
-    target_trip = None
-    candidates = [req_trip_id, f"trip_{req_trip_id}", req_trip_id.replace("trip_", "")]
-
-    if req_trip_id and req_trip_id != "active_trip":
-        target_trip = db.query(TripModel).filter(
-            TripModel.id.in_(candidates),
-            TripModel.user_id == current_user.id
-        ).first()
-
+    # The trip must be named explicitly. A missing ID or the old "active_trip" placeholder (a stale button with no
+    # trip open) is refused, and there is no fallback to "the latest trip": that wrote to the wrong trip.
+    req_trip_id = (req.trip_id or "").strip()
+    if not req_trip_id or req_trip_id == "active_trip":
+        raise HTTPException(status_code=404, detail="No trip is open. Open a trip first, then add places to it.")
+    target_trip = find_owned_trip(db, req_trip_id, current_user.id)
     if not target_trip:
-        target_trip = db.query(TripModel).filter(
-            TripModel.user_id == current_user.id
-        ).order_by(TripModel.created_at.desc()).first()
-
-    if not target_trip:
-        raise HTTPException(status_code=404, detail="No active trip found. Please create a trip first.")
+        raise HTTPException(status_code=404, detail="Trip not found.")
 
     target_trip_id = target_trip.id
     day_num = req.day_number or 1

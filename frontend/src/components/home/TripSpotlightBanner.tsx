@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { Calendar, MapPin, Plus, Check, Loader2, Clock, AlertCircle } from 'lucide-react';
+import { Calendar, MapPin, Plus, Check, Loader2, Clock, AlertCircle, Bookmark } from 'lucide-react';
 import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders, fetchWithAuth } from '../../config/apiConfig';
 import { MONTHS, formatDateRange, parseISODate, tripStatus } from './tripDates';
 import { isMockPayload } from '../../utils/mockIndicator';
 import { MockCardAlert } from '../common/MockCardAlert';
 import { AddToItineraryModal, type ItineraryDayOption } from '../itinerary/AddToItineraryModal';
 import { useTrip } from '../../features/trip/TripContext';
+import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
+import { useSavedPlaceToggle } from '../places/useSavedPlaceToggle';
 
 interface Activity {
   id: string;
@@ -85,6 +87,24 @@ const AddButton: React.FC<{ title: string; state: AddState; onClick: () => void 
   );
 };
 
+/** compact: icon only (when the Add button shares the row). */
+const SaveButton: React.FC<{ title: string; saved: boolean; compact?: boolean; onClick: () => void }> = ({ title, saved, compact, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-label={saved ? `Remove ${title} from saved places` : `Save ${title}`}
+    aria-pressed={saved}
+    className={`min-h-[44px] min-w-[44px] shrink-0 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors press-scale border ${
+      saved
+        ? 'border-[var(--color-primary)] bg-[var(--color-surface-elevated)] text-[var(--color-primary)]'
+        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+    } ${FOCUS}`}
+  >
+    <Bookmark className={`w-4 h-4 ${saved ? 'fill-current' : ''}`} aria-hidden="true" />
+    {!compact && (saved ? 'Saved' : 'Save')}
+  </button>
+);
+
 const spotlightCache = new Map<string, SpotlightData>();
 
 export const TripSpotlightBanner: React.FC<{
@@ -108,6 +128,8 @@ export const TripSpotlightBanner: React.FC<{
     : (coarseLat !== undefined && coarseLng !== undefined ? `geo:${coarseLat}_${coarseLng}` : '');
 
   const { currentTrip, currentItinerary, refetchItinerary } = useTrip();
+  const tripOpen = useHasActiveTrip(); // "Add" only while a trip is open; "Save" always
+  const savedToggle = useSavedPlaceToggle();
 
   const [data, setData] = useState<SpotlightData | null>(() => {
     return fetchKey ? spotlightCache.get(fetchKey) || null : null;
@@ -228,7 +250,7 @@ export const TripSpotlightBanner: React.FC<{
     const loc = 'location' in selectedItemForModal ? selectedItemForModal.location : (data?.destination || destination || 'Local Area');
 
     const payload = {
-      trip_id: currentTrip?.id || 'active_trip',
+      trip_id: currentTrip?.id || '', // no trip open: the server refuses ("No trip is open"), never guesses one
       destination: data?.destination || destination || currentTrip?.destination?.name || 'Curated Trip',
       item_id: selectedItemForModal.id,
       day_id: dayId,
@@ -417,11 +439,31 @@ export const TripSpotlightBanner: React.FC<{
                       </p>
                     )}
                   </div>
-                  <AddButton
-                    title={act.title}
-                    state={stateFor(act.id)}
-                    onClick={() => handleOpenAddModal(act, 'activity')}
-                  />
+                  <div className="flex items-center gap-2">
+                    <SaveButton
+                      title={act.title}
+                      saved={savedToggle.isSaved(act.id)}
+                      compact={tripOpen}
+                      onClick={() => savedToggle.toggle({
+                        place_id: act.id,
+                        title: act.title,
+                        category: act.category || act.tag,
+                        location_name: act.location,
+                        location: act.location,
+                        coordinates: act.coordinates,
+                        cost_text: act.cost ? `₹${act.cost}` : undefined,
+                        duration_text: act.duration,
+                        description: act.description,
+                      })}
+                    />
+                    {tripOpen && (
+                      <AddButton
+                        title={act.title}
+                        state={stateFor(act.id)}
+                        onClick={() => handleOpenAddModal(act, 'activity')}
+                      />
+                    )}
+                  </div>
                 </div>
               </article>
             </li>
@@ -485,11 +527,13 @@ export const TripSpotlightBanner: React.FC<{
 
                 <div className="mt-auto flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
                   <p className="text-sm font-bold text-[var(--color-text-primary)]">{evt.price === 0 ? 'Free' : `₹${evt.price}`}</p>
-                  <AddButton
-                    title={evt.title}
-                    state={stateFor(evt.id)}
-                    onClick={() => handleOpenAddModal(evt, 'event')}
-                  />
+                  {tripOpen && (
+                    <AddButton
+                      title={evt.title}
+                      state={stateFor(evt.id)}
+                      onClick={() => handleOpenAddModal(evt, 'event')}
+                    />
+                  )}
                 </div>
               </article>
             </li>

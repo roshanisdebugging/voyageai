@@ -135,6 +135,19 @@ with database.SessionLocal() as db:
 check("add to itinerary: user with no trips gets 404, nothing written", r.status_code == 404 and after == before, f"{r.status_code}, {before}->{after}")
 r = client.post("/api/trips/itinerary/add", json={**body, "trip_id": "trip_upcoming"}, headers={"Authorization": f"Bearer {tok_b}"})
 check("add to itinerary: B naming A's trip gets 404", r.status_code == 404, r.status_code)
+with database.SessionLocal() as db:
+    before = db.query(ItineraryActivityModel).count()
+r_stale = client.post("/api/trips/itinerary/add", json=body, headers=auth)
+r_none = client.post("/api/trips/itinerary/add", json={k: v for k, v in body.items() if k != "trip_id"}, headers=auth)
+r_wrong = client.post("/api/trips/itinerary/add", json={**body, "trip_id": "trip_does_not_exist"}, headers=auth)
+with database.SessionLocal() as db:
+    after = db.query(ItineraryActivityModel).count()
+check("add to itinerary: 'active_trip' (stale button) -> 404 'No trip is open', never the latest trip",
+      r_stale.status_code == 404 and "No trip is open" in r_stale.json().get("detail", ""), f"{r_stale.status_code} {r_stale.text[:100]}")
+check("add to itinerary: missing trip_id -> same clear 404", r_none.status_code == 404 and "No trip is open" in r_none.json().get("detail", ""),
+      f"{r_none.status_code} {r_none.text[:100]}")
+check("add to itinerary: unknown trip_id -> 404, no fallback", r_wrong.status_code == 404, r_wrong.status_code)
+check("add to itinerary: none of those wrote anything", after == before, f"{before}->{after}")
 r = client.post("/api/trips/itinerary/add", json={**body, "trip_id": "trip_upcoming"}, headers=auth)
 check("add to itinerary: owner still works", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
 

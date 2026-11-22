@@ -6,6 +6,7 @@ import { checkPlaceSaved, removeSavedPlace, savePlace, type SavedPlaceItem } fro
 import { useToast } from '../common/UndoToast';
 import { AddToItineraryModal } from '../itinerary/AddToItineraryModal';
 import { usePlaceItineraryAdd } from '../itinerary/usePlaceItineraryAdd';
+import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
 
 /** What the map card hands over in route state (shown at once, before any fetch). */
 interface CardPlace {
@@ -73,6 +74,7 @@ const PlaceDetailsView: React.FC<{ placeId: string }> = ({ placeId }) => {
   const [isSaving, setIsSaving] = useState(false);
   const savedTouchedRef = useRef(false); // once the user taps Save, a late initial check must not undo it
   const itineraryAdd = usePlaceItineraryAdd();
+  const tripOpen = useHasActiveTrip();
 
   useEffect(() => {
     if (!canFetch) return;
@@ -230,13 +232,16 @@ const PlaceDetailsView: React.FC<{ placeId: string }> = ({ placeId }) => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <button type="button" onClick={() => itineraryAdd.open({ id: placeId, name, category: cardMatches?.category, address, price_approx: cardMatches?.price_approx })}
-          className={`min-h-[44px] px-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5 press-scale ${added
-            ? 'bg-[#1F5A3F]/10 text-[#1F5A3F] dark:text-emerald-400 border border-[#1F5A3F]/30'
-            : 'bg-[#1F5A3F] hover:bg-[#194B34] text-white'}`}>
-          {added ? <><Check className="w-4 h-4" aria-hidden="true" /> Added to Day {added}</> : <><Plus className="w-4 h-4" aria-hidden="true" /> Add to Itinerary</>}
-        </button>
+      {/* Trip open: Add + Save + Open in Google Maps. No trip open: Save + Open in Google Maps. */}
+      <div className={`grid grid-cols-1 gap-2 ${tripOpen ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+        {tripOpen && (
+          <button type="button" onClick={() => itineraryAdd.open({ id: placeId, name, category: cardMatches?.category, address, price_approx: cardMatches?.price_approx })}
+            className={`min-h-[44px] px-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5 press-scale ${added
+              ? 'bg-[#1F5A3F]/10 text-[#1F5A3F] dark:text-emerald-400 border border-[#1F5A3F]/30'
+              : 'bg-[#1F5A3F] hover:bg-[#194B34] text-white'}`}>
+            {added ? <><Check className="w-4 h-4" aria-hidden="true" /> Added to Day {added}</> : <><Plus className="w-4 h-4" aria-hidden="true" /> Add to Itinerary</>}
+          </button>
+        )}
         <button type="button" onClick={() => setSaved(!isSaved, true)} disabled={isSaving}
           aria-label={isSaved ? 'Remove from saved places' : 'Save place'}
           className="min-h-[44px] px-3 rounded-xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 text-sm font-semibold text-[#1F2522] dark:text-zinc-100 flex items-center justify-center gap-1.5 press-scale disabled:opacity-60">

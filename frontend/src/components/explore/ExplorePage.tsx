@@ -3,6 +3,7 @@ import { useToast } from '../common/UndoToast';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
+import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
 import { useNavigation } from '../../context/NavigationContext';
 import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders, fetchWithAuth } from '../../config/apiConfig';
 import {
@@ -26,7 +27,7 @@ export const ExplorePage: React.FC = () => {
   // Dynamic live location city name
   const liveLocationCity = sanitizeLocationName(userLocationName);
   const liveCityName = liveLocationCity;
-  const hasActiveTrip = Boolean(currentTrip?.destination?.name);
+  const hasActiveTrip = useHasActiveTrip();
 
   // Context switch state: 'gps' or 'trip'
   const [contextMode, setContextMode] = useState<'gps' | 'trip'>('gps');
@@ -246,7 +247,7 @@ export const ExplorePage: React.FC = () => {
     const loc = selectedPlaceForModal.location || selectedPlaceForModal.address || activeDestinationName;
 
     const payload = {
-      trip_id: currentTrip?.id || 'active_trip',
+      trip_id: currentTrip?.id || '', // no trip open: the server refuses ("No trip is open"), never guesses one
       destination: activeDestinationName,
       item_id: selectedPlaceForModal.id,
       day_id: dayId,
@@ -465,7 +466,7 @@ export const ExplorePage: React.FC = () => {
                     <Clock className="w-3 h-3 text-(--color-text-secondary)" /> {evt.date} • {evt.time}
                   </p>
                   <p className="text-[11px] text-(--color-primary) font-semibold mt-1">₹{evt.price} per ticket</p>
-                  {contextMode === 'trip' && (
+                  {contextMode === 'trip' && hasActiveTrip && (
                     <button
                       type="button"
                       onClick={() => setSelectedPlaceForModal(evt)}
@@ -623,8 +624,8 @@ export const ExplorePage: React.FC = () => {
                           <Sparkles className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300" />
                         </button>
 
-                        {/* 4. Add to Itinerary (ONLY IN TRIP MODE) */}
-                        {contextMode === 'trip' && (
+                        {/* 4. Add to Itinerary (only in trip mode, and only while a trip is open) */}
+                        {contextMode === 'trip' && hasActiveTrip && (
                           <button
                             onClick={() => setSelectedPlaceForModal(act)}
                             className={`px-3 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-all press-scale ${addedItemDays.has(act.id)
