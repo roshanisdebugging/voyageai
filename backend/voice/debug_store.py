@@ -57,7 +57,7 @@ voice_speeches = Table(
     Column("tts_time_ms", Integer),
     Column("agent_action", Text),        # navigate:<page> | map_focus | where | answer | weather | decline | unclear | list_trips | open_trip | reply | error
     Column("llm_time_ms", Integer),
-    Column("agent_error_code", Text),    # why the agent failed (e.g. groq_transient_twice, answered_by_groq:<code>)
+    Column("agent_error_code", Text),    # why the turn failed: agent (e.g. llm_transient_twice), stt_failed, tts_failed
     Column("agent_error_detail", Text),  # status / code names, model, attempt, tool, file:line. Never user words.
     Column("status", String(16), nullable=False),
     Column("error", Text),
@@ -156,6 +156,8 @@ def _safe_dir_name(value: str) -> str:
 
 def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: int) -> int:
     """Saves the WAV (also for failed turns) and one voice_speeches row. Returns the row's turn_index."""
+    from voice.pipeline import failure_reason
+    fail_code, fail_detail = failure_reason(result)   # agent, STT or Sarvam TTS failure (one mechanism)
     engine = _engine_or_create()
     session_dir = os.path.join(audio_root(), _safe_dir_name(ctx.session_id))
     os.makedirs(session_dir, exist_ok=True)
@@ -178,7 +180,7 @@ def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: 
             audio_duration_ms=result.duration_ms,
             transcription=result.text if result.ok else None,
             language=result.language,
-            stt_provider=result.stt_provider or (os.getenv("VOICE_STT_PROVIDER") or "groq"),
+            stt_provider=result.stt_provider or (os.getenv("VOICE_STT_PROVIDER") or "openai"),
             stt_model=result.stt_model or os.getenv("VOICE_STT_MODEL") or DEFAULT_STT_MODEL,
             stt_time_ms=result.stt_ms if result.ok else None,
             total_time_ms=total_ms,
@@ -186,8 +188,8 @@ def save_speech(pcm: bytes, ctx: "TurnContext", result: "TurnResult", total_ms: 
             tts_time_ms=result.tts_ms if result.reply_text is not None else None,
             agent_action=result.action if result.reply_text is not None else None,
             llm_time_ms=result.llm_ms if result.reply_text is not None else None,
-            agent_error_code=result.agent_error_code,
-            agent_error_detail=result.agent_error_detail if result.agent_error_code else None,
+            agent_error_code=fail_code,
+            agent_error_detail=fail_detail if fail_code else None,
             status="ok" if result.ok else "failed",
             error=None if result.ok else f"{result.error_code}: {result.error_detail}",
             created_at=ctx.started_at,

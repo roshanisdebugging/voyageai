@@ -88,6 +88,24 @@ def set_activity_done(db: Session, user_id: str, trip_id: str, activity_id: Opti
     return {"activityId": activity.id, "isDone": activity.is_done, "progress": progress}
 
 
+def set_trip_budget(db: Session, user_id: str, trip_id: str, amount: Any) -> Dict[str, Any]:
+    """The trip's total budget (rupees), from the itinerary page's "Set budget". Same range as trip creation
+    (trip_lifecycle MIN/MAX_BUDGET_INR); the budget level follows the amount. Voice set_trip_budget asks first, then
+    saves through the same itinerary_service.set_trip_budget_amount."""
+    import itinerary_service
+    from trip_lifecycle import MAX_BUDGET_INR, MIN_BUDGET_INR, serialize_trip
+    trip = _owned_trip(db, user_id, trip_id)
+    try:
+        value = float(amount)
+    except (TypeError, ValueError):
+        raise ValueError("Enter the budget in rupees.")
+    if value != value or not MIN_BUDGET_INR <= value <= MAX_BUDGET_INR:
+        raise ValueError(f"Budget must be between ₹{MIN_BUDGET_INR:,} and ₹{MAX_BUDGET_INR:,}.")
+    budget = itinerary_service.set_trip_budget_amount(db, trip.id, value)
+    db.refresh(trip)
+    return {"budget": budget, "trip": serialize_trip(trip, db)}
+
+
 def swap_activity(db: Session, user_id: str, trip_id: str, activity_id: Optional[str],
                   replacement: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not activity_id:

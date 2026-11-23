@@ -955,7 +955,7 @@ WS_TRIP_ACTIONS = {
     "trips:get_expenses", "trips:add_expense",
     "trips:weather_replan", "trips:optimize_day", "trips:optimize_budget",
     "trips:refine", "trips:regenerate_itinerary", "trips:swap_activity",
-    "trips:set_activity_done",
+    "trips:set_activity_done", "trips:set_budget",
 }
 
 # (bucket, requests per minute) per action. Anything not listed uses "general".
@@ -1484,6 +1484,10 @@ async def process_ws_action(
         import trip_actions
         return trip_actions.set_activity_done(
             db, user.id, data["trip_id"], data.get("activity_id") or data.get("activityId"), bool(data.get("done", True)))
+
+    elif reqname == "trips:set_budget":
+        import trip_actions
+        return trip_actions.set_trip_budget(db, user.id, data["trip_id"], data.get("amount"))
 
     elif reqname == "trips:swap_activity":
         import trip_actions
@@ -4062,6 +4066,23 @@ def get_trip_transports(
         }
         for t in transports
     ]
+
+@app.put("/api/trips/{trip_id}/budget", dependencies=[Depends(general_limiter)])
+@app.post("/api/trips/{trip_id}/budget", dependencies=[Depends(general_limiter)])
+def set_trip_budget_endpoint(
+    trip_id: str,
+    payload: dict,
+    current_user: AuthUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """REST fallback of WS trips:set_budget (the itinerary page's "Set budget")."""
+    import trip_actions
+    trip_id = verify_trip_ownership(trip_id, current_user.id, db).id
+    try:
+        return trip_actions.set_trip_budget(db, current_user.id, trip_id, (payload or {}).get("amount"))
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
 
 @app.post("/api/trips/{trip_id}/expenses", status_code=status.HTTP_201_CREATED, dependencies=[Depends(general_limiter)])
 def create_trip_expense(

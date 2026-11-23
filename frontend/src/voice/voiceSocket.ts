@@ -28,10 +28,14 @@ export type VoiceServerMessage =
       note?: string | null;
       /** "Google Maps" when the note is Google Maps content (attribution shown with it). */
       note_attribution?: string;
-      /** Step 4/5: show the Confirm card (title: e.g. "Add this expense?"). */
+      /** Step 4/5/6: show the Confirm card (title: e.g. "Add this expense?"). */
       pending_confirmation?: { id: string; summary: string; title?: string } | null;
-      /** Test mode only (VOICE_DEBUG_STORE=true): why the agent failed, e.g. "groq_transient_twice". */
+      /** Only when something failed: why (codes / HTTP status / class names, never the user's words),
+       *  e.g. "llm_transient_twice" + "HTTP 500, model=..., attempt 2 of 2". */
       error_code?: string;
+      error_detail?: string;
+      /** Why the spoken reply couldn't be made, e.g. "sarvam: http_429 insufficient_quota_error". */
+      tts_error?: string;
     }
   | {
       type: 'confirm_result';
@@ -40,7 +44,7 @@ export type VoiceServerMessage =
       reply_text: string;
       ui_actions?: Array<{ type: string; [key: string]: unknown }>;
     }
-  | { type: 'error'; code: string; message: string; turn_id?: string }
+  | { type: 'error'; code: string; message: string; turn_id?: string; detail?: string }
   | { type: 'closed'; code: number };
 
 type Listener = (msg: VoiceServerMessage) => void;

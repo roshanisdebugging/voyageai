@@ -1,9 +1,9 @@
 """
 Step 3 eval (voicefirst.md): questions and look-ups, plus step 2's navigation phrases.
 
-Grades the agent's DECISION with the REAL Groq API: the same system prompt and tools as voice/agent.py,
+Grades the agent's DECISION with the REAL OpenAI API: the same system prompt and tools as voice/agent.py,
 then checks the tool chosen and its arguments. Tools are not run (no Gemini calls, nothing saved), so the
-eval has no side effects. Calls are paced (~4.5 s, retry after 20 s on a rate limit) for Groq's per-minute limits.
+eval has no side effects. Calls are paced (~4.5 s, retry after 20 s on a rate limit) for the account's per-minute limits.
 
   python -m scripts.eval_lookups              # step 3 phrases + step 2 navigation phrases
   python -m scripts.eval_lookups --timings    # also time the real tools once (Gemini answers, Google search)
@@ -20,11 +20,11 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(BACKEND_DIR / ".env", override=True)
 
-from groq_client import groq_chat_tools  # noqa: E402
+from openai_client import chat_tools  # noqa: E402
 from voice import agent, pages  # noqa: E402
 from scripts.eval_navigation import CASES as NAV_CASES, TRIP  # noqa: E402
 
-PACE_SECONDS = 4.5  # 5 tools make each call ~2k tokens: stay under Groq's per-minute token allowance
+PACE_SECONDS = 4.5  # 5 tools make each call ~2k tokens: stay under the account's per-minute token limit
 
 # (phrase, lang, expected, check, trip open?, history)
 # expected: tool name, or "DECLINE" (no tool, no navigation) or "QUESTION" (no tool, asks back).
@@ -88,17 +88,17 @@ def decide(phrase, has_trip, history):
     msgs = [{"role": "system", "content": agent.build_system_prompt("/home", TRIP if has_trip else None)}]
     msgs += history or []
     msgs.append({"role": "user", "content": phrase})
-    from groq_client import GroqRateLimited
+    from openai_client import LLMRateLimited
     for attempt in range(4):
         t = time.perf_counter()
         try:
-            out = groq_chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2,
-                                  timeout=agent.LLM_TIMEOUT_SECONDS, reasoning_effort="low")
+            out = chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2,
+                             timeout=agent.LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             return out, int((time.perf_counter() - t) * 1000)
-        except GroqRateLimited:
+        except LLMRateLimited:
             if attempt == 3:
                 raise
-            time.sleep(20)  # Groq's per-minute token allowance; the eval waits, a user turn would not
+            time.sleep(20)  # the account's per-minute limit; the eval waits, a user turn would not
 
 
 def grade(expected, chk, out, has_trip):

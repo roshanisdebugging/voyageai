@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 
 /**
  * TEMPORARY, test phase only (voicefirst.md step 1). Shown when VITE_VOICE_TEST_TRANSCRIPT=true.
- * Lists what Groq Whisper heard. Kept in React state only: gone on reload, never saved.
+ * Lists what speech-to-text (OpenAI) heard. Kept in React state only: gone on reload, never saved.
  */
 export interface PanelEntry {
   id: string;
@@ -11,7 +11,7 @@ export interface PanelEntry {
   text: string;
   language?: string | null;
   durationMs?: number;
-  groqMs?: number;
+  sttMs?: number;
   roundTripMs?: number;
   truncated?: boolean;
   // Spoken reply (step 1b)
@@ -22,7 +22,10 @@ export interface PanelEntry {
   action?: string;  // "navigate:<page>" | "reply" | "error"
   llmMs?: number;
   navTo?: string;   // the route it navigated to
-  errorCode?: string; // test mode only: why the agent failed (e.g. "groq_transient_twice")
+  // Why it failed (only set on a failed turn): codes / HTTP status, never the user's words
+  errorCode?: string;
+  errorDetail?: string;
+  ttsError?: string;
   at: number;
 }
 
@@ -38,9 +41,9 @@ const seconds = (ms?: number) => (ms == null ? '–' : `${(ms / 1000).toFixed(1)
 
 export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () => void }> = ({ entries, onClear }) => {
   const [open, setOpen] = useState(false); // collapsed by default: just the header pill
-  const transcripts = entries.filter((e) => e.kind === 'transcript' && e.groqMs != null);
-  const avgGroq = transcripts.length
-    ? Math.round(transcripts.reduce((sum, e) => sum + (e.groqMs || 0), 0) / transcripts.length)
+  const transcripts = entries.filter((e) => e.kind === 'transcript' && e.sttMs != null);
+  const avgStt = transcripts.length
+    ? Math.round(transcripts.reduce((sum, e) => sum + (e.sttMs || 0), 0) / transcripts.length)
     : null;
 
   return (
@@ -58,7 +61,7 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
           aria-expanded={open}
         >
           {open ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-          Voice test · {transcripts.length} heard{avgGroq != null ? ` · Groq avg ${avgGroq} ms` : ''}
+          Voice test · {transcripts.length} heard{avgStt != null ? ` · STT avg ${avgStt} ms` : ''}
         </button>
         {entries.length > 0 && (
           <button type="button" onClick={onClear} aria-label="Clear transcripts" className="p-1 rounded-lg text-gray-500 hover:text-rose-600">
@@ -71,7 +74,7 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
         <div className="max-h-[38vh] overflow-y-auto px-3 py-2 space-y-2">
           {entries.length === 0 ? (
             <p className="text-xs text-gray-500 dark:text-zinc-400 py-1">
-              Tap the mic, speak, tap again. What Groq heard shows here. Nothing is saved by this panel.
+              Tap the mic, speak, tap again. What speech-to-text heard shows here. Nothing is saved by this panel.
             </p>
           ) : (
             entries.map((e) =>
@@ -81,7 +84,7 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
                 <div key={e.id} className="space-y-0.5">
                   <p className="text-sm font-medium leading-snug break-words">{e.text || <em className="text-gray-400">(nothing heard)</em>}</p>
                   <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
-                    {e.language || '?'} · clip {seconds(e.durationMs)}{e.truncated ? ' (cut at 30 s)' : ''} · Groq {e.groqMs} ms · transcript after {e.roundTripMs} ms
+                    {e.language || '?'} · clip {seconds(e.durationMs)}{e.truncated ? ' (cut at 30 s)' : ''} · STT {e.sttMs} ms · transcript after {e.roundTripMs} ms
                   </p>
                   {e.replyText != null && (
                     <>
@@ -89,8 +92,13 @@ export const TestTranscriptPanel: React.FC<{ entries: PanelEntry[]; onClear: () 
                       <p className="text-[10px] text-gray-500 dark:text-zinc-400 font-mono">
                         {e.action ? `→ ${actionLabel(e.action, e.navTo)} · ` : ''}{e.llmMs != null ? `LLM ${e.llmMs} ms · ` : ''}TTS {e.ttsMs} ms{e.totalMs != null ? ` · total ${e.totalMs} ms (tap → sound)` : ''}
                       </p>
-                      {e.errorCode && (
-                        <p className="text-[10px] font-mono font-semibold text-rose-700 dark:text-rose-400 break-words">error: {e.errorCode}</p>
+                      {(e.errorCode || e.errorDetail) && (
+                        <p className="text-[10px] font-mono font-semibold text-rose-700 dark:text-rose-400 break-words">
+                          ✖ {e.errorCode}{e.errorDetail ? ` · ${e.errorDetail}` : ''}
+                        </p>
+                      )}
+                      {e.ttsError && (
+                        <p className="text-[10px] font-mono text-rose-700 dark:text-rose-400 break-words">✖ TTS {e.ttsError}</p>
                       )}
                     </>
                   )}

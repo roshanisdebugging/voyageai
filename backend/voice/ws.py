@@ -141,7 +141,8 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
             payload = m.transcript(ctx.turn_id, result.text, result.language, result.duration_ms,
                                    result.stt_ms, truncated=ctx.truncated)
         else:
-            payload = m.error(result.error_code or m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id)
+            payload = m.error(result.error_code or m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id,
+                              detail=result.error_detail)
         await _send(ws, payload)
         total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop -> transcript sent (no reply: STT failed)
 
@@ -152,14 +153,19 @@ async def _process_turn(ws: WebSocket, conn: _Conn, pcm: bytes, ctx: pipeline.Tu
                                     result.reply_mime, result.tts_ms, result.ui_actions, result.action, result.llm_ms,
                                     result.tool_ms, result.note, result.pending_confirmation,
                                     note_attribution=result.note_attribution,
-                                    error_code=result.agent_error_code if debug_store.test_mode() else None))
+                                    error_code=result.agent_error_code, error_detail=result.agent_error_detail,
+                                    tts_error=result.tts_error if pipeline.tts_failed(result) else None))
             total_ms = int((time.perf_counter() - stop_at) * 1000)  # stop received -> reply sent
             logger.info("[VOICE] turn=%s total_ms=%s action=%s", ctx.turn_id, total_ms, result.action)
             if result.tts_error and result.tts_error != "tts_disabled":
-                await _send(ws, m.error(m.ErrorCode.TTS_FAILED, turn_id=ctx.turn_id))
+                await _send(ws, m.error(m.ErrorCode.TTS_FAILED, turn_id=ctx.turn_id, detail=result.tts_error))
     except Exception as err:
-        logger.warning("[VOICE] turn=%s crashed: %s", ctx.turn_id, type(err).__name__)
-        await _send(ws, m.error(m.ErrorCode.STT_FAILED, turn_id=ctx.turn_id))
+        logger.exception("[VOICE] turn=%s crashed", ctx.turn_id)   # server log: full traceback
+        from voice.agent import crash_error_info
+        detail = crash_error_info(err)["detail"]                    # class + file:line, never the message text
+        if result is not None and not result.agent_error_code:
+            result.agent_error_code, result.agent_error_detail = m.ErrorCode.TURN_CRASHED, detail
+        await _send(ws, m.error(m.ErrorCode.TURN_CRASHED, turn_id=ctx.turn_id, detail=detail))
     finally:
         conn.processing = False
     # Last stage (test-only saving). The app already has its answer.
@@ -250,6 +256,7 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
         from redis_client import redis_conn as rc
         lang = detect_lang(str(msg.get("lang_hint") or ""), "hi")
         if kind == "confirm":
+            # One confirm for every pending item: create_trip (step 4), trip_actions (step 5), smart actions (step 6).
             # The app's open trip (if any): a pending made for the open trip is refused if another trip is open now.
             open_trip = await run_in_threadpool(_resolve_trip, msg.get("trip_id"), conn.user_id)
             res = await run_in_threadpool(voice_agent.confirm_pending, rc, conn.user_id, conversation_id, lang, pending_id,

@@ -19,10 +19,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from trip_lifecycle import MIN_BUDGET_INR   # the one budget minimum, shared with trip creation
+
 DRAFT_TTL_SECONDS = 30 * 60
 MAX_DAYS = 30            # trip_lifecycle: at most 30 days
 MAX_TRAVELERS = 20       # trip_lifecycle: at most 20 travelers
-MIN_BUDGET = 1000        # the wizard's minimum
 MAX_DAYS_AHEAD = 366
 REQUIRED = ["destination", "start_date", "end_date", "adults", "children", "budget_inr"]  # the order we ask in
 
@@ -246,8 +247,9 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
         b = parse_budget(args["budget_inr"])
         if b is None:
             out.problems.append("Budget samajh nahi aaya." if hi else "I didn't get the budget.")
-        elif b < MIN_BUDGET:
-            out.problems.append("Budget kam se kam 1000 rupaye hona chahiye." if hi else "The budget must be at least ₹1,000.")
+        elif b < MIN_BUDGET_INR:
+            out.problems.append(f"Budget kam se kam {MIN_BUDGET_INR} rupaye hona chahiye." if hi
+                                else f"The budget must be at least ₹{MIN_BUDGET_INR:,}.")
         else:
             draft.budget_inr = b
             out.changed.append("budget_inr")

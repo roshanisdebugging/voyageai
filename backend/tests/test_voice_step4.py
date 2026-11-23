@@ -1,5 +1,5 @@
 """
-Voice step 4 checks (create a trip by voice): app DB = SQLite, Redis = local, Groq + place search simulated.
+Voice step 4 checks (create a trip by voice): app DB = SQLite, Redis = local, OpenAI + place search simulated.
 Draft rules, date read-back, review page prefill, Confirm card (voice + button = one action, once only),
 cancel, ownership, replacement, logging, clean-up on socket close.
 Run from backend/: python -m tests.test_voice_step4
@@ -23,7 +23,7 @@ import dotenv
 dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
-os.environ["GROQ_API_KEY"] = "test-key-not-real"
+os.environ["OPENAI_API_KEY"] = "test-key-not-real"
 os.environ["VOICE_TTS_ENABLED"] = "false"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 
@@ -41,7 +41,7 @@ database.engine = create_engine(f"sqlite:///{os.path.join(SCRATCH, 'voice4.db')}
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
 
 import main  # noqa: E402
-import groq_client  # noqa: E402
+import openai_client  # noqa: E402
 import places  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from models_trip import TripModel  # noqa: E402
@@ -122,7 +122,7 @@ check("all fields but no read-back -> confirm_date, never ready", dd.next_step()
 dd.dates_confirmed = True
 check("after the read-back -> ready", dd.next_step() == "ready")
 
-with mock.patch.object(groq_client, "groq_chat_tools", fake), mock.patch.object(places, "search_places", fake_search):
+with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(places, "search_places", fake_search):
     # ---------------- a full conversation (section 6)
     C = f"conv_s4_{uuid.uuid4().hex[:6]}"
     r = ra("Delhi se Jaipur jaana hai 3 din ke liye, budget 20 hazaar", USER_A, C,
@@ -241,7 +241,7 @@ class FakeSTT:
     text = "haan"
 
     def transcribe(self, audio):
-        return STTResult(text=FakeSTT.text, language="hi", duration_ms=1000, latency_ms=50, provider="groq", model="w")
+        return STTResult(text=FakeSTT.text, language="hi", duration_ms=1000, latency_ms=50, provider="openai", model="w")
 
 
 def recv_until(ws, kinds):
@@ -262,7 +262,7 @@ def voice_turn(ws, conv, text):
 
 
 uid_a, uid_b = toks["A"][1], toks["B"][1]
-with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.object(groq_client, "groq_chat_tools", fake), \
+with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.object(openai_client, "chat_tools", fake), \
         mock.patch.object(places, "search_places", fake_search):
     with client.websocket_connect("/ws/voice", headers={"origin": "http://localhost:5173"}) as ws:
         ws.send_json({"type": "auth", "token": toks["A"][0]})

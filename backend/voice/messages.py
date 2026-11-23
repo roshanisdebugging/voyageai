@@ -18,11 +18,13 @@ Server -> app (text frames, JSON):
   {"type": "transcript", "turn_id", "text", "language", "duration_ms", "latency_ms", "truncated"}
                                                           sent as soon as speech-to-text finishes
   {"type": "reply", "turn_id", "reply_text", "reply_audio_base64" | null, "mime": "audio/wav", "tts_ms",
-   "ui_actions": [{"type": "navigate", "to": "/map"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
+   "ui_actions": [{"type": "navigate", "to": "/map"}, {"type": "refresh", "what": "itinerary"}], "action": "navigate:<page>" | "answer" | "map_focus" | "list_trips" | "open_trip" | "reply" | "error",
    "llm_ms", "tool_ms", "note" (small on-screen text, never spoken, or null),
-   "pending_confirmation": {"id", "summary", "title"?} | null,  step 4/5: show the Confirm card
+   "pending_confirmation": {"id", "summary", "title"?} | null,  step 4/5/6: show the Confirm card
    "note_attribution"?,                                    "Google Maps" when the note is Google Maps content
-   "error_code"?}                                         test mode only (VOICE_DEBUG_STORE=true): why the agent failed
+   "error_code"?, "error_detail"?, "tts_error"?}          only when something failed: the reason (codes/status/class
+                                                          names, never user text); also written to the test-only
+                                                          debug store and logs/voice_errors.md
   {"type": "confirm_result", "pending_id", "ok", "reply_text", "ui_actions"}
                                                           answer to confirm / cancel (ok=false: nothing to confirm)
                                                           the agent's spoken reply (steps 1b + 2), after
@@ -51,10 +53,11 @@ class ErrorCode:
     BUSY = "busy"                        # a recording is already running or being transcribed
     NOT_RECORDING = "not_recording"      # stop without start
     TOO_SHORT = "too_short"              # under 0.3 s
-    RATE_LIMITED = "rate_limited"        # our per-user limit or Groq's
+    RATE_LIMITED = "rate_limited"        # our per-user limit or OpenAI's
     STT_FAILED = "stt_failed"
     UNAVAILABLE = "unavailable"          # limiter/Redis down: fail closed
     TTS_FAILED = "tts_failed"            # the spoken reply couldn't be made (the turn still worked)
+    TURN_CRASHED = "turn_crashed"        # an unexpected exception while handling the turn
 
 
 # Messages the app can show as they are.
@@ -68,13 +71,17 @@ ERROR_MESSAGES = {
     ErrorCode.STT_FAILED: "Couldn't understand the audio right now. Please try again.",
     ErrorCode.UNAVAILABLE: "Voice is unavailable right now. Please try again shortly.",
     ErrorCode.TTS_FAILED: "Couldn't play the reply.",
+    ErrorCode.TURN_CRASHED: "Something went wrong. Please try again.",
 }
 
 
-def error(code: str, message: Optional[str] = None, turn_id: Optional[str] = None) -> Dict[str, Any]:
+def error(code: str, message: Optional[str] = None, turn_id: Optional[str] = None,
+          detail: Optional[str] = None) -> Dict[str, Any]:
     msg: Dict[str, Any] = {"type": "error", "code": code, "message": message or ERROR_MESSAGES.get(code, "Voice error.")}
     if turn_id:
         msg["turn_id"] = turn_id
+    if detail:
+        msg["detail"] = detail  # the technical reason (status/code/exception): for the console and test panel, not users
     return msg
 
 
@@ -90,7 +97,8 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
           ui_actions: Optional[list] = None, action: str = "reply", llm_ms: int = 0,
           tool_ms: int = 0, note: Optional[str] = None,
           pending_confirmation: Optional[Dict[str, Any]] = None,
-          note_attribution: Optional[str] = None, error_code: Optional[str] = None) -> Dict[str, Any]:
+          note_attribution: Optional[str] = None, error_code: Optional[str] = None,
+          error_detail: Optional[str] = None, tts_error: Optional[str] = None) -> Dict[str, Any]:
     out = {
         "type": "reply",
         "turn_id": turn_id,
@@ -107,8 +115,10 @@ def reply(turn_id: str, reply_text: str, audio_base64: Optional[str], mime: str,
     }
     if note and note_attribution:
         out["note_attribution"] = note_attribution   # e.g. "Google Maps" for a Google route warning
-    if error_code:   # test mode only (VOICE_DEBUG_STORE=true): the test panel shows why the agent failed
-        out["error_code"] = error_code
+    # Why a turn went wrong, for the browser console and the test panel. Sent only when set.
+    for key, value in (("error_code", error_code), ("error_detail", error_detail), ("tts_error", tts_error)):
+        if value:
+            out[key] = value
     return out
 
 

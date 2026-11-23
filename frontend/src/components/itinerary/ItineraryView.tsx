@@ -9,6 +9,7 @@ import { isPastTrip } from '../../features/trip/tripRepository';
 import { ItineraryAiDialog } from './ItineraryAiDialog';
 import { Trip3DFlyoverButton } from '../map/Trip3DFlyover';
 import { TravelFromHere, TravelOriginBar } from './TravelLeg';
+import { TripBudgetStrip } from './TripBudgetStrip';
 import { MAX_LEGS_PER_DAY } from '../map/mapLogic';
 
 const aiActionClassName =
@@ -395,6 +396,9 @@ export const ItineraryView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Budget · Planned · Spent (voice changes refresh it) */}
+      <TripBudgetStrip />
 
       {/* Main Trip Banner */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-3xl p-5 space-y-2 shadow-xs">
