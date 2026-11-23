@@ -202,19 +202,32 @@ def spoken_duration(seconds: float, lang: str) -> str:
     return f"{h} hour" + ("s" if h != 1 else "") + (f" {m} minute" + ("s" if m != 1 else "") if m else "")
 
 
+# Travel time origin rules (same numbers as the app's deviceLocationLogic.ts)
+LOCATION_MAX_ACCURACY_M = 1000   # worse than this: not a usable origin
+HERE_M = 150                     # closer than this: "you're here", no route call
+FAR_AWAY_M = 300_000             # farther than this: straight-line only, no route call
+NO_LOCATION = {"hi": "Aapki location nahi mili, location on kijiye.",
+               "en": "I couldn't get your location. Please turn location on."}
+
+
 def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optional[str] = None,
                     trip_id: Optional[str] = None, origin: Optional[Tuple[float, float]] = None,
                     search_fn=None, route_fn=None) -> ToolResult:
     """
     "Hawa Mahal kitni door hai" -> "Hawa Mahal yahan se 6.8 km hai, car se 22 minute."
-    Destination: the shared place search (landmark-first). Origin: the user's position from the app, else the
-    open trip's destination (re-checked against the session user). Read-only; logs nothing about places.
+    Destination: the shared place search (landmark-first). Origin: ONLY the device's current location sent by the app
+    with this turn (accuracy 1 km or better). Never the trip destination, a hotel or a previous activity: without a
+    usable location it asks to turn location on and makes no route call. Over 300 km: straight-line only, no route
+    call; under 150 m: "you're here". Read-only; logs nothing about places.
     """
     from places import haversine_meters
     from services.routes_service import RouteNotFound, RouteUnavailable
     q = (place or "").strip()[:120]
     if len(q) < 2:
         return ToolResult({"hi": "Kahan tak ki doori?", "en": "Distance to which place?"}[lang], action="reply", error_code="no_query")
+    if not origin:
+        return ToolResult(NO_LOCATION[lang], action="travel_time", error_code="no_origin")
+    o_lat, o_lng = float(origin[0]), float(origin[1])
     mode = travel_mode(mode)
     found = search(q, search_fn)
     calls = found.google_calls
@@ -228,18 +241,17 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
     dest = found.results[0]
     name = str(dest.get("name") or q)[:60]
 
-    from_name = None
-    if origin:
-        o_lat, o_lng = float(origin[0]), float(origin[1])
-    else:
-        trip_dest = _trip_destination(user_id, trip_id)
-        if not trip_dest:
-            return ToolResult({"hi": "Aap kahan se jaayenge? Location on kar dijiye.",
-                               "en": "Where are you starting from? Please turn on location."}[lang],
-                              action="travel_time", error_code="no_origin", google_calls=calls)
-        o_lat, o_lng, from_name = float(trip_dest["latitude"]), float(trip_dest["longitude"]), trip_dest["name"]
     d_lat, d_lng = float(dest["latitude"]), float(dest["longitude"])
-    straight = spoken_distance(haversine_meters(o_lat, o_lng, d_lat, d_lng))
+    straight_m = haversine_meters(o_lat, o_lng, d_lat, d_lng)
+    straight = spoken_distance(straight_m)
+    if straight_m < HERE_M:
+        return ToolResult({"hi": f"Aap {name} par hi hain.", "en": f"You're at {name}."}[lang],
+                          action="travel_time", google_calls=calls)
+    if straight_m > FAR_AWAY_M:
+        km = round(straight_m / 1000)
+        return ToolResult({"hi": f"Aap {name} se door hain, seedhi doori {km} km hai.",
+                           "en": f"You're far from {name}: {km} km in a straight line."}[lang],
+                          action="travel_time", error_code="far_away", google_calls=calls)
 
     if route_fn is None:
         from places import _run_sync
@@ -262,11 +274,9 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
     dist, dur = spoken_distance(route["distance_m"]), spoken_duration(route["duration_s"], lang)
     words = MODE_WORDS[lang][mode]
     if lang == "hi":
-        src = f"{from_name} se" if from_name else "yahan se"
-        reply = f"{name} {src} {dist} hai, {words} {dur}."
+        reply = f"{name} aapki location se {dist} hai, {words} {dur}."
     else:
-        src = f"from {from_name}" if from_name else "from here"
-        reply = f"{name} is {dist} {src}, {dur} {words}."
+        reply = f"{name} is {dist} from your location, {dur} {words}."
     # Google's route warning (walk / bike) goes on screen, not in the spoken reply.
     note = route.get("warning") if mode != "drive" else None
     return ToolResult(reply, action="travel_time", google_calls=calls, note=note,

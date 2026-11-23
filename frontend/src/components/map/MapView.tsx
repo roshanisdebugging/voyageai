@@ -27,7 +27,10 @@ import {
   formatStraightLine, haversineMeters, pinStyle, shouldCluster,
   DEFAULT_ROUTE_MODE, ROUTE_MODES, type RouteMode, canRoute, formatRouteSummary,
 } from './mapLogic';
-import { computeRoute, RouteError, type RouteResult } from '../../services/routesApi';
+import { RouteError, type RouteResult } from '../../services/routesApi';
+import { deviceLocation, useDeviceLocation } from '../../services/useDeviceLocation';
+import { farKm, noLocationReason, originLabel, travelPlan } from '../../services/deviceLocationLogic';
+import { RouteOriginSheet } from '../common/RouteOriginSheet';
 import { createClusterBubble, createPlacePin, createSearchPin, createUserDot, setPinSelected } from './mapPins';
 import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 
@@ -113,6 +116,9 @@ export const MapView: React.FC = () => {
   const [route, setRoute] = useState<{
     placeId: string; status: 'loading' | 'ok' | 'error' | 'needs_location'; result?: RouteResult; message?: string;
   } | null>(null);
+  // Route origin = the device's current location only (re-read when the map opens and on "Use my location again")
+  const devLoc = useDeviceLocation();
+  const [originSheetFor, setOriginSheetFor] = useState<PlaceItem | null>(null);
   const routeLinesRef = useRef<google.maps.Polyline[]>([]);
   const routeSeqRef = useRef(0);
 
@@ -769,15 +775,15 @@ export const MapView: React.FC = () => {
   const requestRoute = useCallback(async (place: PlaceItem, mode: RouteMode) => {
     const seq = ++routeSeqRef.current;
     setRouteMode(mode);
-    if (!userLocation) {
+    // Only a usable device location (accuracy 1 km or better), 150 m - 300 km away, gets a Google call.
+    if (travelPlan(deviceLocation.getState(), place).kind !== 'route') {
       clearRouteLine();
       setRoute({ placeId: place.id, status: 'needs_location' });
       return;
     }
     setRoute({ placeId: place.id, status: 'loading' });
     try {
-      const result = await computeRoute({ lat: userLocation[0], lng: userLocation[1] },
-        { lat: place.latitude, lng: place.longitude }, mode);
+      const result = await deviceLocation.route({ lat: place.latitude, lng: place.longitude }, mode, 'map');
       if (seq !== routeSeqRef.current) return;
       setRoute({ placeId: place.id, status: 'ok', result });
       setIsFollowMode(false);
@@ -788,10 +794,10 @@ export const MapView: React.FC = () => {
       clearRouteLine();
       setRoute({
         placeId: place.id, status: 'error',
-        message: err instanceof RouteError && err.status === 503 ? err.message : "Couldn't get a route right now.",
+        message: err instanceof RouteError && err.status === 503 ? err.message : 'Route abhi available nahi hai.',
       });
     }
-  }, [userLocation, clearRouteLine, drawRoute, setIsFollowMode]);
+  }, [clearRouteLine, drawRoute, setIsFollowMode]);
 
   // A different place in the sheet (or none): forget the old route and its line.
   const sheetPlaceId = sheetPlace?.id;
@@ -804,9 +810,43 @@ export const MapView: React.FC = () => {
   const renderRouteSection = (place: PlaceItem) => {
     if (!canRoute(place)) return null;
     const mine = route && route.placeId === place.id ? route : null;
-    const straight = userLocation ? haversineMeters(userLocation[0], userLocation[1], place.latitude, place.longitude) : null;
+    const plan = travelPlan(devLoc, place);
+    const straight = 'straightM' in plan ? plan.straightM : null;
+    const usableOrigin = plan.kind === 'route' || plan.kind === 'here' || plan.kind === 'far';
+    const fromLine = (
+      <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-[color:var(--color-text-secondary)]">
+        <button type="button" disabled={!devLoc.reading} onClick={() => setOriginSheetFor(place)}
+          className="flex items-center gap-1.5 min-h-[32px] text-left min-w-0 disabled:cursor-default">
+          <Navigation className="w-3.5 h-3.5 shrink-0 text-[#1A73E8]" aria-hidden="true" />
+          <span className="truncate">{usableOrigin && devLoc.reading ? originLabel(devLoc.reading.accuracy_m)
+            : plan.kind === 'poor' ? noLocationReason('poor')
+            : plan.kind === 'no-location' ? noLocationReason(plan.reason) : ''}</span>
+        </button>
+        {!usableOrigin && (
+          <button type="button" onClick={devLoc.retry} disabled={devLoc.status === 'loading'}
+            className="shrink-0 min-h-[32px] px-3 rounded-full border border-gray-200 dark:border-zinc-700 text-[#1A73E8] font-bold disabled:opacity-60">
+            Use my location again
+          </button>
+        )}
+      </div>
+    );
+    // No Google call: near, far, or no usable location
+    if (plan.kind !== 'route') {
+      const msg = plan.kind === 'here' ? 'Aap yahin hain'
+        : plan.kind === 'far' ? `Aap is jagah se door hain (${farKm(plan.straightM)})`
+        : plan.kind === 'poor' ? `${formatStraightLine(plan.straightM)} (straight-line)`
+        : 'Location chahiye';
+      return (
+        <div className="space-y-1 pt-1 border-t border-gray-100 dark:border-zinc-800">
+          {fromLine}
+          <p className="text-sm font-bold tabular-nums text-[color:var(--color-text-primary)]" role="status">{msg}</p>
+        </div>
+      );
+    }
     if (!mine) {
       return (
+        <div className="space-y-1">
+        {fromLine}
         <button
           type="button"
           onClick={() => requestRoute(place, routeMode)}
@@ -814,10 +854,12 @@ export const MapView: React.FC = () => {
         >
           <Navigation className="w-4 h-4" aria-hidden="true" /> Route
         </button>
+        </div>
       );
     }
     return (
       <div className="space-y-2 pt-1 border-t border-gray-100 dark:border-zinc-800">
+        {fromLine}
         <div role="radiogroup" aria-label="Travel mode" className="flex gap-2 pt-2">
           {ROUTE_MODES.map((m) => (
             <button
@@ -858,7 +900,7 @@ export const MapView: React.FC = () => {
             </p>
           )}
           {mine.status === 'needs_location' && (
-            <p className="text-[color:var(--color-text-secondary)]">Please turn on location to get a route from where you are.</p>
+            <p className="text-[color:var(--color-text-secondary)]">Location chahiye: location on kijiye.</p>
           )}
         </div>
       </div>
@@ -1237,6 +1279,15 @@ export const MapView: React.FC = () => {
             </button>
             {renderCardBody(sheetPlace)}
             {renderRouteSection(sheetPlace)}
+            {originSheetFor && originSheetFor.id === sheetPlace.id && devLoc.reading && (
+              <RouteOriginSheet
+                origin={devLoc.origin && devLoc.reading.accuracy_m <= 1000 ? devLoc.origin : devLoc.reading}
+                dest={{ name: sheetPlace.name, lat: sheetPlace.latitude, lng: sheetPlace.longitude }}
+                summary={route && route.placeId === sheetPlace.id && route.status === 'ok' && route.result
+                  ? formatRouteSummary(route.result.distance_m, route.result.duration_s, route.result.mode) : null}
+                onClose={() => setOriginSheetFor(null)}
+              />
+            )}
           </div>
         </div>
       ) : sortedPlaces.length > 0 ? (

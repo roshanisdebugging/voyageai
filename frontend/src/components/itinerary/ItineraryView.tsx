@@ -8,7 +8,7 @@ import { useToast } from '../common/UndoToast';
 import { isPastTrip } from '../../features/trip/tripRepository';
 import { ItineraryAiDialog } from './ItineraryAiDialog';
 import { Trip3DFlyoverButton } from '../map/Trip3DFlyover';
-import { TravelLeg } from './TravelLeg';
+import { TravelFromHere, TravelOriginBar } from './TravelLeg';
 import { MAX_LEGS_PER_DAY } from '../map/mapLogic';
 
 const aiActionClassName =
@@ -494,13 +494,13 @@ export const ItineraryView: React.FC = () => {
               </div>
 
               <div className="space-y-3">
+                <TravelOriginBar />
                 {selectedDay.activities.map((act, idx) => {
                   const isDone = Boolean(act.isDone);
-                  const prev = idx > 0 ? selectedDay.activities[idx - 1] : null;
+                  // Google route only for the first MAX_LEGS_PER_DAY activities with coordinates; the rest straight-line
+                  const coordRank = selectedDay.activities.slice(0, idx).filter((a) => a.latitude != null && a.longitude != null).length;
                   return (
                     <React.Fragment key={act.id}>
-                    {/* Travel time from the previous activity (lazy, one leg at a time, max 8 legs a day) */}
-                    {prev && idx <= MAX_LEGS_PER_DAY && <TravelLeg from={prev} to={act} />}
                     <div
                       className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-2xl p-4 space-y-3 shadow-xs hover:border-[var(--color-primary)] transition-all"
                     >
@@ -525,6 +525,8 @@ export const ItineraryView: React.FC = () => {
                             <MapPin className="w-3.5 h-3.5 text-[var(--color-primary)] shrink-0" />
                             <span className="truncate">{act.locationName || destName}</span>
                           </p>
+                          {/* Travel time from the device's current location (never from the previous activity) */}
+                          <TravelFromHere dest={act} routeAllowed={coordRank < MAX_LEGS_PER_DAY} />
                         </div>
 
                         {act.estimatedCostInr != null && (

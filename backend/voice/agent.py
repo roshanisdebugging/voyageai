@@ -182,8 +182,8 @@ TRAVEL_TIME_TOOL: Dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "get_travel_time",
-        "description": "Road distance and travel time from the user's location (or the open trip's destination) "
-                       "to a named place in India. Read-only.",
+        "description": "Road distance and travel time from the device's current location (only that; never the trip, "
+                       "a hotel or a previous activity) to a named place in India. Read-only.",
         "parameters": {
             "type": "object",
             "properties": {

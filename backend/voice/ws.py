@@ -66,14 +66,19 @@ def _resolve_session(token: str) -> Optional[Tuple[str, str]]:
 
 
 def _parse_location(raw: Any) -> Optional[Tuple[float, float]]:
-    """The user's position sent by the app with "start" ({lat, lng}); India only, else ignored. Never logged."""
+    """The device's current position sent by the app with "start" ({lat, lng, accuracy_m}); India only, accuracy
+    1 km or better (a missing accuracy counts as unusable), else ignored. Never logged."""
     if not isinstance(raw, dict):
         return None
     try:
         lat, lng = float(raw.get("lat")), float(raw.get("lng"))
+        acc = float(raw.get("accuracy_m"))
     except (TypeError, ValueError):
         return None
     from places import in_india
+    from voice.tools.lookups import LOCATION_MAX_ACCURACY_M
+    if not (acc == acc and 0 <= acc <= LOCATION_MAX_ACCURACY_M):
+        return None
     return (round(lat, 5), round(lng, 5)) if in_india(lat, lng) else None
 
 

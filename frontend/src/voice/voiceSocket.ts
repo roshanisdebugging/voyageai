@@ -147,13 +147,15 @@ class VoiceSocket {
 
   /**
    * tripId: the open trip (the server ownership-checks it; not yours = none), or null.
-   * location: the user's position for "how far is X" (rounded; used for that turn only), or null.
+   * location: the device's current location for "how far is X" (rounded; used for that turn only), or null.
+   *   The server uses it only with accuracy 1 km or better, and never falls back to the trip destination.
    * screenPlace (step 5): the place page on screen, so "yeh jagah save karo" knows it (server checks the shape).
    */
-  start(conversationId: string, screen: string, tripId: string | null = null, location: [number, number] | null = null,
+  start(conversationId: string, screen: string, tripId: string | null = null,
+    location: { lat: number; lng: number; accuracy_m: number } | null = null,
     screenPlace: { place_id: string; name: string; address?: string } | null = null): boolean {
-    const loc = location && Number.isFinite(location[0]) && Number.isFinite(location[1])
-      ? { lat: Math.round(location[0] * 1e5) / 1e5, lng: Math.round(location[1] * 1e5) / 1e5 }
+    const loc = location && Number.isFinite(location.lat) && Number.isFinite(location.lng) && Number.isFinite(location.accuracy_m)
+      ? { lat: Math.round(location.lat * 1e5) / 1e5, lng: Math.round(location.lng * 1e5) / 1e5, accuracy_m: Math.round(location.accuracy_m) }
       : undefined;
     return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId, location: loc,
       screen_place: screenPlace });

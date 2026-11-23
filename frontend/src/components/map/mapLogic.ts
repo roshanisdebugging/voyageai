@@ -167,10 +167,5 @@ export function canRoute(place: { latitude?: unknown; longitude?: unknown; isMoc
   return Boolean(place) && !place!.isMock && inIndia(place!.latitude, place!.longitude);
 }
 
-/** Itinerary: travel times for at most this many legs per day (one Routes call each, lazily, cached). */
+/** Itinerary: Google travel times (from the device location) for at most this many activities per day; the rest straight-line. */
 export const MAX_LEGS_PER_DAY = 8;
-
-/** A leg gets a travel time only when both activities have real coordinates in India (never invented). */
-export function legHasCoords(from: { latitude?: unknown; longitude?: unknown }, to: { latitude?: unknown; longitude?: unknown }): boolean {
-  return inIndia(from.latitude, from.longitude) && inIndia(to.latitude, to.longitude);
-}

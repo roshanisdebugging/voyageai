@@ -242,7 +242,7 @@ with mock.patch.object(rs.httpx, "AsyncClient", FakeRoutes):
     reset()
     t = say("Hawa Mahal kitni door hai", HAWA_HIT, {"place": "Hawa Mahal"})
     check("voice 'Hawa Mahal kitni door hai' -> one sentence with km and car time",
-          t.reply_text == "Hawa Mahal yahan se 6.8 km hai, car se 23 minute." and t.action == "travel_time", t.reply_text)
+          t.reply_text == "Hawa Mahal aapki location se 6.8 km hai, car se 23 minute." and t.action == "travel_time", t.reply_text)
     check("voice: drive by default, from the user's location", FakeRoutes.calls[-1][2]["travelMode"] == "DRIVE"
           and abs(FakeRoutes.calls[-1][2]["origin"]["location"]["latLng"]["latitude"] - ME[0]) < 1e-6)
     check("voice: never writes / no screen actions", t.ui_actions == [] and t.pending_actions == [])
@@ -251,13 +251,13 @@ with mock.patch.object(rs.httpx, "AsyncClient", FakeRoutes):
     FakeRoutes.queue = [ROUTE_WARN]
     t = say("airport kitni door hai bike se", AIRPORT_HIT, {"place": "Jaipur airport", "mode": "two_wheeler"})
     check("voice 'airport kitni door hai bike se' -> bike route", FakeRoutes.calls[-1][2]["travelMode"] == "TWO_WHEELER"
-          and t.reply_text == "Jaipur International Airport yahan se 6.7 km hai, bike se 20 minute.", t.reply_text)
+          and t.reply_text == "Jaipur International Airport aapki location se 6.7 km hai, bike se 20 minute.", t.reply_text)
     check("voice: Google's warning in the screen note, not spoken", t.note == "This route has tolls. Use caution."
           and "caution" not in t.reply_text.lower())
 
     reset()
     t = say("how far is Hawa Mahal", HAWA_HIT, {"place": "Hawa Mahal", "mode": None}, lang="en")
-    check("voice English", t.reply_text == "Hawa Mahal is 6.8 km from here, 23 minutes by car.", t.reply_text)
+    check("voice English", t.reply_text == "Hawa Mahal is 6.8 km from your location, 23 minutes by car.", t.reply_text)
 
     reset()
     FakeRoutes.queue = [QUOTA]
@@ -265,13 +265,36 @@ with mock.patch.object(rs.httpx, "AsyncClient", FakeRoutes):
     check("voice: Routes paused -> 'Route abhi available nahi hai' + straight-line distance",
           t.reply_text.startswith("Route abhi available nahi hai.") and "Seedhi doori 4.1 km" in t.reply_text, t.reply_text)
 
+    # Origin = the device location only (fix-origin-current): never the trip destination
     reset()
     with mock.patch.object(lookups, "_trip_destination", lambda u, tid: {"name": "Jaipur", "latitude": 26.9124, "longitude": 75.7873}):
         t = lookups.get_travel_time("Hawa Mahal", "car", "hi", user_id=user_id, trip_id="trip_x", origin=None,
                                     search_fn=lambda q: HAWA_HIT)
-    check("voice: no location -> from the open trip's destination", t.reply_text.startswith("Hawa Mahal Jaipur se 6.8 km hai"), t.reply_text)
-    t = lookups.get_travel_time("Hawa Mahal", None, "hi", user_id=user_id, trip_id=None, origin=None, search_fn=lambda q: HAWA_HIT)
-    check("voice: no location and no trip -> asks, no route call", t.error_code == "no_origin" and "Location" in t.reply_text)
+    check("voice: no location (trip open) -> 'Aapki location nahi mili, location on kijiye', no trip fallback",
+          t.reply_text == "Aapki location nahi mili, location on kijiye." and t.error_code == "no_origin", t.reply_text)
+    check("voice: no location -> no Google call at all (no search, no route)", FakeRoutes.calls == [] and not t.google_calls)
+    t = say("Hawa Mahal kitni door hai", HAWA_HIT, {"place": "Hawa Mahal"}, location=None)
+    check("voice via agent, no location -> asks for location, no route call",
+          t.reply_text == "Aapki location nahi mili, location on kijiye." and FakeRoutes.calls == [], t.reply_text)
+    t = lookups.get_travel_time("Hawa Mahal", None, "en", origin=None, search_fn=lambda q: HAWA_HIT)
+    check("voice English, no location", t.reply_text == "I couldn't get your location. Please turn location on.", t.reply_text)
+
+    reset()
+    t = lookups.get_travel_time("Hawa Mahal", None, "hi", origin=(26.9240, 75.8268), search_fn=lambda q: HAWA_HIT)
+    check("voice: under 150 m -> 'Aap Hawa Mahal par hi hain', no route call",
+          t.reply_text == "Aap Hawa Mahal par hi hain." and FakeRoutes.calls == [], t.reply_text)
+    t = lookups.get_travel_time("Hawa Mahal", None, "hi", origin=(28.6129, 77.2295), search_fn=lambda q: HAWA_HIT)
+    check("voice: Delhi -> Hawa Mahal (~238 km) still gets a route", len(FakeRoutes.calls) == 1, t.reply_text)
+    reset()
+    t = lookups.get_travel_time("Hawa Mahal", None, "hi", origin=(19.0760, 72.8777), search_fn=lambda q: HAWA_HIT)
+    check("voice: over 300 km (Mumbai) -> 'door hain' + straight-line km, no route call",
+          t.error_code == "far_away" and "door hain" in t.reply_text and " km" in t.reply_text and FakeRoutes.calls == [], t.reply_text)
+
+    from voice.ws import _parse_location
+    check("voice start location: accuracy 30 m -> used", _parse_location({"lat": 26.9, "lng": 75.8, "accuracy_m": 30}) == (26.9, 75.8))
+    check("voice start location: accuracy 2 km -> ignored", _parse_location({"lat": 26.9, "lng": 75.8, "accuracy_m": 2000}) is None)
+    check("voice start location: no accuracy -> ignored", _parse_location({"lat": 26.9, "lng": 75.8}) is None)
+    check("voice start location: outside India -> ignored", _parse_location({"lat": 51.5, "lng": -0.1, "accuracy_m": 10}) is None)
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):

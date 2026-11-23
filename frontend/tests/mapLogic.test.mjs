@@ -65,7 +65,6 @@ check('Route button: real coordinates in India only', m.canRoute({ latitude: 26.
   && !m.canRoute(null));
 check('Route button: never for mock places', !m.canRoute({ latitude: 26.92, longitude: 75.82, isMock: true }));
 
-check('itinerary leg needs both coordinates (no time invented)', m.legHasCoords({ latitude: 26.92, longitude: 75.82 }, { latitude: 26.98, longitude: 75.85 })
-  && !m.legHasCoords({ latitude: 26.92, longitude: 75.82 }, {}) && m.MAX_LEGS_PER_DAY === 8);
+check('itinerary: Google travel times for at most 8 activities a day', m.MAX_LEGS_PER_DAY === 8);
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

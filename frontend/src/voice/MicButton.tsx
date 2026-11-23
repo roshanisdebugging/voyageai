@@ -14,6 +14,7 @@ import { isReviewShowing, requestSubmitReview, TRIP_CREATED } from './reviewStat
 import { useTrip } from '../features/trip/TripContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useApp } from '../context/AppContext';
+import { deviceLocation, useDeviceLocation } from '../services/useDeviceLocation';
 import { GoogleMapsAttribution } from '../components/common/GoogleMapsAttribution';
 import { useAppDispatch } from '../store/hooks';
 import { fetchSavedPlaces } from '../store/reducers/savedPlacesSlice';
@@ -38,7 +39,8 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   const location = useLocation();
   const navigate = useNavigate();
   const { currentTrip, trips, setCurrentTripId, refetchItinerary, fetchPackageData } = useTrip();
-  const { userLocation } = useApp(); // sent with "start" for "how far is X" (that turn only)
+  // The device's current location, sent with "start" for "how far is X" (that turn only); read when the app opens
+  const deviceLoc = useDeviceLocation();
   const { setMapFocusTarget } = useNavigation();
   const { openSwapAssistant } = useApp();
   const dispatch = useAppDispatch();
@@ -332,7 +334,8 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     // Step 4: on the wizard's review step the agent must know that "haan" means Proceed.
     const screen = location.pathname === '/trips/new' && isReviewShowing() ? '/trips/new#review' : location.pathname;
     const screenPlace = location.pathname.startsWith('/details/') ? getScreenPlace() : null;
-    if (!voiceSocket.start(conversationId.current, screen, currentTrip?.id ?? null, userLocation ?? null, screenPlace)) {
+    void deviceLocation.ensureFresh(); // mic tap: re-read if older than a minute (for the next turn; never blocks)
+    if (!voiceSocket.start(conversationId.current, screen, currentTrip?.id ?? null, deviceLoc.reading ?? null, screenPlace)) {
       await recorder.stop();
       report('Voice connection lost. Please try again.');
       setPhaseBoth('idle');

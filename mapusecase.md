@@ -56,7 +56,7 @@ When Google is unavailable, the app says so plainly ("Map search isn't available
 - Map: the "Route" button sits on the selected-place sheet and calls only on a tap or a mode-chip change (Car, Bike, Walk).
   - The line is drawn with the Maps geometry library and the camera fits it.
   - On error, the sheet shows the straight-line distance, labelled "straight-line", and no line.
-- Itinerary: "22 min by car" between activities, computed lazily, one leg at a time, at most 8 legs a day. That's about 3.75 calls per day the first time, 0 when cached.
+- Itinerary: "22 min by car from your location" on each activity card, from the device's current location (fix-origin-current; earlier this was between activities). Lazy, one at a time, at most 8 Google calls a day; reopening with the same origin (moved under 300 m) makes 0 calls in the same app session.
 - Voice: the `get_travel_time` tool answers in one sentence, for example "Hawa Mahal yahan se 6.8 km hai, car se 23 minute."
   - Origin: the app's location, else the open trip's destination. Stays have no coordinates.
 - Quota: 503 "Route abhi available nahi hai", and Routes is skipped until Google's reset.
