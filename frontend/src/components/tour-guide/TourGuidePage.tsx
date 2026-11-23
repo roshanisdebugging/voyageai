@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Portal } from '../common/Portal';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigation } from '../../context/NavigationContext';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { isPastTrip } from '../../features/trip/tripRepository';
@@ -8,9 +9,11 @@ import { getApiBaseUrl, fetchWithAuth } from '../../config/apiConfig';
 import {
   MapPin, Navigation, Plus, ArrowUp,
   AlertTriangle, Compass, Clock, Check, Loader2,
-  Sparkles, X
+  Sparkles, X, Square
 } from 'lucide-react';
 import { FormattedText } from '../common/FormattedText';
+import { streamTourGuideMessage, GuideStreamFailure, cleanGuidePlaces, type GuidePlace } from '../../services/tourGuideApi';
+import { GuidePlaceCards } from './GuidePlaceCards';
 import './guide-theme.css';
 
 // To load the font, add this to index.html:
@@ -50,8 +53,21 @@ export interface ChatMsg {
     chips?: string[];
     card?: ActionCardData | null;
     error?: string;
+    /** Error / incomplete bubbles: the question a Retry chip resends, and its bubble id. Never cached. */
+    retryText?: string;
+    retryOf?: string;
+    /** Real places from Google ("nearest hospital"): cards under the reply. History copies have no phone/address. */
+    places?: GuidePlace[];
+    /** Hospital / emergency lookups: the 112 / 108 call strip. */
+    emergency?: boolean;
+    /** The server had no location for a place lookup: show "Use my location". */
+    needs_location?: boolean;
   };
   created_at?: string;
+  /** Local only, never cached: the answer is still arriving (empty = skeleton). */
+  streaming?: boolean;
+  /** Local only, never cached: the stream broke or was stopped; the text shown is partial. */
+  incomplete?: boolean;
 }
 
 const MAX_CHARS = 1000;
@@ -60,7 +76,11 @@ const WARNING_THRESHOLD = 900;
 export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }> = ({ micSlotRef }) => {
   const dispatch = useDispatch();
   const location = useLocation();
-  const { userLocation, userLocationName, activeContextMode, setActiveContextMode } = useApp();
+  const { userLocation, userLocationName, activeContextMode, setActiveContextMode, retryGPS } = useApp();
+  const navigate = useNavigate();
+  const { setMapFocusTarget } = useNavigation();
+  // "Use my location" on a needs-location reply: ask once the location arrives.
+  const [askAfterLocation, setAskAfterLocation] = useState<string | null>(null);
   const { trips, currentTrip, refetchItinerary } = useTrip();
 
   const mode = activeContextMode;
@@ -80,6 +100,10 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
 
   const conversationRef = useRef<HTMLDivElement>(null);
   const keepLatestVisible = useRef(true);
+  const streamAbort = useRef<AbortController | null>(null);
+
+  // Leaving the page stops a running answer (the server then saves nothing).
+  useEffect(() => () => streamAbort.current?.abort(), []);
 
   const activeTrip = selectedTripId
     ? trips.find(t => t.id === selectedTripId) || currentTrip
@@ -127,12 +151,15 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
           metadata: {
             ...meta,
             card: card,
-            chips: chips
+            chips: chips,
+            places: cleanGuidePlaces(meta.places),
           }
         };
       });
-      // Keep local-only error bubbles (they are never stored in Redux or on the server).
-      setMessages(prev => [...parsedMsgs, ...prev.filter(m => m.id?.startsWith('err_') || m.id?.startsWith('auth_err_'))]);
+      // Keep local-only bubbles (never stored in Redux or on the server): errors, the answer still streaming,
+      // and partial answers marked incomplete.
+      setMessages(prev => [...parsedMsgs, ...prev.filter(m =>
+        m.id?.startsWith('err_') || m.id?.startsWith('auth_err_') || m.streaming || m.incomplete)]);
     } else if (!isHistoryLoading && (!activeHistory || activeHistory.length === 0) && messages.length === 0) {
       // Default Welcome Message if no history found
       setMessages([
@@ -159,10 +186,11 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
     }
   }, [location.state, currentTrip, selectedTripId]);
 
-  // Auto-scroll chat to bottom
+  // Auto-scroll chat to bottom while the reader is at the bottom (a send resets that), so a growing
+  // streamed answer follows along but never yanks someone who scrolled up to read.
   useEffect(() => {
     const conversation = conversationRef.current;
-    if (conversation) conversation.scrollTop = conversation.scrollHeight;
+    if (conversation && keepLatestVisible.current) conversation.scrollTop = conversation.scrollHeight;
   }, [messages, loading]);
 
   useEffect(() => {
@@ -175,7 +203,7 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
     return () => observer.disconnect();
   }, []);
 
-  const handleSend = async (queryText?: string) => {
+  const handleSend = async (queryText?: string, retryOf?: string) => {
     if (!queryText && isExceeded) {
       setShowUpgradeModal(true);
       return;
@@ -198,7 +226,7 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
     }
 
     // Extract recent 5 messages for client-driven context injection
-    const recentHistory = messages.slice(-5).map(m => ({
+    const recentHistory = messages.filter(m => !m.incomplete && !m.streaming).slice(-5).map(m => ({
       role: m.role === 'assistant' || m.role === 'guide' ? 'assistant' : 'user',
       content: m.content
     }));
@@ -210,11 +238,20 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
       mode: mode
     };
 
-    // A new send clears any previous transient error bubble.
-    setMessages(prev => [...prev.filter(m => !m.id?.startsWith('err_')), userMsg]);
+    // Placeholder for the streamed answer: a skeleton until the first token, then live text.
+    const assistantId = `g_${Date.now()}`;
+    const placeholder: ChatMsg = { id: assistantId, role: 'assistant', content: '', mode, streaming: true };
+
+    // A new send clears any previous transient error / incomplete bubble, and a Retry drops the failed question.
+    setMessages(prev => [
+      ...prev.filter(m => !m.id?.startsWith('err_') && !m.incomplete && !(retryOf && m.id === retryOf)),
+      userMsg,
+      placeholder,
+    ]);
     // Optimistic: `pending` keeps it alive across a history refetch and out of localStorage.
     dispatch(appendGuideMessage({ ...userMsg, pending: true }));
     if (!queryText) setInput('');
+    keepLatestVisible.current = true;
     setLoading(true);
 
     // The server never saw this message: take it back out of the cache and give the text
@@ -223,73 +260,167 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
       dispatch(removeGuideMessage(userMsg.id!));
       if (!queryText) setInput(prev => prev || textToSend);
     };
-
-    try {
-      const baseUrl = getApiBaseUrl();
-      const res = await fetchWithAuth(`${baseUrl}/api/tour-guide/chat`, {
-        method: 'POST',
-        body: JSON.stringify({
-          message: textToSend,
-          mode: mode,
-          trip_id: mode === 'trip' ? (activeTrip?.id || null) : null,
-          destination_name: mode === 'trip' ? (destinationName || null) : null,
-          user_location_name: mode === 'local' ? (userLocationName || null) : null,
-          lat: mode === 'local' ? (userLocation?.[0] || null) : null,
-          lng: mode === 'local' ? (userLocation?.[1] || null) : null,
-          recent_history: recentHistory
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const assistantMsg: ChatMsg = {
-          id: `g_${Date.now()}`,
-          role: 'assistant',
-          content: data.reply || "I'm here to help you explore!",
-          mode: mode,
-          metadata: {
-            chips: data.chips || [],
-            card: data.card || null,
-            error: data.error
-          }
-        };
-        setMessages(prev => [...prev, assistantMsg]);
-        // Confirm the user message (same id replaces the pending copy), then add the reply.
-        dispatch(appendGuideMessage({ ...userMsg, pending: false }));
-        dispatch(appendGuideMessage(assistantMsg as any));
-      } else {
-        revertUserMessage();
-        setMessages(prev => [
-          ...prev,
-          {
-            id: `err_${Date.now()}`,
-            role: 'assistant',
-            content: "Connection thoda unstable hai dost. Ek baar query dobara bhej kar dekho!",
-            metadata: {
-              chips: ["Retry now", "Check connection"],
-              error: "LLM_FAILURE"
-            }
-          }
-        ]);
-      }
-    } catch (err) {
-      console.error('[CONCIERGE CHAT ERROR]', err);
+    const patchAssistant = (patch: Partial<ChatMsg>) =>
+      setMessages(prev => prev.map(m => (m.id === assistantId ? { ...m, ...patch } : m)));
+    const showConnectionError = () => {
       revertUserMessage();
       setMessages(prev => [
-        ...prev,
+        ...prev.filter(m => m.id !== assistantId),
         {
           id: `err_${Date.now()}`,
           role: 'assistant',
           content: "Connection thoda unstable hai dost. Ek baar query dobara bhej kar dekho!",
           metadata: {
             chips: ["Retry now", "Check connection"],
-            error: "LLM_FAILURE"
+            error: "LLM_FAILURE",
+            retryText: textToSend,
+            retryOf: userMsg.id,
           }
         }
       ]);
+    };
+    // Shown text stays, marked incomplete with a Retry chip. Nothing is cached: the server saved nothing.
+    const markIncomplete = (code: string) => {
+      revertUserMessage();
+      patchAssistant({
+        streaming: false,
+        incomplete: true,
+        metadata: { chips: ["Retry now"], error: code, retryText: textToSend, retryOf: userMsg.id },
+      });
+    };
+    const finishWith = (data: {
+      reply?: string; chips?: string[]; card?: any; error?: string | null;
+      places?: unknown; emergency?: boolean; needs_location?: boolean;
+    }) => {
+      const placesList = cleanGuidePlaces(data.places);
+      const assistantMsg: ChatMsg = {
+        id: assistantId,
+        role: 'assistant',
+        content: data.reply || "I'm here to help you explore!",
+        mode: mode,
+        metadata: {
+          chips: data.chips || [],
+          card: data.card || null,
+          error: data.error || undefined,
+          places: placesList,
+          emergency: data.emergency === true,
+          needs_location: data.needs_location === true,
+          ...(data.needs_location ? { retryText: textToSend } : {}),
+        }
+      };
+      setMessages(prev => prev.map(m => (m.id === assistantId ? assistantMsg : m)));
+      // Confirm the user message (same id replaces the pending copy), then add the reply.
+      // The cached copy (like the server's history) keeps the places without phone numbers or addresses.
+      dispatch(appendGuideMessage({ ...userMsg, pending: false }));
+      dispatch(appendGuideMessage({
+        ...assistantMsg,
+        metadata: {
+          ...assistantMsg.metadata,
+          places: placesList.map(({ phone: _phone, address: _address, ...rest }) => rest),
+        },
+      } as any));
+    };
+
+    const body = {
+      message: textToSend,
+      mode: mode,
+      trip_id: mode === 'trip' ? (activeTrip?.id || null) : null,
+      destination_name: mode === 'trip' ? (destinationName || null) : null,
+      user_location_name: mode === 'local' ? (userLocationName || null) : null,
+      lat: mode === 'local' ? (userLocation?.[0] || null) : null,
+      lng: mode === 'local' ? (userLocation?.[1] || null) : null,
+      // The device location in both modes, used only for place lookups ("nearest hospital"); in Trip mode the
+      // server still keeps it out of the prompt.
+      latitude: userLocation?.[0] || null,
+      longitude: userLocation?.[1] || null,
+      recent_history: recentHistory
+    };
+
+    // The old non-streamed route: used once when the stream endpoint is unreachable.
+    const sendViaJson = async () => {
+      const res = await fetchWithAuth(`${getApiBaseUrl()}/api/tour-guide/chat`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      finishWith(await res.json());
+    };
+
+    const controller = new AbortController();
+    streamAbort.current = controller;
+    let shown = '';
+    try {
+      await streamTourGuideMessage(body, {
+        signal: controller.signal,
+        onToken: (t) => {
+          shown += t;
+          patchAssistant({ content: shown });
+        },
+        onDone: (data) => finishWith(data),
+        onError: (err) => {
+          if (err.partial && shown) markIncomplete(err.code);
+          else showConnectionError();
+        },
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        // Stop: keep what was shown (marked stopped), drop an empty bubble. The server saves nothing.
+        if (shown) markIncomplete('STOPPED');
+        else {
+          revertUserMessage();
+          setMessages(prev => prev.filter(m => m.id !== assistantId && m.id !== userMsg.id));
+        }
+      } else if (err instanceof GuideStreamFailure && err.unreachable) {
+        try {
+          await sendViaJson();
+        } catch (fallbackErr) {
+          console.error('[CONCIERGE CHAT ERROR]', fallbackErr);
+          showConnectionError();
+        }
+      } else if (shown) {
+        markIncomplete('STREAM_BROKEN');
+      } else {
+        console.error('[CONCIERGE CHAT ERROR]', err);
+        showConnectionError();
+      }
     } finally {
+      if (streamAbort.current === controller) streamAbort.current = null;
       setLoading(false);
     }
+  };
+
+  const stopStreaming = () => streamAbort.current?.abort();
+
+  // "Show on map": the same map focus voice uses for "Hawa Mahal dikhao" (a pin with the distance from you).
+  const showPlaceOnMap = (p: GuidePlace) => {
+    setMapFocusTarget({
+      id: `guide-${p.lat}-${p.lng}`, name: p.name, coordinates: [p.lat, p.lng], zoom: 16, highlight: true, pin: true,
+      ...(p.address ? { address: p.address } : {}),
+    });
+    navigate('/map');
+  };
+
+  // "Use my location": ask the browser, then send the same question again once a location arrives.
+  const askWithMyLocation = (question?: string) => {
+    if (question) setAskAfterLocation(question);
+    void retryGPS();
+  };
+  useEffect(() => {
+    if (askAfterLocation && userLocation && !loading) {
+      const q = askAfterLocation;
+      setAskAfterLocation(null);
+      void handleSend(q);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [askAfterLocation, userLocation, loading]);
+
+  // Retry on an error / incomplete bubble resends the question that failed, not the word "Retry".
+  const handleChip = (m: ChatMsg, chip: string) => {
+    if (/^retry/i.test(chip) && m.metadata?.retryText) {
+      handleSend(m.metadata.retryText, m.metadata.retryOf);
+      return;
+    }
+    handleSend(chip);
   };
 
   // 3. Add Interactive Card to Day 1 Itinerary
@@ -429,9 +560,47 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
                   </div>
                 ) : (
                   <div className="max-w-[94%] sm:max-w-[85%]">
-                    <div className="text-sm leading-relaxed">
-                      <FormattedText content={textContent} />
-                    </div>
+                    {m.streaming && !textContent ? (
+                      <div role="status" aria-label="Jarvis is answering" className="guide-skeleton w-64 max-w-full space-y-2 py-1">
+                        <span className="guide-skeleton-line w-full" />
+                        <span className="guide-skeleton-line w-[88%]" />
+                        <span className="guide-skeleton-line w-[60%]" />
+                      </div>
+                    ) : (
+                      <div className={`text-sm leading-relaxed ${m.streaming ? 'guide-streaming' : ''}`} aria-busy={m.streaming || undefined}>
+                        <FormattedText content={textContent} />
+                      </div>
+                    )}
+                    {m.incomplete && (
+                      <p className="mt-1.5 text-xs text-[var(--guide-muted)]">
+                        {m.metadata?.error === 'STOPPED' ? 'Stopped. Not saved.' : 'Answer cut off. Not saved.'}
+                      </p>
+                    )}
+
+                    {/* Real places from Google (hospital, medical shop, restaurant, cafe) + the 112/108 strip */}
+                    {!m.streaming && (
+                      <GuidePlaceCards
+                        places={m.metadata?.places || []}
+                        emergency={m.metadata?.emergency}
+                        onShowOnMap={showPlaceOnMap}
+                      />
+                    )}
+
+                    {/* The server had no location for a place lookup */}
+                    {i === lastIndex && m.metadata?.needs_location && (
+                      <button
+                        type="button"
+                        onClick={() => askWithMyLocation(m.metadata?.retryText)}
+                        disabled={loading || askAfterLocation !== null}
+                        className="mt-3 min-h-10 px-4 rounded-lg guide-action text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-60"
+                      >
+                        {askAfterLocation !== null ? (
+                          <><Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Getting your location…</>
+                        ) : (
+                          <><Navigation className="w-4 h-4" aria-hidden="true" /> Use my location</>
+                        )}
+                      </button>
+                    )}
 
                     {/* Place card */}
                     {cardData && cardData.title && (
@@ -525,8 +694,9 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
                           <button
                             key={idx}
                             type="button"
-                            onClick={() => handleSend(chip)}
-                            className="px-3 py-1.5 rounded-lg guide-control text-xs font-medium transition-colors"
+                            onClick={() => handleChip(m, chip)}
+                            disabled={loading}
+                            className="px-3 py-1.5 rounded-lg guide-control text-xs font-medium transition-colors disabled:opacity-60"
                           >
                             {chip}
                           </button>
@@ -539,20 +709,6 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
             );
           })}
 
-          {loading && (
-            <div role="status" className="flex items-center gap-2.5 text-xs text-[var(--guide-muted)]">
-              <span className="flex gap-1" aria-hidden="true">
-                {[0, 150, 300].map((delay) => (
-                  <span
-                    key={delay}
-                    className="w-1.5 h-1.5 rounded-full bg-[var(--guide-muted)] animate-pulse motion-reduce:animate-none"
-                    style={{ animationDelay: `${delay}ms` }}
-                  />
-                ))}
-              </span>
-              Looking that up…
-            </div>
-          )}
         </div>
       </div>
 
@@ -605,6 +761,17 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
             )}
           </div>
           <div ref={micSlotRef} className="shrink-0 empty:hidden" />
+          {loading ? (
+          <button
+            type="button"
+            onClick={stopStreaming}
+            aria-label="Stop answer"
+            title="Stop"
+            className="guide-control size-11 shrink-0 rounded-lg flex items-center justify-center transition-colors"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
+          </button>
+          ) : (
           <button
             type="submit"
             onClick={(e) => {
@@ -619,6 +786,7 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
           >
             <ArrowUp className="w-4 h-4" aria-hidden="true" />
           </button>
+          )}
         </form>
       </div>
 

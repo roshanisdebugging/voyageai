@@ -4,7 +4,8 @@
  */
 
 import { wsClient } from './wsClient';
-import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders } from '../config/apiConfig';
+import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders, fetchWithAuth } from '../config/apiConfig';
+import { runGuideStream, type GuideStreamHandlers } from './guideStream';
 
 export interface TourPlace {
   id: string;
@@ -146,6 +147,22 @@ export async function sendTourGuideMessage(
     trip_id: data.trip_context ? data.trip_context.id : tripId,
     source: 'websocket'
   };
+}
+
+// ── Streamed Jarvis chat: POST /api/tour-guide/chat/stream (Server-Sent Events); logic in guideStream.ts ──
+export type { GuideStreamDone, GuideStreamError, GuideStreamHandlers, GuidePlace } from './guideStream';
+export { GuideStreamFailure, cleanGuidePlaces } from './guideStream';
+
+/** Sends one Jarvis message and streams the answer (same body, cookie login and 401 handling as the JSON route). */
+export function streamTourGuideMessage(
+  body: Record<string, unknown>,
+  handlers: GuideStreamHandlers = {},
+): Promise<'done' | 'error'> {
+  return runGuideStream(
+    (init) => fetchWithAuth(`${getApiBaseUrl()}/api/tour-guide/chat/stream`, init),
+    body,
+    handlers,
+  );
 }
 
 export async function setCurrentVisit(placeId: string): Promise<void> {

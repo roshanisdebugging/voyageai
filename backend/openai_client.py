@@ -14,7 +14,8 @@ code unsupported_parameter) is retried once without it, then remembered for this
 import json as _json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Set
+import time
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 import requests
 
@@ -102,8 +103,9 @@ def _error_fields(res) -> Dict[str, str]:
     return {"code": "", "param": "", "effort": False}
 
 
-def _post(body: Dict[str, Any], timeout: float, effort: Optional[str], *, request_error=LLMError):
-    """POST one chat request. Adds reasoning_effort, and retries once without it if the model rejects it."""
+def _post(body: Dict[str, Any], timeout: Any, effort: Optional[str], *, request_error=LLMError, stream: bool = False):
+    """POST one chat request. Adds reasoning_effort, and retries once without it if the model rejects it.
+    stream=True asks requests not to read the body yet (used by chat_stream)."""
     api_key = _api_key()
     model = body["model"]
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -114,7 +116,10 @@ def _post(body: Dict[str, Any], timeout: float, effort: Optional[str], *, reques
         if send_effort:
             payload["reasoning_effort"] = send_effort
         try:
-            res = requests.post(OPENAI_CHAT_URL, headers=headers, json=payload, timeout=timeout)
+            if stream:
+                res = requests.post(OPENAI_CHAT_URL, headers=headers, json=payload, timeout=timeout, stream=True)
+            else:
+                res = requests.post(OPENAI_CHAT_URL, headers=headers, json=payload, timeout=timeout)
         except requests.RequestException as exc:
             raise request_error(f"OpenAI request failed: {type(exc).__name__}", code=type(exc).__name__,
                                 model=model) from exc
@@ -176,6 +181,65 @@ def chat(
     if not content.strip():
         raise LLMError("OpenAI returned an empty answer", status=200, code="empty_answer", model=llm_model())
     return content.strip()
+
+
+def chat_stream(
+    messages: List[Dict[str, str]],
+    *,
+    temperature: float = 0.4,
+    first_token_timeout: float = 8,
+    total_timeout: float = 20,
+    max_completion_tokens: Optional[int] = None,
+    reasoning_effort: Optional[str] = "low",
+) -> Iterator[str]:
+    """
+    Streamed chat (Server-Sent Events from OpenAI). Yields the answer's text pieces as they arrive.
+    first_token_timeout is the longest wait for any bytes (connect, the first piece, and every gap after it);
+    total_timeout bounds the whole answer. Raises LLMError / LLMRateLimited / LLMTransient, before or between
+    pieces; an answer cut off (finish_reason other than stop) raises LLMError code incomplete_<reason>.
+    Closing the generator early closes the HTTP response.
+    """
+    started = time.monotonic()
+    body: Dict[str, Any] = {"model": llm_model(), "messages": messages, "temperature": temperature, "stream": True}
+    if max_completion_tokens:
+        body["max_completion_tokens"] = max_completion_tokens
+    res = _post(body, (min(5.0, first_token_timeout), first_token_timeout), _effort(reasoning_effort),
+                request_error=LLMTransient, stream=True)
+    try:
+        _raise_for_status(res, transient_5xx=True)
+        finish = None
+        got_text = False
+        try:
+            for line in res.iter_lines(decode_unicode=False):
+                if time.monotonic() - started > total_timeout:
+                    raise LLMTransient("OpenAI answer took too long", status=200, code="total_timeout",
+                                       model=llm_model())
+                if not line or not line.startswith(b"data:"):
+                    continue
+                data = line[5:].strip()
+                if data == b"[DONE]":
+                    break
+                try:
+                    choice = (_json.loads(data.decode("utf-8")).get("choices") or [{}])[0]
+                except (ValueError, UnicodeDecodeError, AttributeError, IndexError):
+                    continue
+                piece = (choice.get("delta") or {}).get("content")
+                if isinstance(piece, str) and piece:
+                    got_text = True
+                    yield piece
+                if choice.get("finish_reason"):
+                    finish = choice.get("finish_reason")
+        except requests.RequestException as exc:
+            raise LLMTransient(f"OpenAI stream failed: {type(exc).__name__}", code=type(exc).__name__,
+                               model=llm_model()) from exc
+        if finish not in (None, "stop"):
+            reason = _safe_code(finish) or "unknown"
+            raise LLMError(f"OpenAI answer incomplete ({reason})", status=200, code=f"incomplete_{reason}",
+                           model=llm_model())
+        if not got_text:
+            raise LLMError("OpenAI returned an empty answer", status=200, code="empty_answer", model=llm_model())
+    finally:
+        res.close()
 
 
 def chat_tools(

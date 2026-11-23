@@ -1166,7 +1166,9 @@ async def process_ws_action(
             destination_name=dest_name,
             lat=lat if target_mode == "local" else None,
             lng=lng if target_mode == "local" else None,
-            db=db
+            db=db,
+            device_lat=lat,
+            device_lng=lng,
         )
 
         return {
@@ -1176,6 +1178,11 @@ async def process_ws_action(
             "mode": target_mode,
             "trip_id": target_trip_id,
             "error": res.get("error"),
+            "provider": res.get("provider"),
+            "grounded": bool(res.get("grounded")),
+            "places": res.get("places") or [],
+            "emergency": bool(res.get("emergency")),
+            "needs_location": bool(res.get("needs_location")),
             "source": "websocket"
         }
 
@@ -2537,8 +2544,40 @@ def chat_with_concierge(
         lat=eff_lat if (payload.mode or "local") == "local" else None,
         lng=eff_lng if (payload.mode or "local") == "local" else None,
         recent_history=recent_hist_dicts,
-        db=db
+        db=db,
+        # Place lookups ("nearest hospital") use the device location in Trip mode too; the prompt's anchor doesn't.
+        device_lat=eff_lat,
+        device_lng=eff_lng,
     )
+
+@app.post("/api/tour-guide/chat/stream", dependencies=[Depends(ai_chat_limiter)])
+async def chat_with_concierge_stream(
+    payload: TourGuideChatRequest,
+    request: Request,
+    current_user: AuthUser = Depends(get_current_user),
+):
+    """Same body, login and rate limit as /api/tour-guide/chat, answered as Server-Sent Events:
+    start -> token* -> done (reply, chips, card, mode, gate, grounded, provider, error), or error."""
+    from fastapi.responses import StreamingResponse
+    from tour_guide_service import stream_concierge_events
+    mode = payload.mode or "local"
+    eff_lat = payload.lat if payload.lat is not None else payload.latitude
+    eff_lng = payload.lng if payload.lng is not None else payload.longitude
+    events = stream_concierge_events(
+        user_id=current_user.id,
+        message=payload.message,
+        mode=mode,
+        trip_id=payload.trip_id,
+        destination_name=payload.destination_name,
+        lat=eff_lat if mode == "local" else None,
+        lng=eff_lng if mode == "local" else None,
+        recent_history=[h.dict() for h in (payload.recent_history or [])],
+        is_disconnected=request.is_disconnected,
+        device_lat=eff_lat,
+        device_lng=eff_lng,
+    )
+    return StreamingResponse(events, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.get("/api/tour-guide/history", dependencies=[Depends(general_limiter)])
 @app.get("/api/chat/history", dependencies=[Depends(general_limiter)])

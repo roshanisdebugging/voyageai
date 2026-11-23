@@ -122,3 +122,40 @@
 .guide-action.guide-send-over-limit:enabled:hover {
   background: var(--guide-error-action-hover);
 }
+
+/* Streamed answer: skeleton until the first words arrive, then a blinking caret. */
+.guide-skeleton-line {
+  display: block;
+  height: 0.7rem;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, var(--guide-raised) 0%, var(--guide-border) 50%, var(--guide-raised) 100%);
+  background-size: 200% 100%;
+  animation: guide-shimmer 1.2s ease-in-out infinite;
+}
+
+.guide-streaming > div > :last-child::after {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--guide-muted);
+  animation: guide-caret-blink 1s steps(1) infinite;
+}
+
+@keyframes guide-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@keyframes guide-caret-blink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-skeleton-line,
+  .guide-streaming > div > :last-child::after {
+    animation: none;
+  }
+}
