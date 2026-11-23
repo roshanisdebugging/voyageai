@@ -25,6 +25,8 @@ os.environ["SARVAM_API_KEY"] = "test-key-not-real"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 os.environ.pop("VOICE_TTS_ENABLED", None)
 os.environ.pop("VOICE_TTS_SPEAKER", None)
+for _k in ("SARVAM_TTS_MODEL", "SARVAM_TTS_PACE", "SARVAM_TTS_SAMPLE_RATE"):
+    os.environ.pop(_k, None)   # the defaults (bulbul:v3, ritu) are checked below
 os.environ["OPENAI_API_KEY"] = ""  # the step 2 agent is replaced by an echo stub below
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -179,7 +181,7 @@ def turn(ws, audio):
 
 
 def audio_text_keys():
-    return set(redis_conn.scan_iter("audio:text:*"))
+    return set(redis_conn.scan_iter("audio:*text:*"))   # audio:text:* (old) and audio:v2:text:* keys
 
 
 keys_before = audio_text_keys()
@@ -196,12 +198,12 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.objec
     check("reply text is the echo", rep.get("reply_text") == "Aapne kaha: mujhe jaipur jaana hai", rep.get("reply_text"))
     check("reply audio is Sarvam's WAV", rep.get("reply_audio_base64") == WAV_B64)
     sent = FakeSarvam.calls[-1]
-    check("Sarvam asked for hi-IN, speaker ritu, bulbul:v3", sent["target_language_code"] == "hi-IN" and sent["speaker"] == "ritu"
-          and sent["model"] == "bulbul:v3", {k: sent[k] for k in ("target_language_code", "speaker", "model")})
+    check("Sarvam asked for hi-IN, speaker ritu, bulbul:v3", sent["language_code"] == "hi-IN" and sent["speaker"] == "ritu"
+          and sent["model"] == "bulbul:v3", {k: sent[k] for k in ("language_code", "speaker", "model")})
 
     FakeSTT.text, FakeSTT.language = "I want to go to Jaipur", "en"
     frames = turn(ws, pcm(1.0))
-    check("English speech -> en-IN reply", FakeSarvam.calls[-1]["target_language_code"] == "en-IN")
+    check("English speech -> en-IN reply", FakeSarvam.calls[-1]["language_code"] == "en-IN")
 
     FakeSTT.text, FakeSTT.language = "", None
     frames = turn(ws, pcm(1.0))

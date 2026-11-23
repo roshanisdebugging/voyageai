@@ -1188,7 +1188,7 @@ async def process_ws_action(
 
     elif reqname == "tts:synthesize":
         from tts_service import synthesize_speech_sarvam
-        text = (data.get("text") or "")[:2000]
+        text = (data.get("text") or "")[:5000]   # size guard; tts_service trims at a sentence boundary
         lang = data.get("target_language_code", "hi-IN")
         speaker = data.get("speaker", "meera")
         audio_b64 = await run_in_threadpool(
@@ -1196,7 +1196,8 @@ async def process_ws_action(
             text=text,
             target_language_code=lang,
             speaker=speaker,
-            poi_id=data.get("poi_id")
+            poi_id=data.get("poi_id"),
+            max_chars=2000,   # tour-guide narration
         )
         return {"audio_base64": audio_b64, "speaker": speaker, "language": lang}
 
@@ -1830,7 +1831,8 @@ async def tts_synthesize(req: TTSRequest):
             text=req.text,
             target_language_code=req.target_language_code or "hi-IN",
             speaker=req.speaker or "meera",
-            poi_id=req.poi_id
+            poi_id=req.poi_id,
+            max_chars=2000,   # tour-guide narration
         )
         return {
             "audio_base64": base64_audio,
@@ -1869,7 +1871,8 @@ def text_to_speech_endpoint(req: SpeakRequest):
             text=narration_text,
             target_language_code=req.language or "hi-IN",
             speaker=req.speaker or "ritu",
-            poi_id=req.place_id
+            poi_id=req.place_id,
+            max_chars=2000,   # tour-guide narration
         )
         return {
             "status": "ok" if audio_b64 else "unavailable",

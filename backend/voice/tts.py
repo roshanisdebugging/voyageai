@@ -1,9 +1,14 @@
 """
-Spoken reply for a voice turn (voicefirst.md step 1b), via Sarvam bulbul:v3.
+Spoken reply for a voice turn (voicefirst.md step 1b), via Sarvam (tts_service.py).
 
-VOICE_TTS_ENABLED   true (default) / false
-VOICE_TTS_SPEAKER   default "ritu"
-SARVAM_API_KEY      shared with the rest of the app
+VOICE_TTS_ENABLED       true (default) / false
+VOICE_TTS_SPEAKER       bulbul:v3: a v3 name (default "ritu"); bulbul:v4-flash: a v4 voice ID, passed through as is
+                        (e.g. aayan_hi_conversational)
+SARVAM_TTS_MODEL        default bulbul:v3 (e.g. bulbul:v4-flash)
+SARVAM_TTS_PACE         default 1.0 (0.5 - 2.0)
+SARVAM_TTS_SAMPLE_RATE  default 22050 (e.g. 24000); always WAV
+SARVAM_API_KEY          shared with the rest of the app
+Replies are cut at a sentence boundary to 480 characters (tts_service.VOICE_REPLY_MAX_CHARS).
 
 Never cached: a reply can contain the user's own words, so synthesize_speech_sarvam is
 called with use_cache=False (no Redis read or write). Logs never contain the text.
@@ -12,7 +17,7 @@ import os
 import time
 from typing import Optional, Tuple
 
-REPLY_MIME = "audio/wav"  # bulbul:v3 returns WAV (speech_sample_rate 22050)
+REPLY_MIME = "audio/wav"  # Sarvam returns WAV at SARVAM_TTS_SAMPLE_RATE; the browser decodes any rate
 
 # STT language code -> Sarvam target_language_code. Urdu speech is spoken back in Hindi.
 LANGUAGE_TO_SARVAM = {"hi": "hi-IN", "ur": "hi-IN", "en": "en-IN"}
@@ -28,6 +33,7 @@ def tts_enabled() -> bool:
 
 
 def tts_speaker() -> str:
+    """bulbul:v3 default "ritu"; for other models tts_service.resolve_speaker uses VOICE_TTS_SPEAKER as given."""
     return (os.getenv("VOICE_TTS_SPEAKER") or "ritu").strip() or "ritu"
 
 
