@@ -40,8 +40,8 @@ CASES = [
     ("show my expenses", "en", "/expenses", True),
     ("cab chahiye", "hi", "/rides", True),
     ("book a ride", "en", "/rides", True),
-    ("khana dikhao", "hi", "/food", True),
-    ("where can I eat", "en", "/food", True),
+    ("food page kholo", "hi", "/food", True),        # "khana kahan milega" / "where can I eat" -> search_nearby now
+    ("open the food page", "en", "/food", True),
     ("ghoomne ki jagah dikhao", "hi", "/explore", True),
     ("explore kholo", "hi", "/explore", True),
     ("tour guide kholo", "hi", "/guide", True),

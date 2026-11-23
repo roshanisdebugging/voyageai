@@ -1094,47 +1094,45 @@ That lets "Hawa Mahal wala mark done karo" become an activity ID. The ID is matc
 
 ---
 
-### Places of a kind near a place (search_nearby, built 23 Nov 2026 on branch `voice-nearby`)
+### Places of a kind near a place (search_nearby, branch `voice-nearby`; location rules revised 23 Nov 2026)
 
 **Why:** "Hawa Mahal ke paas achha restaurant dikhao" used to call `search_places("Hawa Mahal")`: the category was
 dropped and the user heard "Hawa Mahal: map par dikha diya."
 
-**What it does now:**
+**Where it searches (the trip destination is never the default):**
 
-| User says | Tool call | Where it searches | Reply |
+| User says | Tool call | Where | Reply |
 | --- | --- | --- | --- |
-| "Hawa Mahal ke paas achha restaurant dikhao" | `search_nearby(category="good restaurant", near="Hawa Mahal Jaipur")` | the landmark (in the query text) | "Hawa Mahal ke paas ye restaurants mile: A, B, C. Map par dikha diye." |
-| "India Gate ke paas cafe", "cafe near Marine Drive" | `search_nearby(category="cafe", near=...)` | the landmark | same shape; English: "Cafes near India Gate: A, B, C. Showing them on the map." |
-| "Goa mein beach ke paas hotel" | `search_nearby(category="hotel", near="beach Goa")` | the area said | "beach ke paas ye hotels mile: ..." |
-| "achha restaurant dikhao" (no place) | `search_nearby(category="good restaurant")` | the open trip's destination (owner-checked), else the device location sent with this turn | "Jaipur mein ye restaurants mile: ..." / "Aapke paas ye restaurants mile: ..." |
-| same, no trip and no location | — | nowhere (no Google call) | one question: "Kis jagah ke paas dhoondhun?" |
+| "mere aaspas khane ki achhi jagah", "near me ATM", "yahan ke paas chai" | `search_nearby(category, near_me=true)` | the device location sent with the turn (3 km locationBias) | "Aapke aaspas ye restaurants mile: A, lagbhag 1.2 kilometer; B, lagbhag 800 meter; C, lagbhag 2 kilometer. Map par dikha diye." |
+| "Howrah ke paas achha restaurant", "Hawa Mahal ke paas cafe", "cafe near Park Street" | `search_nearby(category, near="Howrah")` | "good restaurants near Howrah": the place said wins over the device. An open trip's destination is only a soft 50 km hint for an ambiguous X, never added to the query | "Howrah ke paas ye restaurants mile: A, B, C. Map par dikha diye." (no distance: X's own position would need a second call) |
+| "achha restaurant dikhao", "khana kahan milega", "where can I eat" (no place words) | `search_nearby(category)` | the device location, said in the reply ("Aapke aaspas ...") | as for "mere aaspas" |
+| the same with no location (off / denied / worse than 1 km) | — | nowhere (no Google call) | one question: "Kahan ke paas dekhun?" |
+| "food page kholo", "open the food page" | `navigate(food)` | — | the Food page (ONLY when the page itself is asked for) |
 | "Hawa Mahal dikhao" (a named place only) | `search_places` as before | — | "Hawa Mahal, Jaipur: map par dikha diya." |
 
 **Rules:**
-- Prompt rule: a kind AND a place ("X ke paas Y", "Y near X", "X ke aas-paas Y", "X mein Y") -> always `search_nearby`, never
-  `search_places` on the landmark alone.
+- Prompt: a kind AND a place ("X ke paas Y", "Y near X", "X ke aas-paas Y", "X mein Y") -> always `search_nearby`, never
+  `search_places` on the landmark alone. `near` = the place as said; the model must not add the trip's city. "Khana kahan
+  milega" / "where can I eat" is `search_nearby` (the old "-> navigate to food" rule is gone; `pages.MEANINGS["food"]`
+  says page only). If the model writes "me" / "near me" / "mere aaspas" into `near`, the code treats it as near_me.
+- Kinds (`places.CATEGORY_TYPES`): restaurant (also khana / khane / food / eat), cafe, chai, street food (chaat, momos ...),
+  hotel, ATM, bank, hospital, pharmacy, petrol pump, parking, toilet, police, bar, mall, market, temple, beach, park;
+  anything else is free text, kept as said ("rooftop bar", "pure veg restaurant"). Quality words become English
+  ("achha / achhi" -> good, "sasta" -> cheap). Known kinds send an `includedType` (a preference).
 - Google only, ONE Places Text Search (New) call per request (`places.search_category` ->
-  `google_maps_service.text_search_places(..., included_type, bias, with_rating=True)`), never Place Details. Query like
-  "good restaurants near Hawa Mahal Jaipur" / "restaurants in Jaipur" / "ATMs". `includedType` for known kinds
-  (restaurant, cafe, lodging, atm, hospital, pharmacy, gas_station, ...; a preference, not strict). Trip destination
-  or device location -> a 3 km `locationBias` circle. A landmark's own position isn't known without a second call, so
-  "near X" relies on the query text.
-- Ranking (`places.rank_category`): India only; the landmark itself dropped; same name within 300 m merged; places of
-  the asked kind first, other landmarks last; Google's order otherwise. Up to 6 places with name, place id, rating
-  (when Google has one), address, category.
-- Reply: at most three names spoken. The map opens with the places as its markers and cards (`map_results` ui
-  action, checked in `uiActions.ts`; a blue chip with the title clears them and brings back the nearby places).
-  The cards keep the add-to-itinerary rule: no trip open -> Save + Details; trip open -> Save + Add to itinerary.
+  `google_maps_service.text_search_places(..., included_type, bias, with_rating=True)`), never Place Details.
+- Ranking: India only; the landmark itself dropped; same name within 300 m merged; the asked kind first; then by rating
+  and distance (rating minus 0.3 per km from the device; unrated = 0; without an origin, rating only). The map cards
+  and the speech use this order. Up to 6 places on the map; at most three names spoken, each with a rough straight-line
+  distance from the device ("lagbhag 1.2 kilometer"), computed from lat/lng (no extra call).
+- The map shows the places as its markers and cards (`map_results` ui action; a blue chip clears them). The cards keep
+  the add-to-itinerary rule: no trip open -> Save; trip open -> Save + Add to itinerary.
 - After a list, the remembered "last place" is cleared, so "yeh jagah save karo" asks which one.
-- Quota / paused key -> the map search message "Map search abhi available nahi hai." Nothing found -> "Hawa Mahal ke
-  paas koi restaurants nahi mile."
-- Cost: the rating fields (`places.rating`, `places.userRatingCount`) may put this call in a higher Text Search SKU than
-  the plain named lookup. Still one call.
-- Tests: `python -m tests.test_voice_nearby` (category + landmark, category with an open trip, no trip and no
-  location -> one question, named place -> search_places, quota, the Google request shape). Not tested: real Google,
-  real OpenAI choosing the tool, browser, phone.
-
----
+- Quota / paused key -> "Map search abhi available nahi hai." Nothing found -> "Howrah ke paas koi restaurants nahi mile."
+- Cost: the rating fields (`places.rating`, `places.userRatingCount`) may put this call in a higher Text Search SKU.
+- Tests: `python -m tests.test_voice_nearby` (46). Not tested: real Google, real OpenAI choosing the tool, browser, phone.
+  Risk to watch: the soft trip hint for "X ke paas" when X is in another city (e.g. Howrah with a Jaipur trip open). If
+  Google ever returns Jaipur places for that, drop the hint.
 
 ### Step 6 in detail: smart actions
 

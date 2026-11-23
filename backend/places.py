@@ -269,10 +269,13 @@ def search_places(query: str) -> PlaceResults:
 
 # What the user asked for -> (the Google place type to prefer, the types that count as a match, plural label).
 # Checked in order; the first keyword found in the category wins. Anything else stays free text (no type).
-CATEGORY_TYPES: List[Tuple[Tuple[str, ...], str, Tuple[str, ...], str]] = [
-    (("restaurant", "khana", "dhaba", "food", "lunch", "dinner", "biryani", "thali"), "restaurant",
-     ("restaurant", "food", "meal_takeaway", "meal_delivery"), "restaurants"),
-    (("cafe", "coffee", "chai"), "cafe", ("cafe", "coffee_shop", "tea_house", "bakery"), "cafes"),
+CATEGORY_TYPES: List[Tuple[Tuple[str, ...], Optional[str], Tuple[str, ...], str]] = [
+    (("street food", "chaat", "pani puri", "golgappa", "vada pav", "momos", "kachori"), None,
+     ("restaurant", "food", "meal_takeaway", "fast_food_restaurant"), "street food spots"),
+    (("chai", "tea"), None, ("cafe", "tea_house", "coffee_shop"), "chai spots"),
+    (("restaurant", "khana", "khane", "khaana", "dhaba", "food", "eat", "lunch", "dinner", "breakfast", "nashta",
+      "biryani", "thali"), "restaurant", ("restaurant", "food", "meal_takeaway", "meal_delivery"), "restaurants"),
+    (("cafe", "coffee"), "cafe", ("cafe", "coffee_shop", "tea_house", "bakery"), "cafes"),
     (("hotel", "stay", "lodge", "resort", "hostel", "homestay", "guest house", "guesthouse"), "lodging",
      ("lodging", "hotel", "resort_hotel", "motel", "hostel", "guest_house", "bed_and_breakfast"), "hotels"),
     (("atm",), "atm", ("atm",), "ATMs"),
@@ -291,10 +294,11 @@ CATEGORY_TYPES: List[Tuple[Tuple[str, ...], str, Tuple[str, ...], str]] = [
     (("park", "garden"), "park", ("park", "garden", "botanical_garden"), "parks"),
 ]
 CATEGORY_RESULTS = 6         # places shown on the map
-NEAR_BIAS_RADIUS_M = 3000    # device / trip location bias radius (a preference, not a limit)
+NEAR_BIAS_RADIUS_M = 3000    # "near me": bias around the device (a preference, not a limit)
+TRIP_HINT_RADIUS_M = 50000   # "near X" with a trip open: a soft hint towards the trip's city for an ambiguous X
 
 
-def category_info(category: str) -> Tuple[Optional[str], Tuple[str, ...], str]:
+def category_info(category: str) -> Tuple[Optional[str], Tuple[str, ...], str]:  # noqa: C901
     """'achha restaurant' -> ('restaurant', match types, 'restaurants'). Unknown -> (None, (), the text as said)."""
     c = _norm_name(category)
     for words, gtype, match, plural in CATEGORY_TYPES:
@@ -303,17 +307,32 @@ def category_info(category: str) -> Tuple[Optional[str], Tuple[str, ...], str]:
     return None, (), (category or "").strip()[:40]
 
 
+QUALITY_WORDS = {"good": "good", "best": "best", "cheap": "cheap", "budget": "budget", "top": "top", "veg": "veg",
+                 "family": "family", "luxury": "luxury", "achha": "good", "accha": "good", "achhi": "good",
+                 "acchi": "good", "achhe": "good", "badhiya": "good", "sasta": "cheap", "sasti": "cheap"}
+# Hinglish filler around the kind ("khane ki achhi jagah"): dropped when deciding if the user said more than the kind.
+HINDI_KIND_WORDS = {"khana", "khane", "khaana", "nashta", "dawai"}   # Hindi words that just mean the kind
+FILLER_WORDS = {"ki", "ka", "ke", "jagah", "jagahein", "place", "places", "spot", "spots", "wala", "wali", "koi", "some"}
+
+
 def category_query(category: str, near: Optional[str] = None, area: Optional[str] = None) -> str:
-    """The one Text Search query: 'good restaurants near Hawa Mahal Jaipur' / 'restaurants in Jaipur' / 'atm'."""
+    """The one Text Search query: 'good restaurants near Hawa Mahal' / 'chai spots near Howrah' / 'ATMs'.
+    The user's extra words are kept ('rooftop bar near X'); a bare kind becomes the plural label."""
     _, _, plural = category_info(category)
-    words = (category or "").strip()
-    what = words if _norm_name(plural) in _norm_name(words) or not words else plural
-    # keep the user's quality word ("good", "sasta", "best") in front of the plural
-    lead = [w for w in _norm_name(words).split() if w in ("good", "best", "cheap", "budget", "achha", "accha", "sasta",
-                                                          "badhiya", "top", "veg", "pure veg", "family", "luxury")]
-    if lead and _norm_name(plural) not in _norm_name(words):
-        what = " ".join(["good" if w in ("achha", "accha", "badhiya") else ("cheap" if w == "sasta" else w)
-                         for w in lead] + [plural])
+    tokens = [w for w in _norm_name(category).split() if w not in FILLER_WORDS]
+    plural_words = set(_norm_name(plural).split())
+
+    def covered(w: str) -> bool:   # the word is just the kind itself (any spelling / number / Hindi word for it)
+        return (w in QUALITY_WORDS or w in plural_words or f"{w}s" in plural_words or f"{w}es" in plural_words
+                or (w.endswith("y") and f"{w[:-1]}ies" in plural_words) or w in HINDI_KIND_WORDS)
+
+    if not tokens:
+        what = plural
+    elif all(covered(w) for w in tokens) and plural != (category or "").strip()[:40]:
+        lead = [QUALITY_WORDS[w] for w in tokens if w in QUALITY_WORDS]
+        what = " ".join(dict.fromkeys(lead + [plural]))              # "good restaurants", "ATMs", "petrol pumps"
+    else:
+        what = " ".join(QUALITY_WORDS.get(w, w) for w in tokens)      # "pure veg restaurant", "momos", "rooftop bar"
     if near:
         return f"{what} near {near.strip()}"[:160]
     if area:
@@ -343,7 +362,7 @@ def rank_category(category: str, near: Optional[str], results: List[Dict[str, An
 
 
 def search_category(category: str, near: Optional[str] = None, area: Optional[str] = None,
-                    bias: Optional[Tuple[float, float]] = None) -> PlaceSearch:
+                    bias: Optional[Tuple[float, float]] = None, bias_radius_m: int = NEAR_BIAS_RADIUS_M) -> PlaceSearch:
     """
     Voice "category near a place": ONE Places Text Search (New) call, never Place Details. near = a landmark/area the
     user said; area = the open trip's city (when no landmark); bias = (lat, lng) of the trip city or the device, as a
@@ -360,7 +379,7 @@ def search_category(category: str, near: Optional[str] = None, area: Optional[st
     out = PlaceSearch()
     try:
         raw = _run_sync(text_search_places(q, counter=counter, included_type=gtype,
-                                           bias=(bias[0], bias[1], NEAR_BIAS_RADIUS_M) if bias else None,
+                                           bias=(bias[0], bias[1], bias_radius_m) if bias else None,
                                            with_rating=True))
         out = PlaceSearch(results=rank_category(category, near, raw)[:CATEGORY_RESULTS])
     except GoogleQuotaError:

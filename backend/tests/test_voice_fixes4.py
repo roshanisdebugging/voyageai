@@ -136,7 +136,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
         FakeTools.queue = [("tool", ("search_places", {"query": "Taj Mahal", "show": False})),
                            ("tool", ("navigate", {"page": "food"}))]
         ra("Taj Mahal kahan hai", c)
-        r = ra("khana dikhao", c)
+        r = ra("food page kholo", c)
     check("another request after the question -> the pending map is dropped", r.ui_actions == [{"type": "navigate", "to": "/food"}])
     with mock.patch.object(places, "search_places", lambda q: HAWA):
         FakeTools.queue = [("tool", ("search_places", {"query": "Hawa Mahal", "show": True}))]
