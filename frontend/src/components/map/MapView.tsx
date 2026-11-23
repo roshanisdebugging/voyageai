@@ -97,6 +97,9 @@ export const MapView: React.FC = () => {
   }, [userLocation, currentTrip]);
 
   const [allPlaces, setAllPlaces] = useState<PlaceItem[]>([]);
+  // Voice "Hawa Mahal ke paas restaurant": these replace the nearby places (markers + cards) until cleared.
+  const [voiceResults, setVoiceResults] = useState<{ title: string; places: PlaceItem[] } | null>(null);
+  const basePlaces = voiceResults ? voiceResults.places : allPlaces;
   const [selectedPlace, setSelectedPlace] = useState<PlaceItem | null>(null);
   /** The place shown in the slide-up sheet (a pin tap, or a place sent here from Explore). */
   const [sheetPlace, setSheetPlace] = useState<PlaceItem | null>(null);
@@ -577,19 +580,19 @@ export const MapView: React.FC = () => {
 
   // Count of places in each category
   const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: allPlaces.length };
-    for (const p of allPlaces) {
+    const counts: Record<string, number> = { all: basePlaces.length };
+    for (const p of basePlaces) {
       const cat = p.canonicalCategory || getCanonicalCategory(p.category, p.name);
       counts[cat] = (counts[cat] || 0) + 1;
     }
     return counts;
-  }, [allPlaces]);
+  }, [basePlaces]);
 
   // Instant client-side filter — NO network requests when category tab is selected
   const filteredPlaces = useMemo(() => {
-    if (activeCategory === 'all') return allPlaces;
-    return allPlaces.filter(p => (p.canonicalCategory || getCanonicalCategory(p.category, p.name)) === activeCategory);
-  }, [allPlaces, activeCategory]);
+    if (activeCategory === 'all') return basePlaces;
+    return basePlaces.filter(p => (p.canonicalCategory || getCanonicalCategory(p.category, p.name)) === activeCategory);
+  }, [basePlaces, activeCategory]);
 
   // Nearest-first order for the scrollable card row
   const sortedPlaces = useMemo(() => {
@@ -693,6 +696,46 @@ export const MapView: React.FC = () => {
     if (!mapFocusTarget || mapStatus === 'loading') return;
     const { coordinates, id, name, category, zoom, address } = mapFocusTarget;
 
+    // Voice "X ke paas restaurant": show the places as the map's markers and cards, fit them on screen.
+    if (mapFocusTarget.results) {
+      const here = userLocation || activeCoords;
+      const items: PlaceItem[] = mapFocusTarget.results.places.map((p) => {
+        const cat = p.category || 'sights';
+        return {
+          id: p.placeId || `voice-${p.lat}-${p.lng}`,
+          name: p.name,
+          category: cat,
+          canonicalCategory: getCanonicalCategory(cat, p.name),
+          latitude: p.lat,
+          longitude: p.lng,
+          address: p.address || '',
+          rating: p.rating,
+          ...(here ? { distanceMeters: Math.round(calculateDistance(here[0], here[1], p.lat, p.lng)) } : {}),
+        };
+      });
+      searchSeqRef.current++;
+      setSearchResult(null);
+      setSearchQuery('');
+      setSearchSuggestions([]);
+      if (searchMarkerRef.current) searchMarkerRef.current.map = null;
+      setActiveCategory('all');
+      setSelectedPlace(null);
+      setSheetPlace(null);
+      setIsFollowMode(false);
+      setVoiceResults({ title: mapFocusTarget.results.title, places: items });
+      fittedRef.current = true;   // the first-load fit must not zoom out to include the user
+      const map = mapRef.current;
+      if (map && items.length) {
+        cancelFly();
+        const bounds = new google.maps.LatLngBounds();
+        items.forEach((p) => bounds.extend({ lat: p.latitude, lng: p.longitude }));
+        if (items.length === 1) flyTo(items[0].latitude, items[0].longitude, 16);
+        else map.fitBounds(bounds, FIT_PADDING);
+      }
+      setMapFocusTarget(null);
+      return;
+    }
+
     // Voice "Hawa Mahal dikhao": same as choosing a search result (pin + distance from the user).
     if (mapFocusTarget.pin) {
       selectSearchResult({
@@ -734,7 +777,7 @@ export const MapView: React.FC = () => {
     }, 2500);
 
     return () => clearTimeout(timer);
-  }, [mapFocusTarget, mapStatus, userLocation, activeCoords, setMapFocusTarget, setIsFollowMode, selectSearchResult, flyTo]);
+  }, [mapFocusTarget, mapStatus, userLocation, activeCoords, setMapFocusTarget, setIsFollowMode, selectSearchResult, flyTo, cancelFly]);
 
   // Recenter handler
   const handleRecenter = () => {
@@ -1230,12 +1273,23 @@ export const MapView: React.FC = () => {
       )}
 
       {/* Category filter row */}
-      {!searchResult && activeCoords && (
+      {!searchResult && (activeCoords || voiceResults) && (
       <div
         role="group"
         aria-label="Filter places by category"
         className="map-secondary-overlay absolute top-[60px] inset-x-3 z-[500] flex items-center gap-2 overflow-x-auto no-scrollbar pointer-events-auto py-1"
       >
+        {voiceResults && (
+          <button
+            type="button"
+            onClick={() => { setVoiceResults(null); setSelectedPlace(null); setSheetPlace(null); }}
+            aria-label={`Clear: ${voiceResults.title}`}
+            className="shrink-0 min-h-[32px] px-3.5 rounded-full text-xs font-semibold border shadow-sm flex items-center gap-1.5 press-scale bg-[#1A73E8] text-white border-[#1A73E8]"
+          >
+            <span className="max-w-[180px] truncate">{voiceResults.title}</span>
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        )}
         {CATEGORY_FILTERS.map(({ key, label }) => {
           const count = categoryCounts[key] ?? 0;
           return (
@@ -1340,13 +1394,13 @@ export const MapView: React.FC = () => {
                 ? `There are no spots categorized under "${activeCategory}" within 5km.`
                 : 'Pan the map or move closer to explore.'}
             </p>
-            {activeCategory !== 'all' && allPlaces.length > 0 && (
+            {activeCategory !== 'all' && basePlaces.length > 0 && (
               <button
                 type="button"
                 onClick={() => setActiveCategory('all')}
                 className="mt-3 inline-flex items-center justify-center px-4 py-2 rounded-xl bg-[#1F5A3F] hover:bg-[#194B34] text-white text-xs font-semibold press-scale transition-colors"
               >
-                View all {allPlaces.length} places
+                View all {basePlaces.length} places
               </button>
             )}
           </div>

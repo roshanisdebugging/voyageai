@@ -56,7 +56,20 @@ Call exactly one tool when it fits:
   do not ask for details. "Itinerary kholo" without a day -> navigate to itinerary, do not ask which day.
 - get_weather: ANY weather question (baarish, rain, mausam, temperature, garmi, thand, kal ka mausam).
   Never use answer_question for weather.
-- search_places: a NAMED place.
+- search_nearby: a KIND of place (restaurant, cafe, chai, street food, hotel, ATM, petrol pump, hospital, pharmacy,
+  toilet, or anything else as said): "Hawa Mahal ke paas cafe", "Howrah ke paas achha restaurant", "mere aaspas
+  khane ki achhi jagah", "near me ATM", "achha restaurant dikhao", "khana kahan milega", "where can I eat".
+  category = the kind in English with any quality word ("good restaurant", "cheap hotel", "chai", "street food").
+  near = the place the user said for WHERE, as said ("Howrah", "Hawa Mahal", "Park Street", "Baga Beach Goa"); any
+  place counts (landmark, area, city, station, hotel). Do NOT add the open trip's city. null if no place was said.
+  near_me = true for "mere aaspas", "mere paas", "yahan ke paas", "near me", "nearby", "current location ke paas".
+  A kind with no place words ("achha restaurant dikhao", "khana kahan milega") -> near=null, near_me=false; our code
+  uses the user's location.
+  If the user names BOTH a kind and a place ("X ke paas Y", "Y near X", "X ke aas-paas Y", "X mein Y"), ALWAYS use
+  search_nearby, NEVER search_places on the landmark alone.
+- The Food page: navigate to food ONLY when the user asks for the page itself ("food page kholo", "food section
+  kholo", "open the food page"). Asking where to eat is search_nearby, never navigate.
+- search_places: a NAMED place (one specific place, no kind of place asked for).
   * "X kahan hai" / "where is X" -> show=false (we tell them where it is and offer the map).
   * "X dikhao" / "show me X" / "X map pe dikhao" -> show=true (open the map).
   * query = the place's usual written name, fixing speech-to-text spelling: "4 minar" -> "Charminar",
@@ -66,7 +79,7 @@ Call exactly one tool when it fits:
   lagegi bike se", "how far is India Gate"). mode: drive (default, car/cab), two_wheeler (bike/scooty), walk (paidal).
 - answer_question: other travel questions (timings, tickets, prices, food, culture, transport, tips).
   Do NOT answer these from memory. Set facts=true for timings, opening hours, prices, entry fees.
-  ("Where can I eat" / "khana kahan milega" nearby -> navigate to food instead.)
+  ("Where can I eat" / "khana kahan milega" -> search_nearby, not answer_question.)
 - list_my_trips: which trips the user has ("meri trips kaun si hain"); past trips only for purani / past.
 - open_trip: open a specific trip by name, destination, month, or next/current/last ("Goa wali trip kholo",
   "agli trip kholo"). If you asked "which one?" and the user answers with a month, call open_trip again.
@@ -178,6 +191,26 @@ SEARCH_TOOL: Dict[str, Any] = {
                 "show": {"type": "boolean", "description": "true = open the map now; false = say where it is and ask."},
             },
             "required": ["query", "show"],
+        },
+    },
+}
+NEARBY_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "search_nearby",
+        "description": "Places of a kind (restaurant, cafe, chai, street food, hotel, ATM, petrol pump, hospital, pharmacy, "
+                       "toilet...) near a place the user named, or around the user. Shows them on the map.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "The kind of place in English, with any quality word: "
+                                                               "'good restaurant', 'cafe', 'cheap hotel', 'atm', 'petrol pump'."},
+                "near": {"type": _nullable("string"), "description": "The place the user said for where, as said "
+                                                                     "('Howrah', 'Hawa Mahal'); null if none."},
+                "near_me": {"type": _nullable("boolean"), "description": "true for 'mere aaspas' / 'near me' / 'nearby' / "
+                                                                         "'yahan ke paas'."},
+            },
+            "required": ["category"],
         },
     },
 }
@@ -367,7 +400,7 @@ SET_BUDGET_TOOL: Dict[str, Any] = {
 }
 SMART_TOOLS = [WEATHER_REPLAN_TOOL, OPTIMIZE_DAY_TOOL, OPTIMIZE_BUDGET_TOOL, SET_BUDGET_TOOL]   # step 6 (+ budget)
 
-TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, TRAVEL_TIME_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL,
+TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, NEARBY_TOOL, WEATHER_TOOL, TRAVEL_TIME_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL,
          CANT_HELP_TOOL,
          UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL] + ACTION_TOOLS + SMART_TOOLS
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
@@ -843,6 +876,13 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         if user_id and conversation_id and redis_conn is not None and found.place:
             from voice.tools import actions as A
             A.remember_place(redis_conn, user_id, conversation_id, found.place)
+        return _from_tool(found)
+    if name == "search_nearby":
+        found = lookups.search_nearby(args.get("category"), args.get("near"), lang, near_me=args.get("near_me") is True,
+                                      user_id=user_id, trip_id=trip.id if trip else None, origin=location)
+        if user_id and conversation_id and redis_conn is not None and found.action == "map_results":
+            from voice.tools import actions as A
+            A.forget_place(redis_conn, user_id, conversation_id)   # a list: "yeh jagah save karo" must ask which
         return _from_tool(found)
     if name == "get_travel_time":
         return _from_tool(lookups.get_travel_time(str(args.get("place") or ""), args.get("mode"), lang, user_id=user_id,

@@ -138,6 +138,21 @@ class PlaceResults(list):
 MAP_SEARCH_UNAVAILABLE_MESSAGE = "Map search isn't available right now. Please try again later."
 
 
+def _merge_same_name(items: List[Any], place_of) -> List[Any]:
+    """Keeps the first of items whose places have the same name within DUPLICATE_RADIUS_M (order = rank)."""
+    kept: List[Any] = []
+    for x in items:
+        r = place_of(x)
+        name = _norm_name(r.get("name") or "")
+        if any(_norm_name(place_of(k).get("name") or "") == name
+               and haversine_meters(float(r["latitude"]), float(r["longitude"]),
+                                    float(place_of(k)["latitude"]), float(place_of(k)["longitude"])) <= DUPLICATE_RADIUS_M
+               for k in kept):
+            continue
+        kept.append(x)
+    return kept
+
+
 def rank_places(query: str, results: List[Dict[str, Any]]) -> PlaceSearch:
     """Landmarks and real places first, then other known places, then unknowns, shops last; within a tier a
     near-exact name match goes first, otherwise Google's order is kept. Never invents or drops a real result
@@ -152,17 +167,7 @@ def rank_places(query: str, results: List[Dict[str, Any]]) -> PlaceSearch:
     scored.sort(key=lambda x: x[:3])
     # One place often comes back several times (the landmark, its address, its area) a few metres apart.
     # Keep only the best-ranked of results with the same name within DUPLICATE_RADIUS_M, before judging ambiguity.
-    kept = []
-    for x in scored:
-        r = x[5]
-        name = _norm_name(r.get("name") or "")
-        if any(_norm_name(k[5].get("name") or "") == name
-               and haversine_meters(float(r["latitude"]), float(r["longitude"]),
-                                    float(k[5]["latitude"]), float(k[5]["longitude"])) <= DUPLICATE_RADIUS_M
-               for k in kept):
-            continue
-        kept.append(x)
-    scored = kept
+    scored = _merge_same_name(scored, lambda x: x[5])
     ranked = [x[5] for x in scored]
     out = PlaceSearch(results=ranked)
     if not scored:
@@ -259,6 +264,134 @@ def search_places(query: str) -> PlaceResults:
     out = PlaceResults(found.results)
     out.ambiguous, out.choices, out.google_calls = found.ambiguous, list(found.choices), found.google_calls
     return out
+
+# ---------------- category near a place (voice "Hawa Mahal ke paas achha restaurant"): ONE Text Search call
+
+# What the user asked for -> (the Google place type to prefer, the types that count as a match, plural label).
+# Checked in order; the first keyword found in the category wins. Anything else stays free text (no type).
+CATEGORY_TYPES: List[Tuple[Tuple[str, ...], Optional[str], Tuple[str, ...], str]] = [
+    (("street food", "chaat", "pani puri", "golgappa", "vada pav", "momos", "kachori"), None,
+     ("restaurant", "food", "meal_takeaway", "fast_food_restaurant"), "street food spots"),
+    (("chai", "tea"), None, ("cafe", "tea_house", "coffee_shop"), "chai spots"),
+    (("restaurant", "khana", "khane", "khaana", "dhaba", "food", "eat", "lunch", "dinner", "breakfast", "nashta",
+      "biryani", "thali"), "restaurant", ("restaurant", "food", "meal_takeaway", "meal_delivery"), "restaurants"),
+    (("cafe", "coffee"), "cafe", ("cafe", "coffee_shop", "tea_house", "bakery"), "cafes"),
+    (("hotel", "stay", "lodge", "resort", "hostel", "homestay", "guest house", "guesthouse"), "lodging",
+     ("lodging", "hotel", "resort_hotel", "motel", "hostel", "guest_house", "bed_and_breakfast"), "hotels"),
+    (("atm",), "atm", ("atm",), "ATMs"),
+    (("bank",), "bank", ("bank",), "banks"),
+    (("hospital", "clinic", "doctor"), "hospital", ("hospital", "doctor", "medical_clinic"), "hospitals"),
+    (("pharmacy", "chemist", "medical store", "dawai"), "pharmacy", ("pharmacy", "drugstore"), "pharmacies"),
+    (("petrol", "fuel", "gas station", "diesel"), "gas_station", ("gas_station",), "petrol pumps"),
+    (("parking",), "parking", ("parking",), "parking spots"),
+    (("toilet", "washroom", "restroom"), "public_bathroom", ("public_bathroom",), "toilets"),
+    (("police",), "police", ("police",), "police stations"),
+    (("bar", "pub"), "bar", ("bar", "pub", "night_club"), "bars"),
+    (("mall",), "shopping_mall", ("shopping_mall",), "malls"),
+    (("market", "bazaar", "shopping"), "market", ("market", "shopping_mall", "store"), "markets"),
+    (("temple", "mandir"), "hindu_temple", ("hindu_temple", "place_of_worship"), "temples"),
+    (("beach",), "beach", ("beach",), "beaches"),
+    (("park", "garden"), "park", ("park", "garden", "botanical_garden"), "parks"),
+]
+CATEGORY_RESULTS = 6         # places shown on the map
+NEAR_BIAS_RADIUS_M = 3000    # "near me": bias around the device (a preference, not a limit)
+TRIP_HINT_RADIUS_M = 50000   # "near X" with a trip open: a soft hint towards the trip's city for an ambiguous X
+
+
+def category_info(category: str) -> Tuple[Optional[str], Tuple[str, ...], str]:  # noqa: C901
+    """'achha restaurant' -> ('restaurant', match types, 'restaurants'). Unknown -> (None, (), the text as said)."""
+    c = _norm_name(category)
+    for words, gtype, match, plural in CATEGORY_TYPES:
+        if any(re.search(rf"\b{re.escape(w)}", c) for w in words):
+            return gtype, match, plural
+    return None, (), (category or "").strip()[:40]
+
+
+QUALITY_WORDS = {"good": "good", "best": "best", "cheap": "cheap", "budget": "budget", "top": "top", "veg": "veg",
+                 "family": "family", "luxury": "luxury", "achha": "good", "accha": "good", "achhi": "good",
+                 "acchi": "good", "achhe": "good", "badhiya": "good", "sasta": "cheap", "sasti": "cheap"}
+# Hinglish filler around the kind ("khane ki achhi jagah"): dropped when deciding if the user said more than the kind.
+HINDI_KIND_WORDS = {"khana", "khane", "khaana", "nashta", "dawai"}   # Hindi words that just mean the kind
+FILLER_WORDS = {"ki", "ka", "ke", "jagah", "jagahein", "place", "places", "spot", "spots", "wala", "wali", "koi", "some"}
+
+
+def category_query(category: str, near: Optional[str] = None, area: Optional[str] = None) -> str:
+    """The one Text Search query: 'good restaurants near Hawa Mahal' / 'chai spots near Howrah' / 'ATMs'.
+    The user's extra words are kept ('rooftop bar near X'); a bare kind becomes the plural label."""
+    _, _, plural = category_info(category)
+    tokens = [w for w in _norm_name(category).split() if w not in FILLER_WORDS]
+    plural_words = set(_norm_name(plural).split())
+
+    def covered(w: str) -> bool:   # the word is just the kind itself (any spelling / number / Hindi word for it)
+        return (w in QUALITY_WORDS or w in plural_words or f"{w}s" in plural_words or f"{w}es" in plural_words
+                or (w.endswith("y") and f"{w[:-1]}ies" in plural_words) or w in HINDI_KIND_WORDS)
+
+    if not tokens:
+        what = plural
+    elif all(covered(w) for w in tokens) and plural != (category or "").strip()[:40]:
+        lead = [QUALITY_WORDS[w] for w in tokens if w in QUALITY_WORDS]
+        what = " ".join(dict.fromkeys(lead + [plural]))              # "good restaurants", "ATMs", "petrol pumps"
+    else:
+        what = " ".join(QUALITY_WORDS.get(w, w) for w in tokens)      # "pure veg restaurant", "momos", "rooftop bar"
+    if near:
+        return f"{what} near {near.strip()}"[:160]
+    if area:
+        return f"{what} in {area.strip()}"[:160]
+    return what[:160]
+
+
+def rank_category(category: str, near: Optional[str], results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Category results: India only, the landmark itself dropped, same-name duplicates merged, places of the asked
+    category first (Google's order kept within each group). Never invents or reorders by made-up scores."""
+    _, match, _ = category_info(category)
+    near_n = _norm_name((near or "").split(",")[0])
+    out = []
+    for i, r in enumerate(results):
+        if r.get("latitude") is None or not in_india(r.get("latitude"), r.get("longitude")):
+            continue
+        types = set(r.get("types") or [])
+        is_match = not match or bool(types & set(match))
+        name_n = _norm_name(r.get("name") or "")
+        if near_n and name_n and not is_match and (name_n in near_n or name_score(near_n, name_n) >= 0.9):
+            continue   # "restaurants near Hawa Mahal (Jaipur)": Hawa Mahal itself is not an answer
+        r["kind"] = place_kind(r.get("types"))
+        # asked kind first; among the rest, landmarks last (a cafe search should not lead with a fort)
+        out.append((0 if is_match else 1, 1 if (not is_match and place_tier(r.get("types")) == 3) else 0, i, r))
+    out.sort(key=lambda x: x[:3])
+    return [x[3] for x in _merge_same_name(out, lambda x: x[3])]
+
+
+def search_category(category: str, near: Optional[str] = None, area: Optional[str] = None,
+                    bias: Optional[Tuple[float, float]] = None, bias_radius_m: int = NEAR_BIAS_RADIUS_M) -> PlaceSearch:
+    """
+    Voice "category near a place": ONE Places Text Search (New) call, never Place Details. near = a landmark/area the
+    user said; area = the open trip's city (when no landmark); bias = (lat, lng) of the trip city or the device, as a
+    locationBias circle. results = up to CATEGORY_RESULTS places with rating when Google has one. Google only; a
+    quota/paused error sets unavailable=True. Logs counts only.
+    """
+    q = category_query(category, near, area)
+    if len(q.strip()) < 2:
+        return PlaceSearch()
+    started = time.perf_counter()
+    from services.google_maps_service import GoogleCallCounter, GoogleQuotaError, text_search_places
+    counter = GoogleCallCounter()
+    gtype, _, _ = category_info(category)
+    out = PlaceSearch()
+    try:
+        raw = _run_sync(text_search_places(q, counter=counter, included_type=gtype,
+                                           bias=(bias[0], bias[1], bias_radius_m) if bias else None,
+                                           with_rating=True))
+        out = PlaceSearch(results=rank_category(category, near, raw)[:CATEGORY_RESULTS])
+    except GoogleQuotaError:
+        out = PlaceSearch(unavailable=True)
+    except Exception as e:
+        print(f"[GOOGLE CATEGORY SEARCH ERR] {type(e).__name__}", flush=True)
+    out.google_calls = counter.count
+    print(f"[PLACES CATEGORY] google_calls={out.google_calls} results={len(out.results)} typed={bool(gtype)} "
+          f"near={bool(near)} area={bool(area)} bias={bool(bias)} unavailable={out.unavailable} "
+          f"ms={int((time.perf_counter() - started) * 1000)}", flush=True)
+    return out
+
 
 class GeocoderProvider:
     def search(self, query: str) -> List[Dict[str, Any]]:

@@ -119,11 +119,11 @@ nav_desc = agent.NAVIGATE_TOOL["function"]["description"]
 check("navigate tool has a meaning for every page", all(f"{p}: " in nav_desc for p in pages.PAGES))
 check("plan_trip meaning: open the form, don't ask for details", "plan_trip: start planning a NEW trip" in nav_desc and "Do NOT ask" in nav_desc)
 check("more: settings and profile", "more: settings, profile" in nav_desc)
-check("twenty tools offered (step 4 trip draft, step 5 trip actions, map stage 3 get_travel_time, step 6 smart actions, "
-      "set_trip_budget)", sorted(agent.TOOL_NAMES) == [
+check("twenty-one tools offered (step 4 trip draft, step 5 trip actions, map stage 3 get_travel_time, step 6 smart actions, "
+      "set_trip_budget, search_nearby)", sorted(agent.TOOL_NAMES) == [
     "add_expense", "answer_question", "cancel_trip_draft", "cant_help", "get_travel_time", "get_weather", "list_my_trips",
     "mark_activity_done", "navigate", "open_trip", "optimize_budget", "optimize_day", "regenerate_itinerary", "save_place",
-    "search_places", "set_trip_budget", "swap_activity", "unsave_place", "update_trip_draft", "weather_replan"])
+    "search_nearby", "search_places", "set_trip_budget", "swap_activity", "unsave_place", "update_trip_draft", "weather_replan"])
 check("open_trip takes no trip_id from the model", "trip_id" not in json.dumps(agent.OPEN_TRIP_TOOL))
 sp = agent.build_system_prompt("/home", None, today="Saturday 15 November 2026")
 check("system prompt has today's date and tool rules", "Today (India): Saturday 15 November 2026" in sp

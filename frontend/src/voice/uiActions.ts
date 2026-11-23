@@ -3,6 +3,8 @@
  * Allowed types only, each strictly checked; anything else is ignored with a console warning:
  * - navigate  {to}: only routes in this allowlist (mirrors backend/voice/pages.py)
  * - map_focus {lat, lng, name, place_id?}: coordinates must be in India; the map shows a pin + distance
+ * - map_results {title, places: [{name, lat, lng, place_id?, rating?, address?, category?}]} (max 6, India only):
+ *   voice "Hawa Mahal ke paas restaurant": the map shows them as its place markers and cards
  * - open_trip {trip_id}: only an ID from the user's own loaded trip list (checked by the handler)
  * - open_review {prefill}: open the trip wizard's review page with the voice draft (checked shape, India only)
  * - submit_review: press Proceed on the wizard's review page (the wizard ignores it on any other step)
@@ -27,6 +29,8 @@ export interface UiAction {
   what?: string;
   message?: string;
   undo?: { action?: unknown; payload?: unknown };
+  title?: string;
+  places?: unknown;
 }
 
 export type RefreshWhat = 'itinerary' | 'expenses' | 'saved_places';
@@ -40,9 +44,37 @@ export interface OpenSwapAction { tripId: string; activityId: string; activityNa
 
 export interface MapFocusAction { lat: number; lng: number; name: string; placeId?: string }
 
+export interface MapResultPlace {
+  name: string; lat: number; lng: number; placeId?: string; rating?: number; address?: string; category?: string;
+}
+export interface MapResultsAction { title: string; places: MapResultPlace[] }
+export const MAX_MAP_RESULTS = 6;
+const PLACE_ID = /^[A-Za-z0-9_-]{1,300}$/;
+
+/** A map_results action's places: only well-formed ones in India, at most MAX_MAP_RESULTS. */
+export function checkedMapResults(raw: unknown): MapResultPlace[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MapResultPlace[] = [];
+  for (const item of raw.slice(0, MAX_MAP_RESULTS)) {
+    if (!item || typeof item !== 'object') continue;
+    const p = item as Record<string, unknown>;
+    const name = str(p.name, 120);
+    if (!name || !inIndia(p.lat, p.lng)) continue;
+    out.push({
+      name, lat: p.lat as number, lng: p.lng as number,
+      placeId: typeof p.place_id === 'string' && PLACE_ID.test(p.place_id) ? p.place_id : undefined,
+      rating: typeof p.rating === 'number' && p.rating >= 0 && p.rating <= 5 ? p.rating : undefined,
+      address: str(p.address, 200),
+      category: typeof p.category === 'string' && /^[a-z_]{1,40}$/.test(p.category) ? p.category : undefined,
+    });
+  }
+  return out;
+}
+
 export interface UiActionHandlers {
   navigate: (to: string) => void;
   mapFocus?: (target: MapFocusAction) => void;
+  mapResults?: (results: MapResultsAction) => void;
   /** Returns false when the ID isn't one of the user's own trips (the action is then ignored). */
   openTrip?: (tripId: string) => boolean;
   openReview?: (prefill: TripDraft) => void;
@@ -137,6 +169,10 @@ export function runUiActions(actions: unknown, handlers: UiActionHandlers | ((to
         name: action.name,
         placeId: typeof action.place_id === 'string' && /^[A-Za-z0-9_-]{1,300}$/.test(action.place_id) ? action.place_id : undefined,
       });
+      ran += 1;
+    } else if (action?.type === 'map_results' && h.mapResults && str(action.title, 80)
+      && checkedMapResults(action.places).length > 0) {
+      h.mapResults({ title: action.title as string, places: checkedMapResults(action.places) });
       ran += 1;
     } else if (action?.type === 'open_review' && h.openReview) {
       const prefill = sanitizePrefill(action.prefill);

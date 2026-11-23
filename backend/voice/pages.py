@@ -29,7 +29,7 @@ MEANINGS: Dict[str, str] = {
     "trip": "the currently open trip's overview",
     "itinerary": "day-by-day plan of the open trip; open it directly, set day only if the user names one",
     "map": "the map with nearby places",
-    "food": "restaurants and food places nearby",
+    "food": "the Food page; ONLY when the user asks for the page itself ('food page kholo'). Where to eat is search_nearby",
     "rides": "book a cab/auto/ride (hands over to Uber or Google Maps)",
     "expenses": "the trip's expenses / spending",
     "explore": "things to see and do, sightseeing ideas",

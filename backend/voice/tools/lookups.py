@@ -168,6 +168,150 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     return ToolResult(reply, action="where", pending_actions=actions, google_calls=calls, place=place_info)
 
 
+# ---------------- category near a place ("Hawa Mahal ke paas achha restaurant dikhao")
+
+NEARBY_SPOKEN = 3     # at most three names are spoken; the map shows up to places.CATEGORY_RESULTS
+
+
+def _names(results: List[Dict[str, Any]]) -> str:
+    names = [str(r.get("name") or "")[:60] for r in results[:NEARBY_SPOKEN] if r.get("name")]
+    return ", ".join(names)
+
+
+def _pin_category(gtype: Optional[str], types: Any) -> str:
+    """The map pin's category word (the app maps it to sights / food / hotels / experiences)."""
+    import places
+    for t in types or []:
+        if isinstance(t, str) and t not in places.GENERIC_TYPES:
+            return t[:40]
+    return (gtype or "sights")[:40]
+
+
+def _spoken_near(near: str, results: List[Dict[str, Any]]) -> str:
+    """'Hawa Mahal Jaipur' -> 'Hawa Mahal' when the results are in Jaipur (the city is said by the places anyway)."""
+    words = near.split(",")[0].split()
+    address = " ".join(str(r.get("city") or r.get("displayName") or "") for r in results[:3]).lower()
+    while len(words) > 1 and words[-1].lower() in address:
+        words.pop()
+    return " ".join(words)
+
+
+def rough_distance(meters: float, lang: str) -> str:
+    """Straight-line distance for speech: "lagbhag 1.2 kilometer" / "lagbhag 400 meter" / "about 1.2 km"."""
+    if meters < 1000:
+        m = max(50, int(round(meters / 50.0) * 50))
+        return {"hi": f"lagbhag {m} meter", "en": f"about {m} metres"}[lang]
+    km = meters / 1000.0
+    txt = f"{km:.1f}".rstrip("0").rstrip(".") if km < 10 else str(round(km))
+    return {"hi": f"lagbhag {txt} kilometer", "en": f"about {txt} km"}[lang]
+
+
+def rank_for_speech(results: List[Dict[str, Any]], origin: Optional[Tuple[float, float]], match_types) -> List[Dict[str, Any]]:
+    """Places of the asked kind first; then by rating and distance (rating minus 0.3 per km from the origin; unrated
+    places count as 0). Without an origin, rating only. Stable: Google's order breaks ties. Adds distance_m when known."""
+    from places import haversine_meters
+    for r in results:
+        if origin:
+            r["distance_m"] = haversine_meters(origin[0], origin[1], float(r["latitude"]), float(r["longitude"]))
+        else:
+            r.pop("distance_m", None)   # no origin: no distance (never one left over from another search)
+
+    def key(r):
+        matches = not match_types or bool(set(r.get("types") or []) & set(match_types))
+        rating = float(r["rating"]) if isinstance(r.get("rating"), (int, float)) else 0.0
+        km = (r.get("distance_m") or 0) / 1000.0 if origin else 0.0
+        return (0 if matches else 1, -(rating - 0.3 * km))
+    return sorted(results, key=key)
+
+
+def search_nearby(category: Optional[str], near: Optional[str], lang: str, *, near_me: bool = False,
+                  user_id: Optional[str] = None, trip_id: Optional[str] = None,
+                  origin: Optional[Tuple[float, float]] = None, search_fn=None) -> ToolResult:
+    """
+    "Howrah ke paas achha restaurant", "Hawa Mahal ke paas cafe", "mere aaspas khane ki achhi jagah", "achha restaurant
+    dikhao". Where:
+      1. a place the user said (near = X): "restaurants near X" - X wins over the device location. An open trip's
+         destination is only a soft hint for an ambiguous X (a 50 km locationBias), never added to the query.
+      2. "mere aaspas" / "near me" (near_me) or no place at all: the device location sent with this turn (3 km bias).
+         No location -> ONE short question ("Kahan ke paas dekhun?"). The trip destination is never the default.
+    ONE Google Text Search call (places.search_category), no Place Details. Map: up to 6 markers. Speech: at most three
+    names, ranked by rating and distance, with a rough straight-line distance when the origin is the device.
+    """
+    import places
+    cat = (category or "").strip()[:60]
+    if len(cat) < 2:
+        return ToolResult({"hi": "Kya dhoondhun? Jaise restaurant, cafe ya hotel.",
+                           "en": "What should I look for? A restaurant, cafe or hotel?"}[lang],
+                          action="reply", error_code="no_category")
+    near_q = (near or "").strip()[:100] or None
+    if near_q and _norm_words(near_q) in NEAR_ME_WORDS:
+        near_q, near_me = None, True          # the model wrote "me" / "here" as the place
+    device = (float(origin[0]), float(origin[1])) if origin else None
+    if near_q:
+        trip_dest = _trip_destination(user_id, trip_id)
+        hint = (float(trip_dest["latitude"]), float(trip_dest["longitude"])) if trip_dest else None
+        found = (search_fn or places.search_category)(cat, near=near_q, area=None, bias=hint,
+                                                      bias_radius_m=places.TRIP_HINT_RADIUS_M)
+        speech_origin = None                   # X's own position isn't known without a second call
+    else:
+        if not device:
+            return ToolResult({"hi": "Kahan ke paas dekhun?", "en": "Near which place should I look?"}[lang],
+                              action="reply", error_code="no_area")
+        found = (search_fn or places.search_category)(cat, near=None, area=None, bias=device,
+                                                      bias_radius_m=places.NEAR_BIAS_RADIUS_M)
+        speech_origin = device
+    calls = found.google_calls
+    gtype, match, plural = places.category_info(cat)
+    if near_q:
+        spoken = _spoken_near(near_q, found.results)
+        where_hi, where_en = f"{spoken} ke paas", f"near {spoken}"
+    else:
+        where_hi, where_en = "aapke aaspas", "around you"
+    if found.unavailable:
+        return ToolResult(MAPS_UNAVAILABLE[lang], action="map_unavailable", error_code="maps_unavailable",
+                          google_calls=calls)
+    if not found.results:
+        return ToolResult({"hi": f"{where_hi[:1].upper()}{where_hi[1:]} koi {plural} nahi mile.",
+                           "en": f"I couldn't find {plural} {where_en}."}[lang],
+                          action="nearby_none", error_code="not_found", google_calls=calls)
+    ranked = rank_for_speech(list(found.results), speech_origin, match)
+    shown = []
+    for r in ranked:
+        item = {"name": str(r.get("name") or "")[:120], "lat": float(r["latitude"]), "lng": float(r["longitude"]),
+                "category": _pin_category(gtype, r.get("types"))}
+        pid = str(r.get("place_id") or r.get("id") or "")
+        if pid:
+            item["place_id"] = pid[:300]
+        if isinstance(r.get("rating"), (int, float)):
+            item["rating"] = round(float(r["rating"]), 1)
+        address = r.get("city") or r.get("displayName")
+        if address:
+            item["address"] = str(address)[:200]
+        shown.append(item)
+    title = {"hi": f"{where_hi[:1].upper()}{where_hi[1:]} {plural}", "en": f"{plural[:1].upper()}{plural[1:]} {where_en}"}[lang][:80]
+    actions = [{"type": "map_results", "title": title, "places": shown}, {"type": "navigate", "to": "/map"}]
+    spoken_items = []
+    for r in ranked[:NEARBY_SPOKEN]:
+        name = str(r.get("name") or "")[:60]
+        if r.get("distance_m") is not None:
+            name = f"{name}, {rough_distance(r['distance_m'], lang)}"
+        spoken_items.append(name)
+    sep = "; " if speech_origin else ", "
+    names = sep.join(spoken_items)
+    reply = {"hi": f"{where_hi[:1].upper()}{where_hi[1:]} ye {plural} mile: {names}. Map par dikha diye.",
+             "en": f"{plural[:1].upper()}{plural[1:]} {where_en}: {names}. Showing them on the map."}[lang]
+    return ToolResult(reply, ui_actions=actions, action="map_results", google_calls=calls)
+
+
+# The place words that mean "here" (the model sometimes puts them in `near`).
+NEAR_ME_WORDS = {"me", "here", "near me", "nearby", "my location", "current location", "mere aaspas", "mere paas",
+                 "yahan", "yahan ke paas", "yahin", "aaspas", "paas mein", "around me", "mere aas paas", "aas paas"}
+
+
+def _norm_words(s: str) -> str:
+    return " ".join(re.sub(r"[^a-z ]", " ", (s or "").lower()).split())
+
+
 # ---------------- travel time (Google Routes API via routes_service)
 
 TRAVEL_MODES = {"drive": "drive", "car": "drive", "cab": "drive", "taxi": "drive",
