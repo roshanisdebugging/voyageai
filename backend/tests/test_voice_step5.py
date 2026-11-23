@@ -1,5 +1,5 @@
 """
-Voice step 5 checks (more actions): app DB = SQLite, Redis = local, Groq + place search simulated.
+Voice step 5 checks (more actions): app DB = SQLite, Redis = local, OpenAI + place search simulated.
 Shared trip_actions (tap + voice), trip context + name matching by code, small actions with Undo (and the Undo
 running through /ws/app from an allowlist), big actions only on confirm (once), swap opens the sheet,
 "delete" never deletes, refresh after each change, another user's trip/activity/place refused, logs without words.
@@ -23,7 +23,7 @@ import dotenv
 dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
-os.environ["GROQ_API_KEY"] = "test-key-not-real"
+os.environ["OPENAI_API_KEY"] = "test-key-not-real"
 os.environ["VOICE_TTS_ENABLED"] = "false"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 
@@ -41,7 +41,7 @@ database.engine = create_engine(f"sqlite:///{os.path.join(SCRATCH, 'voice5.db')}
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
 
 import main  # noqa: E402
-import groq_client  # noqa: E402
+import openai_client  # noqa: E402
 import places  # noqa: E402
 import task_queue  # noqa: E402
 import trip_actions  # noqa: E402
@@ -196,7 +196,7 @@ handler = logging.StreamHandler(buf)
 logging.getLogger("voice").addHandler(handler)
 logging.getLogger("voice").setLevel(logging.INFO)
 
-with mock.patch.object(groq_client, "groq_chat_tools", fake), mock.patch.object(places, "search_places", fake_search):
+with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(places, "search_places", fake_search):
     CV = f"conv_s5_{uuid.uuid4().hex[:6]}"
 
     # ---------------- small: mark done (+ Undo through /ws/app)
@@ -449,7 +449,7 @@ class FakeSTT:
     text = "haan"
 
     def transcribe(self, audio):
-        return STTResult(text=FakeSTT.text, language="hi", duration_ms=1000, latency_ms=50, provider="groq", model="w")
+        return STTResult(text=FakeSTT.text, language="hi", duration_ms=1000, latency_ms=50, provider="openai", model="w")
 
 
 def recv_until(ws, kinds):
@@ -469,7 +469,7 @@ def voice_turn(ws, conv, text):
     return recv_until(ws, {"reply"})
 
 
-with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.object(groq_client, "groq_chat_tools", fake):
+with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.object(openai_client, "chat_tools", fake):
     with client.websocket_connect("/ws/voice", headers={"origin": "http://localhost:5173"}) as ws:
         ws.send_json({"type": "auth", "token": tok_a})
         recv_until(ws, {"ready"})

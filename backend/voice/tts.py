@@ -42,15 +42,23 @@ def synthesize_reply(text: str, stt_language: Optional[str]) -> Tuple[Optional[s
         return None, REPLY_MIME, 0, "empty_text"
     started = time.perf_counter()
     try:
-        from tts_service import synthesize_speech_sarvam
+        from tts_service import SarvamTTSError, synthesize_speech_sarvam
         audio = synthesize_speech_sarvam(
             text=text,
             target_language_code=sarvam_language(stt_language),
             speaker=tts_speaker(),
             use_cache=False,
+            raise_errors=True,
         )
     except Exception as err:
-        return None, REPLY_MIME, int((time.perf_counter() - started) * 1000), type(err).__name__
+        elapsed = int((time.perf_counter() - started) * 1000)
+        try:
+            is_sarvam = isinstance(err, SarvamTTSError)
+        except NameError:  # the tts_service import itself failed
+            is_sarvam = False
+        # Sarvam reasons are status/code only. Anything else: the type plus a short message.
+        detail = f"sarvam: {err}" if is_sarvam else f"{type(err).__name__}: {str(err)[:200]}"
+        return None, REPLY_MIME, elapsed, detail
     tts_ms = int((time.perf_counter() - started) * 1000)
     if not audio:
         return None, REPLY_MIME, tts_ms, "sarvam_failed"

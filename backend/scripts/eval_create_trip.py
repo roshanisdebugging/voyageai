@@ -1,9 +1,9 @@
 """
 Step 4 eval (voicefirst.md): create a trip by voice. 15 real phrases (Hinglish and English), graded on the agent's
-DECISION with the REAL Groq API: the same prompt and tools as voice/agent.py, then the tool chosen and the values
+DECISION with the REAL OpenAI API: the same prompt and tools as voice/agent.py, then the tool chosen and the values
 it extracted (dates checked against today's India date). Tools are not run: nothing is saved, no place search.
 Phrases said while a trip is being planned get that draft in the prompt, as in the app.
-Paced ~4.5 s per call (Groq's per-minute token allowance), retried after 20 s on a rate limit.
+Paced ~4.5 s per call (the account's per-minute token limit), retried after 20 s on a rate limit.
 
 Run from backend/: python -m scripts.eval_create_trip
 """
@@ -19,7 +19,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(BACKEND_DIR / ".env", override=True)
 
-from groq_client import GroqRateLimited, groq_chat_tools  # noqa: E402
+from openai_client import LLMRateLimited, chat_tools  # noqa: E402
 from trip_lifecycle import today_ist  # noqa: E402
 from voice import agent, draft as D  # noqa: E402
 
@@ -84,10 +84,10 @@ def decide(phrase, draft):
     for attempt in range(4):
         t = time.perf_counter()
         try:
-            out = groq_chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2, timeout=agent.LLM_TIMEOUT_SECONDS,
-                                  reasoning_effort="low")
+            out = chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2, timeout=agent.LLM_TIMEOUT_SECONDS,
+                             reasoning_effort="low")
             return out, int((time.perf_counter() - t) * 1000)
-        except GroqRateLimited:
+        except LLMRateLimited:
             if attempt == 3:
                 raise
             time.sleep(20)

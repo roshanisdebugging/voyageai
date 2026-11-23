@@ -1,10 +1,10 @@
 """
 Navigation eval for the voice agent (voicefirst.md step 2).
 
-Runs typed phrases through voice/agent.py with the REAL Groq API (no STT, no TTS) and prints
+Runs typed phrases through voice/agent.py with the REAL OpenAI API (no STT, no TTS) and prints
 phrase | expected | got | ok, plus total accuracy. Target >= 90%.
-Uses real Groq requests: run it once per change, not in a loop. Calls are paced (~2.2 s apart)
-because Groq's free tier allows 30 requests a minute for the whole account.
+Uses real OpenAI requests: run it once per change, not in a loop. Calls are paced (~2.2 s apart)
+to stay under the account's per-minute request limit.
 
 Run from backend/: python -m scripts.eval_navigation
 """
@@ -80,7 +80,7 @@ def main():
     rows, ok_count, llm = [], 0, []
     for i, (phrase, lang, expected, has_trip) in enumerate(CASES):
         if i:
-            time.sleep(2.2)  # stay under Groq's 30 requests/minute
+            time.sleep(2.2)  # stay under the per-minute request limit
         conv = f"eval_{run_id}_{i}"  # fresh conversation per phrase: no memory carry-over
         res = agent.run_agent(phrase, lang, user_id=user, conversation_id=conv, screen="/home",
                               trip=TRIP if has_trip else None, redis_conn=redis_conn)

@@ -1,6 +1,6 @@
 """
 "Fixes before Step 4" checks (voicefirst.md): where-is vs show, haan/yes pending map, weather tool,
-garbled vs off-topic, Groq tool_use_failed retry, reply language from text, note never spoken,
+garbled vs off-topic, transient-error retry, reply language from text, note never spoken,
 real total time and accurate agent_action. LLMs, Google search and Open-Meteo simulated; TTS simulated.
 Run from backend/: python -m tests.test_voice_fixes4
 """
@@ -23,7 +23,7 @@ import dotenv
 dotenv.load_dotenv = lambda *a, **k: None
 os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
-os.environ["GROQ_API_KEY"] = "test-key-not-real"
+os.environ["OPENAI_API_KEY"] = "test-key-not-real"
 os.environ["VOICE_TTS_ENABLED"] = "false"
 os.environ.pop("VOICE_DEBUG_STORE", None)
 
@@ -41,7 +41,7 @@ database.engine = create_engine(f"sqlite:///{os.path.join(SCRATCH, 'voice_f4.db'
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
 
 import main  # noqa: E402
-import groq_client  # noqa: E402
+import openai_client  # noqa: E402
 import places  # noqa: E402
 import weather_service  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -109,7 +109,7 @@ check("no words -> Whisper's tag decides", lang.detect_lang("...", "en") == "en"
 check("sarvam code from text", lang.sarvam_code("Kal Jaipur mein baarish ka 20% chance hai.") == "hi-IN"
       and lang.sarvam_code("Tomorrow in Jaipur: 20% chance of rain.") == "en-IN")
 
-with mock.patch.object(groq_client, "groq_chat_tools", fake):
+with mock.patch.object(openai_client, "chat_tools", fake):
     # ---------------- item 3: where is vs show me
     with mock.patch.object(places, "search_places", lambda q: TAJ):
         c = conv()
@@ -119,7 +119,7 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake):
               r.reply_text == "Taj Mahal Agra, Uttar Pradesh mein hai. Map par dikhaun?" and r.ui_actions == [] and r.action == "where", r.reply_text)
         n = len(FakeTools.calls)
         r = ra("haan", c)
-        check("'haan' -> the kept map actions run, no Groq call",
+        check("'haan' -> the kept map actions run, no OpenAI call",
               r.ui_actions and r.ui_actions[0]["type"] == "map_focus" and r.ui_actions[0]["name"] == "Taj Mahal"
               and r.ui_actions[1] == {"type": "navigate", "to": "/map"} and r.action == "map_focus" and len(FakeTools.calls) == n, r)
         r2_conv = conv()
@@ -206,35 +206,35 @@ with mock.patch.object(groq_client, "groq_chat_tools", fake):
     r = ra("who won the cricket match", stt_lang="hi")
     check("English off-topic -> English decline", r.reply_text == "I can only help with your trip.", r.reply_text)
 
-    # ---------------- item 7: retry once on transient Groq errors
-    FakeTools.queue = [groq_client.GroqTransient("Groq HTTP 400 tool_use_failed"), ("tool", ("navigate", {"page": "map"}))]
+    # ---------------- item 7: retry once on transient OpenAI errors
+    FakeTools.queue = [openai_client.LLMTransient("OpenAI HTTP 500"), ("tool", ("navigate", {"page": "map"}))]
     r = ra("map kholo")
-    check("tool_use_failed once -> retried -> works", r.ui_actions == [{"type": "navigate", "to": "/map"}], r)
-    FakeTools.queue = [groq_client.GroqTransient("x"), groq_client.GroqTransient("x")]
+    check("transient error once -> retried -> works", r.ui_actions == [{"type": "navigate", "to": "/map"}], r)
+    FakeTools.queue = [openai_client.LLMTransient("x"), openai_client.LLMTransient("x")]
     r = ra("map kholo")
-    check("twice -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.error_code == "groq_transient_twice")
-    FakeTools.queue = [groq_client.GroqRateLimited("x")]
+    check("twice -> fallback reply", r.reply_text == agent.FALLBACK_REPLY and r.error_code == "llm_transient_twice")
+    FakeTools.queue = [openai_client.LLMRateLimited("x")]
     r = ra("map kholo")
     check("rate limit -> no retry, fallback", r.error_code == "rate_limited" and not FakeTools.queue)
 
-# groq_client: 400 tool_use_failed -> GroqTransient (error code only, never the message)
+# openai_client: 5xx -> LLMTransient (status and error code only, never the message)
 class R:
     def __init__(self, code, body):
         self.status_code, self._b, self.text = code, body, "body with the user's words"
     def json(self):
         return self._b
-with mock.patch.object(groq_client.requests, "post", lambda *a, **k: R(400, {"error": {"code": "tool_use_failed", "message": "user words here"}})):
+with mock.patch.object(openai_client.requests, "post", lambda *a, **k: R(503, {"error": {"code": "server_error", "message": "user words here"}})):
     try:
-        groq_client.groq_chat_tools([{"role": "user", "content": "x"}], agent.TOOLS)
-        check("400 tool_use_failed -> GroqTransient", False)
-    except groq_client.GroqTransient as e:
-        check("400 tool_use_failed -> GroqTransient, message has the code only", "tool_use_failed" in str(e) and "user words" not in str(e), str(e))
-with mock.patch.object(groq_client.requests, "post", lambda *a, **k: R(400, {"error": {"code": "invalid_request_error"}})):
+        openai_client.chat_tools([{"role": "user", "content": "x"}], agent.TOOLS)
+        check("5xx -> LLMTransient", False)
+    except openai_client.LLMTransient as e:
+        check("5xx -> LLMTransient, message has the status and code only", "503" in str(e) and "server_error" in str(e) and "user words" not in str(e), str(e))
+with mock.patch.object(openai_client.requests, "post", lambda *a, **k: R(400, {"error": {"code": "invalid_request_error"}})):
     try:
-        groq_client.groq_chat_tools([{"role": "user", "content": "x"}], agent.TOOLS)
-    except groq_client.GroqTransient:
+        openai_client.chat_tools([{"role": "user", "content": "x"}], agent.TOOLS)
+    except openai_client.LLMTransient:
         check("other 400 is not retried", False)
-    except groq_client.GroqError:
+    except openai_client.LLMError:
         check("other 400 is not retried", True)
 check("tool schemas: optional args accept null", agent.WEATHER_TOOL["function"]["parameters"]["properties"]["place"]["type"] == ["string", "null"]
       and agent.ANSWER_TOOL["function"]["parameters"]["properties"]["facts"]["type"] == ["boolean", "null"])
@@ -256,7 +256,7 @@ class FakeSTT:
     text, language = "Amber Fort kab jaana best hai", "en"   # Whisper tags Hinglish as "en"
 
     def transcribe(self, audio):
-        return STTResult(text=FakeSTT.text, language=FakeSTT.language, duration_ms=1000, latency_ms=50, provider="groq", model="w")
+        return STTResult(text=FakeSTT.text, language=FakeSTT.language, duration_ms=1000, latency_ms=50, provider="openai", model="w")
 
 
 def recv_until(ws, kinds):

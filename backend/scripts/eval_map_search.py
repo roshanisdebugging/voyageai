@@ -1,6 +1,6 @@
 """
 Map stage 1 eval with the REAL Google key: 20 place searches through the shared search (places.search_places_detailed),
-plus (with --voice) two spoken phrases through the real voice agent (Groq + Google).
+plus (with --voice) two spoken phrases through the real voice agent (OpenAI + Google).
 
     python -m scripts.eval_map_search [--fresh] [--voice]
 
@@ -104,7 +104,7 @@ def main() -> int:
         from redis_client import redis_conn
         from voice import agent
         user, conv = f"usr_mapeval_{uuid.uuid4().hex[:6]}", f"conv_{uuid.uuid4().hex[:6]}"
-        print("\nVoice (real Groq + real Google):")
+        print("\nVoice (real OpenAI + real Google):")
         try:
             for phrase in ("4 minar kahan hai", "char minar dikhao"):
                 r = agent.run_agent(phrase, "hi", user_id=user, conversation_id=conv, screen="/", trip=None, redis_conn=redis_conn)

@@ -58,7 +58,7 @@ class TurnResult:
     stt_provider: Optional[str] = None
     stt_model: Optional[str] = None
     error_code: Optional[str] = None
-    error_detail: Optional[str] = None   # for logs/debug store only, never sent to the app
+    error_detail: Optional[str] = None   # STT failure reason: logs, debug store, and the error message's "detail"
     # Spoken reply (step 1b)
     reply_text: Optional[str] = None
     reply_audio_b64: Optional[str] = None
@@ -68,15 +68,17 @@ class TurnResult:
     ui_actions: List[Dict[str, Any]] = field(default_factory=list)
     action: str = "reply"                # "navigate:<page>" | "reply" | "error"
     llm_ms: int = 0
-    agent_error_code: Optional[str] = None    # why the agent failed / fell back (logs, debug store, test panel)
-    agent_error_detail: Optional[str] = None  # status / code names only, never words (logs, debug store)
+    # Why the agent failed / fell back. One mechanism: sent to the app as the reply's error_code / error_detail,
+    # saved in the debug store's agent_error_code / agent_error_detail and written to logs/voice_errors.md.
+    agent_error_code: Optional[str] = None
+    agent_error_detail: Optional[str] = None  # status / code / class names only, never words
     agent_error_info: Dict[str, Any] = field(default_factory=dict)
     tool_ms: int = 0                     # step 3: the tool after the deciding call (answer: cost guard + Gemini)
     note: Optional[str] = None           # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
     note_attribution: Optional[str] = None  # "Google Maps" when the note is Google Maps content
     pending_confirmation: Optional[Dict[str, Any]] = None  # step 4: {id, summary} -> the Confirm card
     reply_language: Optional[str] = None # "hi" / "en", from the reply text (TTS voice)
-    tts_error: Optional[str] = None      # None = reply audio ready
+    tts_error: Optional[str] = None      # None = reply audio ready; else why (e.g. "sarvam: http_429 <code>")
 
 
 def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
@@ -97,8 +99,10 @@ def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
         result = TurnResult(turn_id=ctx.turn_id, ok=False, duration_ms=duration_ms,
                             error_code=ErrorCode.STT_FAILED, error_detail=str(err))
     except Exception as err:  # never let a turn crash the socket
+        logger.exception("[VOICE] turn=%s speech-to-text crashed", ctx.turn_id)
         result = TurnResult(turn_id=ctx.turn_id, ok=False, duration_ms=duration_ms,
-                            error_code=ErrorCode.STT_FAILED, error_detail=type(err).__name__)
+                            error_code=ErrorCode.STT_FAILED,
+                            error_detail=f"{type(err).__name__}: {str(err)[:200]}")
 
     logger.info(
         "[VOICE] turn=%s user=%s audio_ms=%s stt_ms=%s truncated=%s status=%s%s",
@@ -109,7 +113,7 @@ def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
 
 
 def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
-    """Stage 2a: the agent (one Groq call). Empty transcript -> a fixed reply, no LLM call."""
+    """Stage 2a: the agent (one LLM call). Empty transcript -> a fixed reply, no LLM call."""
     text = (result.text or "").strip()
     if not text:
         result.reply_text, result.ui_actions, result.action, result.llm_ms = EMPTY_TRANSCRIPT_REPLY, [], "unclear", 0
@@ -120,7 +124,7 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
                           screen=ctx.screen, trip=ctx.trip, location=ctx.location, screen_place=ctx.screen_place)
     except Exception as exc:  # run_agent doesn't raise, but a turn must never crash here
         from voice.agent import FALLBACK_REPLY, crash_error_info
-        logger.warning("[VOICE] turn=%s agent crashed: %s", ctx.turn_id, type(exc).__name__)
+        logger.exception("[VOICE] turn=%s agent crashed", ctx.turn_id)   # server log only: full traceback
         result.reply_text, result.ui_actions, result.action, result.llm_ms = FALLBACK_REPLY, [], "error", 0
         result.agent_error_info = crash_error_info(exc)
         result.agent_error_code, result.agent_error_detail = "agent_crashed", result.agent_error_info["detail"]
@@ -146,10 +150,31 @@ def make_reply(ctx: TurnContext, result: TurnResult) -> TurnResult:
     try:
         audio, mime, tts_ms, err = synthesize_reply(result.reply_text, result.reply_language)
     except Exception as exc:  # synthesize_reply doesn't raise, but a turn must never crash here
-        audio, mime, tts_ms, err = None, REPLY_MIME, 0, type(exc).__name__
+        logger.exception("[VOICE] turn=%s text-to-speech crashed", ctx.turn_id)
+        audio, mime, tts_ms, err = None, REPLY_MIME, 0, f"{type(exc).__name__}: {str(exc)[:200]}"
     result.reply_audio_b64, result.reply_mime, result.tts_ms, result.tts_error = audio, mime, tts_ms, err
-    logger.info("[VOICE] turn=%s tts_ms=%s tts_status=%s", ctx.turn_id, tts_ms, "ok" if not err else f"failed ({err})")
+    # tts_disabled / empty_text are settings, not failures; a real failure (Sarvam limit, key, network) is a warning.
+    logger.log(logging.WARNING if tts_failed(result) else logging.INFO, "[VOICE] turn=%s tts_ms=%s tts_status=%s",
+               ctx.turn_id, tts_ms, "ok" if not err else f"failed ({err})")
     return result
+
+
+def tts_failed(result: TurnResult) -> bool:
+    """A real TTS failure (Sarvam limit, key, network); tts_disabled / empty_text are settings, not failures."""
+    return bool(result.tts_error) and result.tts_error not in ("tts_disabled", "empty_text")
+
+
+def failure_reason(result: TurnResult) -> Tuple[Optional[str], Optional[str]]:
+    """The one failure reason of a turn, for the debug store and voice_errors.md:
+    STT failed -> (stt code, detail); agent failed -> (agent code, detail); else a real TTS failure ->
+    ("tts_failed", tts_error); else (None, None)."""
+    if not result.ok:
+        return result.error_code or ErrorCode.STT_FAILED, result.error_detail
+    if result.agent_error_code:
+        return result.agent_error_code, result.agent_error_detail
+    if tts_failed(result):
+        return ErrorCode.TTS_FAILED, result.tts_error
+    return None, None
 
 
 def after_turn(pcm: bytes, ctx: TurnContext, result: TurnResult, total_ms: int) -> None:
@@ -159,7 +184,8 @@ def after_turn(pcm: bytes, ctx: TurnContext, result: TurnResult, total_ms: int) 
         try:
             turn_index = debug_store.save_speech(pcm, ctx, result, total_ms)
         except Exception as err:
-            logger.warning("[VOICE DEBUG STORE] save failed for turn=%s: %s", ctx.turn_id, type(err).__name__)
+            logger.warning("[VOICE DEBUG STORE] save failed for turn=%s: %s: %s", ctx.turn_id, type(err).__name__,
+                           str(err)[:200])
     if debug_store.test_mode() and error_log.should_log(result):
         try:
             error_log.append(ctx, result, total_ms, turn_index)
@@ -178,4 +204,4 @@ def end_session(user_id: str, session_id: str, conversation_ids: Optional[List[s
     try:
         debug_store.end_session(user_id, session_id)
     except Exception as err:
-        logger.warning("[VOICE DEBUG STORE] end_session failed for session=%s: %s", session_id, type(err).__name__)
+        logger.warning("[VOICE DEBUG STORE] end_session failed for session=%s: %s: %s", session_id, type(err).__name__, str(err)[:200])

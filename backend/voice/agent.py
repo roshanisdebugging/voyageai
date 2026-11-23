@@ -1,10 +1,10 @@
 """
 The voice agent ("the mind"), voicefirst.md steps 2-5 + "Fixes before Step 4".
 
-ONE Groq call per turn decides (retried once on a transient Groq error); tools:
+ONE LLM call per turn decides (retried once on a transient error); tools:
 navigate, answer_question, search_places, get_weather, list_my_trips, open_trip, cant_help. Read-only.
 
-transcript + memory + current state -> Groq (function calling) -> our code checks the call and runs the tool
+transcript + memory + current state -> OpenAI (function calling) -> our code checks the call and runs the tool
 (voice/pages.py, voice/tools/lookups.py, tour_guide_service.voice_answer) -> (reply_text, ui_actions, note).
 The model never touches data and never supplies a trip ID: trips are looked up by the session's user.
 Step 4 adds the trip draft (voice/draft.py); step 5 adds actions on the open trip (voice/tools/actions.py):
@@ -34,6 +34,9 @@ MEMORY_TTL_SECONDS = 30 * 60
 PENDING_TTL_SECONDS = 120
 LLM_TIMEOUT_SECONDS = 8
 FALLBACK_REPLY = "Abhi samajh nahi paaya, phir se boliye."
+# The AI service is limited or down: say "try again later" (not "I didn't understand"), in the user's language.
+TRY_LATER_REPLY = {"hi": "Abhi jawab nahi de paa raha, thodi der baad phir try karein.",
+                   "en": "I can't answer right now, please try again in a little while."}
 
 # Garbled words have no reliable language, so "unclear" is always said in Hinglish (fixes-before-step4 item 6).
 UNCLEAR_REPLY = {"hi": "Samajh nahi aaya, phir se boliye.", "en": "Samajh nahi aaya, phir se boliye."}
@@ -81,6 +84,17 @@ Call exactly one tool when it fits:
   A destination alone counts as a detail ("plan a trip to Manali" -> update_trip_draft).
   "Nayi trip banani hai" / "plan a new trip" with NO details at all -> navigate to plan_trip.
 - cancel_trip_draft: the user wants to stop planning this trip ("cancel karo", "trip mat banao").
+- weather_replan: CHANGE the plan because of the weather ("aaj baarish hai, plan badlo", "kal ka plan mausam ke
+  hisaab se karo"). A weather QUESTION is get_weather, never this. day = today | tomorrow | day_after_tomorrow |
+  YYYY-MM-DD | the day number as text ("2"); leave it out for the whole trip. "kal" = tomorrow, "parso" =
+  day_after_tomorrow (NOT tomorrow). Needs an open trip.
+- optimize_day: reorder ONE day ("aaj ka route chhota karo", "day 2 optimize karo"). goal = MINIMIZE_TRAVEL_TIME
+  (default), RELAXED ("relaxed karo"), MORE_SIGHTS ("zyada jagah dikhao"). Needs an open trip.
+- optimize_budget: make the plan fit the budget ("budget mein fit karo", "kharcha kam karo"). Set budget_inr
+  ONLY when the user says an amount, e.g. the answer to "kitna budget hai?" ("50 hazaar" -> 50000).
+  While a trip is being planned by voice (see "Trip being planned" below), a budget amount or "budget X kar
+  do" is update_trip_draft, NEVER optimize_budget.
+  These three only ask first; our code does the rest. Never say the plan was changed yourself.
 Actions on a trip (default: the OPEN trip, its plan is listed below; pass an activity's short ID like "a5" if you
 can, else its name). Only if the user names ANOTHER trip ("Goa wali trip mein...", "December wali trip", "agli trip")
 set trip_name / trip_month / trip_which (next, current, last); our code finds it.
@@ -107,7 +121,7 @@ Current state:
 
 
 def _nullable(t: str) -> List[str]:
-    # Groq validates tool arguments strictly and the model often sends null for "not given".
+    # Tool arguments are validated strictly and the model often sends null for "not given".
     return [t, "null"]
 
 
@@ -294,9 +308,50 @@ SWAP_TOOL = _fn("swap_activity", "Show alternatives to replace one activity of t
 REGEN_TOOL = _fn("regenerate_itinerary", "Rebuild a trip's whole itinerary (the user confirms first).", dict(TRIP_ARGS))
 ACTION_TOOLS = [MARK_DONE_TOOL, SAVE_PLACE_TOOL, UNSAVE_PLACE_TOOL, ADD_EXPENSE_TOOL, SWAP_TOOL, REGEN_TOOL]
 
+
+
+_DAY_ARG = {"type": _nullable("string"),
+            "description": "today | tomorrow | day_after_tomorrow | YYYY-MM-DD | the day number as text, e.g. '2'. Kal = tomorrow, parso = day_after_tomorrow."}
+WEATHER_REPLAN_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "weather_replan",
+        "description": "Change the open trip's plan because of bad weather (swap outdoor stops for indoor ones). Asks the user "
+                       "before anything changes. Not for weather questions (use get_weather).",
+        "parameters": {"type": "object", "properties": {"day": _DAY_ARG}},
+    },
+}
+OPTIMIZE_DAY_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "optimize_day",
+        "description": "Reorder one day of the open trip (shorter travel, more relaxed, or more sights). Asks before changing.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "day": _DAY_ARG,
+                "goal": {"type": _nullable("string"), "enum": ["MINIMIZE_TRAVEL_TIME", "RELAXED", "MORE_SIGHTS", None]},
+            },
+        },
+    },
+}
+OPTIMIZE_BUDGET_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "optimize_budget",
+        "description": "Make the open trip's plan fit its budget with cheaper swaps. Asks before changing.",
+        "parameters": {
+            "type": "object",
+            "properties": {"budget_inr": {"type": _nullable("number"),
+                                          "description": "Total budget in rupees, only if the user said an amount."}},
+        },
+    },
+}
+SMART_TOOLS = [WEATHER_REPLAN_TOOL, OPTIMIZE_DAY_TOOL, OPTIMIZE_BUDGET_TOOL]   # step 6
+
 TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, TRAVEL_TIME_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL,
          CANT_HELP_TOOL,
-         UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL] + ACTION_TOOLS
+         UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL] + ACTION_TOOLS + SMART_TOOLS
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
 
 
@@ -314,11 +369,12 @@ class AgentResult:
     ui_actions: List[Dict[str, Any]] = field(default_factory=list)
     # navigate:<page> | map_focus | where | answer | weather | decline | unclear | list_trips | open_trip | reply | error
     action: str = "reply"
-    llm_ms: int = 0                   # the deciding Groq call(s)
-    tool_ms: int = 0                  # the tool (answer: cost guard + Gemini/Groq; look-ups: Google/DB/Open-Meteo)
-    error_code: Optional[str] = None  # for logs only
-    # Why it failed, for the test-only error log / debug store. Status codes and code names only:
-    # never the user's words, the transcript, tool arguments or Groq's response body.
+    llm_ms: int = 0                   # the deciding LLM call(s)
+    tool_ms: int = 0                  # the tool (answer: cost guard + Gemini/OpenAI; look-ups: Google/DB/Open-Meteo)
+    error_code: Optional[str] = None  # logs, the reply's error_code (app console / test panel), the debug store
+    # Why it failed: sent as the reply's error_detail, saved in the debug store and logs/voice_errors.md.
+    # Status codes and code / class names only: never the user's words, the transcript, tool arguments or the
+    # provider's response body.
     error_detail: Optional[str] = None
     error_info: Dict[str, Any] = field(default_factory=dict)   # stage, attempt, attempts, model, status, tool, detail
     note: Optional[str] = None        # small on-screen text, never spoken (e.g. "Details badal sakti hain.")
@@ -368,7 +424,10 @@ def trim_sentences(text: str, limit: int = 2) -> str:
 
 
 def is_garbled(text: str) -> bool:
-    """No real words at all (noise, a single letter, only symbols): no LLM call needed."""
+    """No real words at all (noise, a single letter, only symbols): no LLM call needed.
+    A number counts as content: "50000" is a real answer to "kitna budget hai?"."""
+    if re.search(r"\d", text or ""):
+        return False
     letters = re.findall(r"[^\W\d_]", text or "", re.UNICODE)
     return len(letters) < 2
 
@@ -408,7 +467,9 @@ def load_memory(redis_conn, user_id: str, conversation_id: str) -> List[Dict[str
             return []
         data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
         return [m for m in data if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
-    except Exception:
+    except Exception as err:
+        # The turn continues without memory; say why instead of silently dropping context.
+        logger.warning("[VOICE AGENT] memory load failed: %s: %s", type(err).__name__, str(err)[:200])
         return []
 
 
@@ -419,7 +480,7 @@ def save_turn(redis_conn, user_id: str, conversation_id: str, user_text: str, re
         history = history[-MEMORY_TURNS * 2:]
         redis_conn.setex(_mem_key(user_id, conversation_id), MEMORY_TTL_SECONDS, json.dumps(history))
     except Exception as err:
-        logger.warning("[VOICE AGENT] memory save failed: %s", type(err).__name__)
+        logger.warning("[VOICE AGENT] memory save failed: %s: %s", type(err).__name__, str(err)[:200])
 
 
 def clear_memory(redis_conn, user_id: str, conversation_id: Optional[str] = None) -> None:
@@ -436,7 +497,7 @@ def clear_memory(redis_conn, user_id: str, conversation_id: Optional[str] = None
                 for key in redis_conn.scan_iter(f"{prefix}:{user_id}:*"):
                     redis_conn.delete(key)
     except Exception as err:
-        logger.warning("[VOICE AGENT] memory clear failed: %s", type(err).__name__)
+        logger.warning("[VOICE AGENT] memory clear failed: %s: %s", type(err).__name__, str(err)[:200])
 
 
 def _pending_key(user_id: str, conversation_id: str) -> str:
@@ -447,7 +508,7 @@ def save_pending(redis_conn, user_id: str, conversation_id: str, actions: List[D
     try:
         redis_conn.setex(_pending_key(user_id, conversation_id), PENDING_TTL_SECONDS, json.dumps(actions))
     except Exception as err:
-        logger.warning("[VOICE AGENT] pending save failed: %s", type(err).__name__)
+        logger.warning("[VOICE AGENT] pending save failed: %s: %s", type(err).__name__, str(err)[:200])
 
 
 def pop_pending(redis_conn, user_id: str, conversation_id: str) -> List[Dict[str, Any]]:
@@ -458,8 +519,8 @@ def pop_pending(redis_conn, user_id: str, conversation_id: str) -> List[Dict[str
             redis_conn.delete(key)
             data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
             return [a for a in data if isinstance(a, dict) and a.get("type") in ("map_focus", "navigate")]
-    except Exception:
-        pass
+    except Exception as err:
+        logger.warning("[VOICE AGENT] pending pop failed: %s: %s", type(err).__name__, str(err)[:200])
     return []
 
 
@@ -553,7 +614,8 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
     return draft_next(redis_conn, user_id, conversation_id, res.draft, lang, prefix)
 
 
-CONFIRMED_ACTIONS = {"trip_confirm", "expense_added", "regen_queued"}
+# A pending item was found and used ("smart_failed": it ran and the service failed; nothing changed).
+CONFIRMED_ACTIONS = {"trip_confirm", "expense_added", "regen_queued", "smart_applied", "smart_failed"}
 NOTHING_CHANGED = {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing changed."}
 DELETE_REPLY = {"hi": "Trip delete karne ke liye button khud dabaiye, dhyan se.",
                 "en": "To delete a trip, please tap the delete button yourself, carefully."}
@@ -575,6 +637,9 @@ def confirm_pending(redis_conn, user_id: str, conversation_id: str, lang: str, p
     pc = P.take(redis_conn, user_id, conversation_id, pending_id)
     if not pc:
         return AgentResult(NOTHING_TO_CONFIRM[lang], action="confirm_none", error_code="no_pending")
+    from voice.tools import smart
+    if pc.get("tool") in smart.SMART_TOOL_NAMES:   # step 6: weather replan / optimize day / optimize budget
+        return smart.apply_confirmed(pc, user_id, lang, redis_conn)
     if pc.get("tool") == "add_expense":
         return A.run_add_expense(user_id, pc.get("data") or {}, lang, open_trip_id)
     if pc.get("tool") == "regenerate_itinerary":
@@ -585,10 +650,13 @@ def confirm_pending(redis_conn, user_id: str, conversation_id: str, lang: str, p
 def cancel_pending(redis_conn, user_id: str, conversation_id: str, lang: str) -> AgentResult:
     """Cancel (button or "nahi"): nothing runs. For a trip being created, the draft goes too."""
     from voice import pending as P
+    from voice.tools import smart
     current = P.get(redis_conn, user_id, conversation_id)
     if current is None or current.get("tool") == "create_trip":
         return cancel_trip(redis_conn, user_id, conversation_id, lang)
     P.clear(redis_conn, user_id, conversation_id)
+    if current.get("tool") in smart.SMART_TOOL_NAMES:
+        return AgentResult(NOTHING_CHANGED[lang], action="smart_cancel", step="cancelled")
     return AgentResult(NOTHING_CHANGED[lang], action="pending_cancel")
 
 
@@ -629,7 +697,7 @@ def cancel_trip(redis_conn, user_id: str, conversation_id: str, lang: str) -> Ag
     return AgentResult(CANCELLED_REPLY[lang], action="trip_cancel", step="cancelled")
 
 
-LLM_ATTEMPTS = 2   # the first call plus one retry on a GroqTransient
+LLM_ATTEMPTS = 2   # the first call plus one retry on an LLMTransient
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -645,8 +713,8 @@ def _join_detail(info: Dict[str, Any]) -> str:
     return ", ".join(p for p in parts if p)
 
 
-def groq_error_info(err: Exception, attempt: int) -> Dict[str, Any]:
-    """HTTP status, Groq's error code name, Retry-After, model and attempt. Never the message or body."""
+def llm_error_info(err: Exception, attempt: int) -> Dict[str, Any]:
+    """HTTP status, the provider's error code name, Retry-After, model and attempt. Never the message or body."""
     status = getattr(err, "status", None)
     code = getattr(err, "code", None)
     retry_after = getattr(err, "retry_after", None)
@@ -674,8 +742,9 @@ def crash_error_info(err: BaseException, tool: Optional[str] = None, stage: str 
             "detail": f"{type(err).__name__} at {where}"}
 
 
-def _failed(code: str, info: Dict[str, Any]) -> AgentResult:
-    return AgentResult(FALLBACK_REPLY, action="error", error_code=code, error_detail=_join_detail(info), error_info=info)
+def _failed(code: str, info: Dict[str, Any], reply: Optional[str] = None) -> AgentResult:
+    return AgentResult(reply or FALLBACK_REPLY, action="error", error_code=code, error_detail=_join_detail(info),
+                       error_info=info)
 
 
 def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str, has_trip: bool,
@@ -688,7 +757,9 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
     call = next((c for c in tool_calls if c.get("name") in TOOL_NAMES), None)
     if call is None:
         if tool_calls:  # a tool we don't offer
-            return AgentResult(pages.WHICH_PAGE_REPLY[lang], action="reply", error_code="unknown_tool")
+            names = ",".join(str(tc.get("name")) for tc in tool_calls)[:100]
+            return AgentResult(pages.WHICH_PAGE_REPLY[lang], action="reply", error_code="unknown_tool",
+                               error_detail=f"model called a tool we don't offer: {names}")
         text = trim_sentences(content or "")
         # The model sometimes says the fixed lines as text instead of calling cant_help.
         if _norm_text(text) in {_norm_text(v) for v in DECLINE_REPLY.values()} or "sirf aapki trip" in text.lower():
@@ -734,6 +805,14 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         if name == "swap_activity":
             return A.swap_activity(user_id, trip_ctx, args, lang)
         return A.regenerate_itinerary(redis_conn, user_id, conversation_id, trip_ctx, args, lang)
+    from voice.tools import smart
+    if name in smart.SMART_TOOL_NAMES:
+        if not user_id or not conversation_id or redis_conn is None:
+            return _failed("no_user", {"stage": "tool", "tool": name, "detail": "missing user_id/conversation_id/redis"})
+        if trip is None or not trip.id:
+            return AgentResult(smart.TEXT["no_trip"][lang], ui_actions=[{"type": "navigate", "to": pages.ROUTES["my_trips"]}],
+                               action="smart_no_trip", error_code="no_trip")
+        return smart.propose(name, args, user_id, trip, lang, redis_conn, conversation_id)
 
     from voice.tools import lookups
     if name == "search_places":
@@ -767,7 +846,8 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         return AgentResult(ans["spoken"], action="decline", error_code="cost_guard")
     if ans["status"] == "no_facts":
         return AgentResult(ans["spoken"], action="answer", error_code=f"no_facts:{ans.get('fallback_code')}")
-    return AgentResult(ANSWER_FAILED[lang], action="answer", error_code=f"answer_failed:{ans.get('fallback_code')}")
+    return AgentResult(ANSWER_FAILED[lang], action="answer", error_code=f"answer_failed:{ans.get('fallback_code')}",
+                       error_detail=f"answer tool failed: status={ans.get('status')} code={ans.get('fallback_code')}")
 
 
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
@@ -775,7 +855,7 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
               screen_place: Optional[Dict[str, Any]] = None,
               location: Optional[Tuple[float, float]] = None) -> AgentResult:
     """Blocking (HTTP): call from a threadpool. Never raises."""
-    from groq_client import GroqError, GroqRateLimited, GroqTransient, groq_chat_tools
+    from openai_client import LLMError, LLMRateLimited, LLMTransient, chat_tools
 
     lang = template_language(stt_language, transcript)
     if redis_conn is None:
@@ -838,13 +918,13 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         tool_name: Optional[str] = None
         try:
             try:
-                answer = groq_chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
-                                         timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
-            except GroqTransient:
-                # e.g. 400 tool_use_failed: the model's tool call didn't validate. One retry.
+                answer = chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
+                                    timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
+            except LLMTransient:
+                # e.g. a 5xx, a timeout or a malformed tool call. One retry.
                 attempt = 2
-                answer = groq_chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
-                                         timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
+                answer = chat_tools(messages, TOOLS, tool_choice="auto", temperature=0.2,
+                                    timeout=LLM_TIMEOUT_SECONDS, reasoning_effort="low")
             llm_done = time.perf_counter()
             tool_name = next((c.get("name") for c in answer["tool_calls"] if c.get("name") in TOOL_NAMES), None)
             result = _decide(answer["tool_calls"], answer["content"], lang, has_trip=trip is not None,
@@ -852,13 +932,16 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                              trip_ctx=trip_ctx, screen_place=screen_place, location=location)
             if pending_conf and result.pending_confirmation is None and not result.action.startswith("trip_"):
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
-        except GroqRateLimited as err:
-            result = _failed("rate_limited", groq_error_info(err, attempt))
-        except GroqTransient as err:
-            result = _failed("groq_transient_twice", groq_error_info(err, attempt))
-        except GroqError as err:
-            result = _failed("groq_error", groq_error_info(err, attempt))
+        # LLM errors carry status + provider code only (never the message, which can quote the user).
+        except LLMRateLimited as err:
+            result = _failed("rate_limited", llm_error_info(err, attempt), TRY_LATER_REPLY[lang])
+        except LLMTransient as err:
+            result = _failed("llm_transient_twice", llm_error_info(err, attempt))
+        except LLMError as err:
+            result = _failed("llm_error", llm_error_info(err, attempt), TRY_LATER_REPLY[lang])
         except Exception as err:
+            # Unexpected (a bug, or a tool/lookup failing): the full traceback goes to the server log only.
+            logger.exception("[VOICE AGENT] turn crashed in the agent")
             result = _failed(type(err).__name__, crash_error_info(err, tool_name))
     ended = time.perf_counter()
     result.llm_ms = int(((llm_done or ended) - started) * 1000) if used_llm else 0
@@ -868,9 +951,10 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
     if result.action != "error":
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
-    logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s", result.action,
+    logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s%s", result.action,
                 f" step={result.step}" if result.step else "",
                 f" missing={result.missing_count}" if result.missing_count is not None else "",
                 result.llm_ms, result.tool_ms, f" code={result.error_code}" if result.error_code else "",
+                f" detail={result.error_detail}" if result.error_detail else "",
                 f" google_calls={result.google_calls}" if result.google_calls is not None else "")
     return result

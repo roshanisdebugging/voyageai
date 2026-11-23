@@ -1,5 +1,5 @@
 """
-Map stage 3: Google Routes API. Google and Groq simulated.
+Map stage 3: Google Routes API. Google and OpenAI simulated.
 POST /api/routes/compute: login, modes, validation, India only, field mask (no wildcard), TRAFFIC_UNAWARE (not for
 WALK), cache hit = 0 calls, quota -> 503 + pause, rate limit, per-user daily count, no coordinates in logs.
 Voice get_travel_time: "Hawa Mahal kitni door hai", "airport kitni door hai bike se", Routes paused, trip origin.
@@ -37,7 +37,7 @@ database.engine = create_engine(f"sqlite:///{os.path.join(SCRATCH, 'map3.db')}",
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
 
 import main  # noqa: E402
-import groq_client  # noqa: E402
+import openai_client  # noqa: E402
 import places  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from redis_client import redis_conn  # noqa: E402
@@ -225,16 +225,16 @@ with mock.patch.object(rs.httpx, "AsyncClient", FakeRoutes):
                     "latitude": 26.8242, "longitude": 75.8122, "types": ["airport"]}]
     ME = (26.9124, 75.7873)
 
-    class FakeGroq:
+    class FakeLLM:
         queue = []
 
         def __call__(self, messages_, tools, **kw):
-            name, args = FakeGroq.queue.pop(0)
+            name, args = FakeLLM.queue.pop(0)
             return {"content": None, "tool_calls": [{"name": name, "arguments": args}]}
 
     def say(text, hits, tool_args, location=ME, lang="hi"):
-        FakeGroq.queue = [("get_travel_time", tool_args)]
-        with mock.patch.object(groq_client, "groq_chat_tools", FakeGroq()), \
+        FakeLLM.queue = [("get_travel_time", tool_args)]
+        with mock.patch.object(openai_client, "chat_tools", FakeLLM()), \
                 mock.patch.object(places, "search_places", lambda q: hits):
             return agent.run_agent(text, lang, user_id=user_id, conversation_id=f"conv_{uuid.uuid4().hex[:6]}",
                                    screen="/home", trip=None, redis_conn=redis_conn, location=location)

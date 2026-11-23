@@ -1,11 +1,11 @@
 """
 Step 5 eval (voicefirst.md): actions by voice. ~30 action phrases plus a sample of step 2, 3 and 4 phrases (to check
-nothing regressed), graded on the agent's DECISION with the REAL Groq API: the same prompt (with an open Jaipur trip's
+nothing regressed), graded on the agent's DECISION with the REAL OpenAI API: the same prompt (with an open Jaipur trip's
 plan) and tools as voice/agent.py, then the tool chosen and its values. For activity names, the CODE match
 (voice/context.match_activity) must land on the right activity. Tools are not run: nothing is saved.
 Delete phrases are answered by code before any LLM call (agent.is_delete_request); those count when code catches them.
 
-Each call is ~2,900 tokens and Groq's free tier allows 8,000 tokens a minute, so calls are paced ~22 s apart.
+Each call is ~2,900 tokens; calls are paced ~22 s apart to stay under a per-minute token limit.
 Run from backend/: python -m scripts.eval_actions
 """
 import sys
@@ -19,7 +19,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(BACKEND_DIR / ".env", override=True)
 
-from groq_client import GroqRateLimited, groq_chat_tools  # noqa: E402
+from openai_client import LLMRateLimited, chat_tools  # noqa: E402
 from trip_lifecycle import today_ist  # noqa: E402
 from voice import agent, context as C  # noqa: E402
 
@@ -128,10 +128,10 @@ def decide(phrase, screen):
     for attempt in range(4):
         t = time.perf_counter()
         try:
-            out = groq_chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2, timeout=agent.LLM_TIMEOUT_SECONDS,
+            out = chat_tools(msgs, agent.TOOLS, tool_choice="auto", temperature=0.2, timeout=agent.LLM_TIMEOUT_SECONDS,
                                   reasoning_effort="low")
             return out, int((time.perf_counter() - t) * 1000)
-        except GroqRateLimited:
+        except LLMRateLimited:
             if attempt == 3:
                 raise
             time.sleep(30)

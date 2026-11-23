@@ -192,10 +192,10 @@ class GeminiClassifier:
             self.slots.release()
 
 
-class GroqClassifier:
-    """Same policy and fail-closed rules as GeminiClassifier, served by Groq.
+class OpenAIClassifier:
+    """Same policy and fail-closed rules as GeminiClassifier, served by OpenAI.
 
-    Uses Groq structured outputs (strict JSON schema). Any error is raised so the
+    Uses OpenAI structured outputs (strict JSON schema). Any error is raised so the
     caller can try the backup classifier; an uncertain answer becomes unknown.
     """
 
@@ -210,17 +210,17 @@ class GroqClassifier:
     }
 
     def __init__(self):
-        if not (os.getenv("GROQ_API_KEY") or "").strip():
-            raise ValueError("Missing Groq classifier API key")
+        if not (os.getenv("OPENAI_API_KEY") or "").strip():
+            raise ValueError("Missing OpenAI classifier API key")
         self.slots = threading.BoundedSemaphore(8)
 
     def classify(self, query: str) -> Decision:
-        from groq_client import groq_chat
+        from openai_client import chat
 
         if not self.slots.acquire(blocking=False):
             return Decision("unknown", "CLASSIFIER_UNAVAILABLE")
         try:
-            content = groq_chat(
+            content = chat(
                 [
                     {"role": "system", "content": INTENT_INSTRUCTION},
                     {"role": "user", "content": query},
@@ -266,9 +266,9 @@ class FallbackClassifier:
         raise RuntimeError("All cost guard classifiers failed") from last_error
 
 
-def _build_groq_with_gemini_backup():
+def _build_openai_with_gemini_backup():
     classifiers = []
-    for factory in (GroqClassifier, GeminiClassifier):
+    for factory in (OpenAIClassifier, GeminiClassifier):
         try:
             classifiers.append(factory())
         except ValueError:
@@ -384,9 +384,9 @@ def get_guard() -> CostGuard:
             if time.monotonic() < _retry_at:
                 raise RuntimeError("Classifier initialization cooling down")
             try:
-                backend = os.getenv("COST_GUARD_BACKEND", "groq")
-                if backend == "groq":
-                    classifier = _build_groq_with_gemini_backup()
+                backend = os.getenv("COST_GUARD_BACKEND", "openai")
+                if backend in ("openai", "groq"):  # "groq" kept as an alias so an old .env still works
+                    classifier = _build_openai_with_gemini_backup()
                 elif backend == "gemini":
                     classifier = GeminiClassifier()
                 elif backend == "semantic":

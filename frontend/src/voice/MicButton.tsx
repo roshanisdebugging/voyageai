@@ -30,7 +30,7 @@ const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slic
 
 /**
  * Floating mic (voicefirst.md steps 1 + 1b): tap to start, tap to stop, 30 s cap.
- * Streams 16 kHz PCM over /ws/voice, shows what Groq heard in the test panel, then plays the
+ * Streams 16 kHz PCM over /ws/voice, shows what speech-to-text heard in the test panel, then plays the
  * spoken reply. Tapping while it speaks stops the reply and starts a new recording (barge-in).
  */
 type MicPlace = 'shell' | 'wizard';
@@ -74,9 +74,11 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     setPhase(p);
   };
 
-  const report = useCallback((message: string) => {
+  // reason: the technical why (code / status / class names) for the test panel only; users see the message.
+  const report = useCallback((message: string, reason?: string) => {
     if (SHOW_TEST_PANEL) {
-      setEntries((prev) => [{ id: newId(), kind: 'error' as const, text: message, at: Date.now() }, ...prev].slice(0, 50));
+      const text = reason ? `${message} ✖ ${reason}` : message;
+      setEntries((prev) => [{ id: newId(), kind: 'error' as const, text, at: Date.now() }, ...prev].slice(0, 50));
     } else {
       showToast({ message, tone: 'error' });
     }
@@ -175,7 +177,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           text: msg.text,
           language: msg.language,
           durationMs: msg.duration_ms,
-          groqMs: msg.latency_ms,
+          sttMs: msg.latency_ms,
           roundTripMs,
           truncated: msg.truncated,
           at: Date.now(),
@@ -186,7 +188,17 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         const update = (patch: Partial<PanelEntry>) =>
           setEntries((prev) => prev.map((e) => (e.id === turnId ? { ...e, ...patch } : e)));
         const navTo = (msg.ui_actions || []).find((a) => a.type === 'navigate')?.to;
-        update({ replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo, errorCode: msg.error_code });
+        update({
+          replyText: msg.reply_text, ttsMs: msg.tts_ms, action: msg.action, llmMs: msg.llm_ms, navTo,
+          errorCode: msg.error_code, errorDetail: msg.error_detail, ttsError: msg.tts_error,
+        });
+        // Why a turn failed (LLM / tool / Sarvam): the reason is in the console, not just "error".
+        if (msg.action === 'error' || msg.tts_error) {
+          console.error('[voice] turn failed', {
+            turnId, action: msg.action, error_code: msg.error_code, error_detail: msg.error_detail,
+            tts_error: msg.tts_error, llm_ms: msg.llm_ms, tts_ms: msg.tts_ms,
+          });
+        }
         // Step 4: a reply with a pending confirmation shows the Confirm card; any other reply closes it.
         const pc = msg.pending_confirmation;
         setConfirmCard(pc && typeof pc.id === 'string' && typeof pc.summary === 'string'
@@ -222,7 +234,7 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
         setConfirmCard(null);
         if (msg.ok && kind === 'confirm') {
           runUiActions(msg.ui_actions, handlers());
-          // Step 5: a confirmed expense / rebuild says what happened (the trip wizard shows its own progress).
+          // Steps 5/6: a confirmed expense / rebuild / smart change says what happened (the trip wizard shows its own progress).
           if (msg.reply_text && !(msg.ui_actions || []).some((a) => a.type === 'submit_review')) showToast({ message: msg.reply_text });
         } else if (msg.ok && kind === 'cancel') {
           report(msg.reply_text || 'Okay, nothing changed.');
@@ -230,12 +242,14 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           report(msg.reply_text || 'Nothing to confirm any more.');
         }
       } else if (msg.type === 'error') {
+        console.error('[voice] error', { code: msg.code, message: msg.message, detail: msg.detail, turnId: msg.turn_id });
+        const reason = msg.detail ? `${msg.code}: ${msg.detail}` : msg.code;
         if (msg.code === 'tts_failed') {
-          report(msg.message); // the turn itself worked; the state was already handled by "reply"
+          report(msg.message, reason); // the turn itself worked; the state was already handled by "reply"
           return;
         }
         clearReplyTimer();
-        report(msg.message);
+        report(msg.message, reason);
         if (phaseRef.current === 'recording') {
           streamingRef.current = false;
           recorder.stop();

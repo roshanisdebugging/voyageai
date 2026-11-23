@@ -7,7 +7,7 @@
  * - open_review {prefill}: open the trip wizard's review page with the voice draft (checked shape, India only)
  * - submit_review: press Proceed on the wizard's review page (the wizard ignores it on any other step)
  * - open_swap {activity_id, activity_name, day_number}: the existing swap sheet (its own Confirm applies the swap)
- * - refresh {what}: reload itinerary | expenses | saved_places after a change made by voice
+ * - refresh {what}: reload itinerary | expenses | saved_places after a change made by voice (steps 5, 6)
  * - undo_toast {message, undo: {action, payload}}: 5 s toast; Undo (tap only) runs an allowlisted /ws/app action
  */
 import type { TripDraft } from '../features/trip/types';

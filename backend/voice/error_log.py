@@ -1,11 +1,11 @@
 """
 TEST ONLY: a readable log of failed voice turns, backend/logs/voice_errors.md (gitignored).
 
-Written only when VOICE_DEBUG_STORE=true. One entry per turn that failed (action "error") or carries any
-error_code, newest at the bottom. Over 1 MB, the file is renamed to voice_errors.<date>.md and a new one starts.
+Written only when VOICE_DEBUG_STORE=true. One entry per turn that failed (action "error"), carries an agent
+error_code, or whose speech-to-text or Sarvam TTS failed, newest at the bottom. Over 1 MB, the file is renamed to voice_errors.<date>.md and a new one starts.
 
 Entries hold IDs, stage, model, attempt, timings and status/code names only: never the user's words,
-the transcript, tool arguments, reply text or Groq's response body.
+the transcript, tool arguments, reply text or the provider's response body (OpenAI, Sarvam).
 The caller must catch every error from append(): a log write must never break a turn.
 """
 import os
@@ -33,7 +33,8 @@ def _safe(value: Any, limit: int = 120) -> str:
 
 
 def should_log(result: "TurnResult") -> bool:
-    return result.action == "error" or bool(result.agent_error_code) or (not result.ok and bool(result.error_code))
+    from voice.pipeline import failure_reason
+    return result.action == "error" or failure_reason(result)[0] is not None
 
 
 def format_entry(ctx: "TurnContext", result: "TurnResult", total_ms: int, turn_index: Optional[int] = None) -> str:
@@ -43,6 +44,11 @@ def format_entry(ctx: "TurnContext", result: "TurnResult", total_ms: int, turn_i
     if not result.ok:   # speech to text failed: no agent ran
         action, code, stage = "stt_failed", result.error_code, "stt"
         model, detail, tool = result.stt_model or os.getenv("VOICE_STT_MODEL") or "", result.error_detail, None
+    elif not result.agent_error_code and result.action != "error":   # the reply worked, its audio didn't
+        from voice.pipeline import failure_reason
+        action, stage, tool = result.action, "tts", None
+        code, detail = failure_reason(result)
+        model = "sarvam"
     else:
         action, code = result.action, result.agent_error_code
         stage = info.get("stage") or "agent"

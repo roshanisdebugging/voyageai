@@ -317,7 +317,7 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
 
         # 4. Save to Database
         from ai_provider import ai_provider_name
-        provider_name = ai_provider_name().upper()  # GROQ means Groq with Gemini as backup
+        provider_name = ai_provider_name().upper()  # OPENAI means OpenAI with Gemini as backup
 
         print(f"[TRIP CREATION STEP 3/3] Saving itinerary ({len(parsed_schema.days)} Days) to PostgreSQL database...", flush=True)
         itinerary_id = f"itin_{uuid.uuid4().hex[:12]}"
@@ -427,18 +427,21 @@ def optimize_day_flow_service(db: Session, trip_id: str, day_id: str, goal: str 
     day_info = {"dayNumber": day.day_number, "date": day.date, "title": day.title}
     optimized_list = ai_provider_service.generate_day_optimization(day_info, act_dicts, goal)
 
-    for item in optimized_list:
-        # The AI returns activity IDs; only accept ones from this day.
-        act_rec = db.query(ItineraryActivityModel).filter(
-            ItineraryActivityModel.id == item.get("id"), ItineraryActivityModel.day_id == day_id
-        ).first()
-        if act_rec:
-            if item.get("timeSlot"):
-                act_rec.time_slot = item["timeSlot"]
-            if item.get("title"):
-                act_rec.title = item["title"]
-
-    db.commit()
+    try:
+        for item in optimized_list:
+            # The AI returns activity IDs; only accept ones from this day.
+            act_rec = db.query(ItineraryActivityModel).filter(
+                ItineraryActivityModel.id == item.get("id"), ItineraryActivityModel.day_id == day_id
+            ).first()
+            if act_rec:
+                if item.get("timeSlot"):
+                    act_rec.time_slot = item["timeSlot"]
+                if item.get("title"):
+                    act_rec.title = item["title"]
+        db.commit()
+    except Exception:
+        db.rollback()   # one transaction: a failure leaves the day exactly as it was
+        raise
 
     updated_acts = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.day_id == day_id).all()
     result_activities = [
@@ -557,43 +560,68 @@ def execute_refinement_actions_service(db: Session, trip_id: str, actions: List[
     }
 
     executed_count = 0
-    for act in actions:
-        act_type = act.get("type") or act.get("action")
-        activity_id = act.get("activityId")
-        if activity_id not in trip_activity_ids:
-            continue
+    try:
+        for act in actions:
+            act_type = act.get("type") or act.get("action")
+            activity_id = act.get("activityId")
+            if activity_id not in trip_activity_ids:
+                continue
 
-        if act_type == "REPLACE_ACTIVITY" and activity_id:
-            rep = act.get("replacement") or {}
-            target_act = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).first()
-            if target_act:
-                if rep.get("name"):
-                    target_act.title = rep["name"]
-                if rep.get("description"):
-                    target_act.description = rep["description"]
-                if rep.get("timeSlot"):
-                    target_act.time_slot = rep["timeSlot"]
-                if rep.get("locationName"):
-                    target_act.location_name = rep["locationName"]
-                if rep.get("latitude") is not None:
-                    target_act.latitude = rep["latitude"]
-                if rep.get("longitude") is not None:
-                    target_act.longitude = rep["longitude"]
-                if rep.get("estimatedCost") is not None:
-                    target_act.estimated_cost_inr = rep["estimatedCost"]
+            if act_type == "REPLACE_ACTIVITY" and activity_id:
+                rep = act.get("replacement") or {}
+                target_act = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).first()
+                if target_act:
+                    if rep.get("name"):
+                        target_act.title = rep["name"]
+                    if rep.get("description"):
+                        target_act.description = rep["description"]
+                    if rep.get("timeSlot"):
+                        target_act.time_slot = rep["timeSlot"]
+                    if rep.get("locationName"):
+                        target_act.location_name = rep["locationName"]
+                    if rep.get("latitude") is not None:
+                        target_act.latitude = rep["latitude"]
+                    if rep.get("longitude") is not None:
+                        target_act.longitude = rep["longitude"]
+                    if rep.get("estimatedCost") is not None:
+                        target_act.estimated_cost_inr = rep["estimatedCost"]
+                    executed_count += 1
+
+            elif act_type == "REMOVE_ACTIVITY" and activity_id:
+                db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).delete()
                 executed_count += 1
 
-        elif act_type == "REMOVE_ACTIVITY" and activity_id:
-            db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == activity_id).delete()
-            executed_count += 1
-
-    db.commit()
+        db.commit()
+    except Exception:
+        db.rollback()   # all or nothing
+        raise
     print(f"[REFINEMENT EXECUTED] Applied {executed_count} database mutations for trip {trip_id}", flush=True)
     return {
         "status": "SUCCESS",
         "message": f"Successfully applied {executed_count} itinerary refinements to PostgreSQL",
         "executedCount": executed_count
     }
+
+
+def set_trip_budget_amount(db: Session, trip_id: str, amount: float) -> Dict[str, Any]:
+    """Saves the trip's budget amount (rupees), keeping its other budget fields. Used when voice asks for a missing budget."""
+    trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
+    if not trip:
+        raise ValueError("Trip not found")
+    amount = float(amount)
+    from trip_lifecycle import MIN_BUDGET_INR, MAX_BUDGET_INR   # same limits as trip creation
+    if not MIN_BUDGET_INR <= amount <= MAX_BUDGET_INR:
+        raise ValueError(f"Budget must be between {MIN_BUDGET_INR} and {MAX_BUDGET_INR} rupees")
+    budget = dict(trip.budget or {})
+    budget["targetAmount"] = int(amount) if amount == int(amount) else amount
+    budget.setdefault("currency", "INR")
+    try:
+        trip.budget = budget
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return budget
 
 
 _TRANSPORT_MODES = {"TRAIN", "FLIGHT", "BUS", "CAB"}
