@@ -33,7 +33,7 @@ from voice import pending as P
 
 logger = logging.getLogger("voice")
 
-SMART_TOOL_NAMES = ("weather_replan", "optimize_day", "optimize_budget")
+SMART_TOOL_NAMES = ("weather_replan", "optimize_day", "optimize_budget", "set_trip_budget")
 GOALS = ("MINIMIZE_TRAVEL_TIME", "RELAXED", "MORE_SIGHTS")
 MAX_ACTIONS = 5
 FORECAST_DAYS = 16               # weather_service.FORECAST_HORIZON_DAYS
@@ -81,6 +81,12 @@ TEXT: Dict[str, Dict[str, str]] = {
     "applied": {"hi": "Ho gaya. {what}", "en": "Done. {what}"},
     "day_applied": {"hi": "Day {n} ab aisa hai: {titles}.", "en": "Day {n} is now: {titles}."},
     "cancelled": {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing was changed."},
+    # set_trip_budget: set or change the open trip's budget amount (asks first)
+    "budget_ask_amount": {"hi": "Kitna budget rakhun?", "en": "What should the budget be?"},
+    "budget_same": {"hi": "Budget pehle se {amount} hai.", "en": "The budget is already {amount}."},
+    "budget_change_q": {"hi": "Trip ka budget {old} se {new} kar doon?", "en": "Change the trip budget from {old} to {new}?"},
+    "budget_set_q": {"hi": "Trip ka budget {new} rakh doon?", "en": "Set the trip budget to {new}?"},
+    "budget_set_done": {"hi": "Ho gaya, budget ab {new} hai.", "en": "Done. The budget is now {new}."},
 }
 
 
@@ -270,6 +276,8 @@ def propose(name: str, args: Dict[str, Any], user_id: str, trip, lang: str, redi
         if name == "optimize_day":
             return propose_optimize_day(user_id, trip, args.get("day"), args.get("goal"), lang, redis_conn,
                                         conversation_id, db)
+        if name == "set_trip_budget":
+            return propose_set_budget(user_id, trip, args.get("amount"), lang, redis_conn, conversation_id, db)
         return propose_optimize_budget(user_id, trip, args.get("budget_inr"), lang, redis_conn, conversation_id, db)
     except Exception as err:
         logger.exception("[VOICE SMART] %s failed while asking", name)
@@ -469,6 +477,37 @@ def propose_optimize_budget(user_id: str, trip, budget_inr: Any, lang: str, redi
         return _result(summary, step="ask", pending=pc)
 
 
+def _inr(amount: float) -> str:
+    return f"₹{int(amount):,}" if amount == int(amount) else f"₹{amount:,.2f}"
+
+
+def propose_set_budget(user_id: str, trip, amount: Any, lang: str, redis_conn, conversation_id: str, db=None):
+    """
+    "budget 25000 kar do", "budget badal ke 40 hazaar rakho", "set budget to 30000": asks first, then the confirm
+    turn saves it with itinerary_service.set_trip_budget_amount. Same range as trip creation (budget_out_of_range).
+    No AI call, no itinerary needed.
+    """
+    with _session(db) as s:
+        row = _owned_trip(s, trip, user_id)
+        if row is None:
+            return _result(_t("not_found", lang), action="smart_failed", step="failed", code="not_found")
+        said = _parse_budget(amount)
+        if said is None:
+            return _result(_t("budget_ask_amount", lang), step="failed", code="need_budget")
+        if not (MIN_BUDGET_INR <= said <= MAX_BUDGET_INR):
+            key = "budget_low" if said < MIN_BUDGET_INR else "budget_high"
+            return _result(_t(key, lang, min=f"{MIN_BUDGET_INR:,}", max=f"{MAX_BUDGET_INR:,}"),
+                           step="failed", code="budget_out_of_range")
+        existing = _num((row.budget or {}).get("targetAmount")) or 0
+        if existing > 0 and abs(existing - said) < 0.5:
+            return _result(_t("budget_same", lang, amount=_inr(existing)), step="no_change", code=None)
+        summary = (_t("budget_change_q", lang, old=_inr(existing), new=_inr(said)) if existing > 0
+                   else _t("budget_set_q", lang, new=_inr(said)))
+        pc = P.save(redis_conn, user_id, conversation_id, "set_trip_budget", summary,
+                    {"trip_id": row.id, "amount": int(said) if said == int(said) else said})
+        return _result(summary, step="ask", pending=pc)
+
+
 # ---------------- the confirm turn
 
 def apply_confirmed(pending: Dict[str, Any], user_id: str, lang: str, redis_conn=None, db=None):
@@ -487,7 +526,12 @@ def apply_confirmed(pending: Dict[str, Any], user_id: str, lang: str, redis_conn
                 return _result(_t("not_found", lang), action="smart_failed", step="failed", code="not_found")
             trip_id = row.id
 
-            if tool == "optimize_day":
+            if tool == "set_trip_budget":
+                amount = float(data.get("amount"))
+                svc.set_trip_budget_amount(s, trip_id, amount)   # checks the range again
+                text = _t("budget_set_done", lang, new=_inr(amount))
+                route, _ = pages.resolve("itinerary", None, True)
+            elif tool == "optimize_day":
                 if not check_ai_rate_limit(user_id, redis_conn):
                     return _result(_t("rate_limited", lang), action="smart_failed", step="failed", code="rate_limited")
                 res = svc.optimize_day_flow_service(s, trip_id, str(data.get("day_id") or ""), data.get("goal") or GOALS[0])

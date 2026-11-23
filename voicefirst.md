@@ -340,6 +340,7 @@ The agent is a Groq model with function calling. It never touches the database. 
 | `regenerate_itinerary(trip)` | Big | Asks first (costs an AI call) | 5 |
 | `delete_trip` | Not a tool | Opens the trip; says the user must delete it themselves, at their own risk | 5 |
 | `weather_replan`, `optimize_day`, `optimize_budget` | Big | Ask first | 6 |
+| `set_trip_budget(amount)` | Big | Asks first ("Trip ka budget ₹25,000 se ₹40,000 kar doon?") | 6+ (built, branch `voice-budget`) |
 | `add_stay`, `add_transport`, `refine` | Big | Ask first | Later |
 
 **How confirmation works (enforced on the server):**
@@ -1128,6 +1129,34 @@ That lets "Hawa Mahal wala mark done karo" become an activity ID. The ID is matc
 - [ ] Evals ≥ 90%. All earlier tests pass.
 
 ---
+
+### Trip budget: on the itinerary page and by voice (built 23 Nov 2026 on branch `voice-budget`)
+
+**Itinerary page:** a slim strip under the header, `components/itinerary/TripBudgetStrip.tsx` (logic in
+`budgetStrip.ts`, tested by `frontend/tests/budgetStrip.test.mjs`):
+"Budget ₹25,000 · Planned ₹18,400 · Spent ₹3,200" with a progress bar (spent, with planned as a lighter bar; red when
+over budget).
+- Budget = `trip.budget.targetAmount`. Planned = the itinerary's known activity costs (`estimatedCostInr`; unknown costs are
+  not guessed, and "Planned" is left out when none is known). Spent = the trip's saved expenses (the Expenses page total).
+- No budget → "No budget set · …" and a **Set budget** button (a number field); with a budget, **Change**. Saved through
+  `TripContext.setTripBudget` → `/ws/app` `trips:set_budget` (in `WS_TRIP_ACTIONS`, ownership-checked), REST fallback
+  `PUT /api/trips/{id}/budget`; both call `trip_actions.set_trip_budget` → `itinerary_service.set_trip_budget_amount`.
+  Out of range → the reason under the field, nothing saved.
+- Voice changes refresh it: `refresh: itinerary` now also reloads the trip list (budget), `refresh: expenses` the expenses.
+
+**Voice `set_trip_budget(amount)`** ("budget 25000 kar do", "budget badal ke 40 hazaar rakho", "set budget to 30000"):
+- Asks first, same pending / Confirm / "haan" flow as Step 6 (`voice/tools/smart.py` `propose_set_budget`):
+  "Trip ka budget ₹25,000 se ₹40,000 kar doon?" (no budget yet: "Trip ka budget ₹30,000 rakh doon?"). Confirm →
+  "Ho gaya, budget ab ₹40,000 hai." + `refresh: itinerary` + opens the itinerary.
+- Range = `trip_lifecycle.MIN_BUDGET_INR` / `MAX_BUDGET_INR`; outside it → the existing `budget_low` / `budget_high` reply,
+  code `budget_out_of_range`, nothing pending. Same amount → "Budget pehle se ₹25,000 hai." No amount → "Kitna budget rakhun?"
+- `set_trip_budget_amount` now also updates `budget.level` from the amount (per person per day, as at trip creation), so a
+  regenerated itinerary follows the new budget.
+- Prompt rule: a trip OPEN and no new trip being planned → a budget amount is always `set_trip_budget`, never
+  `update_trip_draft` (only for creating a new trip) and never `optimize_budget` ("budget mein fit karo" without an
+  amount stays `optimize_budget`). Safety net in code: no trip open but a draft in Redis → the amount goes to the draft.
+- No trip open and nothing being planned → "Pehle koi trip kholiye." Another user's trip → not found.
+- Tests: `python -m tests.test_voice_budget` (26). Not tested: real OpenAI choosing the tool, browser, phone.
 
 ### Step 7 in detail: polish
 

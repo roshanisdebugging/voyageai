@@ -604,7 +604,8 @@ def execute_refinement_actions_service(db: Session, trip_id: str, actions: List[
 
 
 def set_trip_budget_amount(db: Session, trip_id: str, amount: float) -> Dict[str, Any]:
-    """Saves the trip's budget amount (rupees), keeping its other budget fields. Used when voice asks for a missing budget."""
+    """Saves the trip's budget amount (rupees) and the level derived from it, keeping its other budget fields.
+    Used by the itinerary page's "Set budget", voice set_trip_budget and voice optimize_budget."""
     trip = db.query(TripModel).filter(TripModel.id == trip_id).first()
     if not trip:
         raise ValueError("Trip not found")
@@ -615,6 +616,12 @@ def set_trip_budget_amount(db: Session, trip_id: str, amount: float) -> Dict[str
     budget = dict(trip.budget or {})
     budget["targetAmount"] = int(amount) if amount == int(amount) else amount
     budget.setdefault("currency", "INR")
+    # The level follows the amount, as at trip creation (per person per day; a child counts as half).
+    from trip_lifecycle import budget_level_for
+    travelers = trip.travelers or []
+    children = sum(1 for t in travelers if isinstance(t, dict) and str(t.get("type") or "").upper() == "CHILD")
+    adults = max(1, len(travelers) - children)
+    budget["level"] = budget_level_for(amount, int(trip.total_days or 1), adults, children)
     try:
         trip.budget = budget
         db.commit()

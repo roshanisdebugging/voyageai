@@ -18,6 +18,7 @@ import { deviceLocation, useDeviceLocation } from '../services/useDeviceLocation
 import { GoogleMapsAttribution } from '../components/common/GoogleMapsAttribution';
 import { useAppDispatch } from '../store/hooks';
 import { fetchSavedPlaces } from '../store/reducers/savedPlacesSlice';
+import { fetchUserTrips } from '../store/reducers/tripsSlice';
 import { wsClient } from '../services/wsClient';
 import { getScreenPlace, SAVED_PLACES_CHANGED } from './screenPlace';
 
@@ -121,7 +122,11 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
   const refresh = useCallback((what: 'itinerary' | 'expenses' | 'saved_places') => {
     const api = tripApiRef.current;
     const tripId = api.currentTrip?.id;
-    if (what === 'itinerary' && tripId) void api.refetchItinerary(tripId);
+    if (what === 'itinerary' && tripId) {
+      void api.refetchItinerary(tripId);
+      // The trip itself may have changed too (its budget: voice set_trip_budget / optimize_budget).
+      void api.dispatch(fetchUserTrips({ force: true }));
+    }
     else if (what === 'expenses' && tripId) void api.fetchPackageData(tripId);
     else if (what === 'saved_places') {
       void api.dispatch(fetchSavedPlaces({ force: true }));

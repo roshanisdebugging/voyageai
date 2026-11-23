@@ -94,7 +94,12 @@ Call exactly one tool when it fits:
   ONLY when the user says an amount, e.g. the answer to "kitna budget hai?" ("50 hazaar" -> 50000).
   While a trip is being planned by voice (see "Trip being planned" below), a budget amount or "budget X kar
   do" is update_trip_draft, NEVER optimize_budget.
-  These three only ask first; our code does the rest. Never say the plan was changed yourself.
+- set_trip_budget: SET or CHANGE the open trip's budget amount ("budget 25000 kar do", "budget badal ke 40 hazaar
+  rakho", "set budget to 30000", "budget 1.5 lakh rakho"). amount in rupees as a number ("40 hazaar" -> 40000,
+  "1.5 lakh" -> 150000). When a trip is OPEN and NO new trip is being planned ("Trip being planned: none"), a budget
+  amount is ALWAYS set_trip_budget, NEVER update_trip_draft (that is only for creating a new trip) and never
+  optimize_budget ("budget mein fit karo" without a new amount is optimize_budget).
+  These four only ask first; our code does the rest. Never say the plan or budget was changed yourself.
 Actions on a trip (default: the OPEN trip, its plan is listed below; pass an activity's short ID like "a5" if you
 can, else its name). Only if the user names ANOTHER trip ("Goa wali trip mein...", "December wali trip", "agli trip")
 set trip_name / trip_month / trip_which (next, current, last); our code finds it.
@@ -347,7 +352,20 @@ OPTIMIZE_BUDGET_TOOL: Dict[str, Any] = {
         },
     },
 }
-SMART_TOOLS = [WEATHER_REPLAN_TOOL, OPTIMIZE_DAY_TOOL, OPTIMIZE_BUDGET_TOOL]   # step 6
+SET_BUDGET_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "set_trip_budget",
+        "description": "Set or change the OPEN trip's total budget amount. Asks before changing. Not for a new trip "
+                       "being planned (use update_trip_draft) and not for fitting the plan to the budget (optimize_budget).",
+        "parameters": {
+            "type": "object",
+            "properties": {"amount": {"type": "number", "description": "The new total budget in rupees, e.g. 40000."}},
+            "required": ["amount"],
+        },
+    },
+}
+SMART_TOOLS = [WEATHER_REPLAN_TOOL, OPTIMIZE_DAY_TOOL, OPTIMIZE_BUDGET_TOOL, SET_BUDGET_TOOL]   # step 6 (+ budget)
 
 TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, TRAVEL_TIME_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL,
          CANT_HELP_TOOL,
@@ -809,6 +827,11 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
     if name in smart.SMART_TOOL_NAMES:
         if not user_id or not conversation_id or redis_conn is None:
             return _failed("no_user", {"stage": "tool", "tool": name, "detail": "missing user_id/conversation_id/redis"})
+        if name == "set_trip_budget" and (trip is None or not trip.id):
+            from voice import draft as D
+            if D.load(redis_conn, user_id, conversation_id) is not None:
+                # No trip open and a new trip is being planned: the amount belongs to that draft.
+                return update_draft(redis_conn, user_id, conversation_id, {"budget_inr": args.get("amount")}, lang)
         if trip is None or not trip.id:
             return AgentResult(smart.TEXT["no_trip"][lang], ui_actions=[{"type": "navigate", "to": pages.ROUTES["my_trips"]}],
                                action="smart_no_trip", error_code="no_trip")

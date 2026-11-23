@@ -48,6 +48,8 @@ interface TripContextType {
   weatherReplan: (tripId: string) => Promise<any>;
   executeRefinement: (tripId: string, actions: any[]) => Promise<any>;
   setActivityDone: (tripId: string, activityId: string, done: boolean) => Promise<void>;
+  /** The trip's total budget (rupees). WS trips:set_budget, REST fallback; throws with a message if not saved. */
+  setTripBudget: (tripId: string, amount: number) => Promise<void>;
   readyNotice: ItineraryReadyNotice | null;
   dismissReadyNotice: () => void;
 }
@@ -501,6 +503,25 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [dispatch, store]);
 
+  const setTripBudget = useCallback(async (tripId: string, amount: number): Promise<void> => {
+    let res: any;
+    try {
+      res = await wsClient.sendRequest('trips:set_budget', { trip_id: tripId, amount });
+    } catch {
+      // WS down or refused: the REST route gives the same answer (a refusal comes back as a 400 with the reason).
+      const http = await fetchWithAuth(`${getApiBaseUrl()}/api/trips/${tripId}/budget`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount }),
+      });
+      const body = await http.json().catch(() => ({}));
+      if (!http.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Could not save the budget. Please try again.');
+      res = body;
+    }
+    const trip = store.getState().trips.data.find(t => t.id === tripId);
+    if (res?.trip?.id === tripId) dispatch(upsertTrip(res.trip));
+    else if (trip && res?.budget) dispatch(upsertTrip({ ...trip, budget: res.budget }));
+    else dispatch(fetchUserTrips({ force: true }));
+  }, [dispatch, store]);
+
   const executeRefinement = useCallback(async (tripId: string, actions: any[]): Promise<any> => {
     const data = await wsClient.sendRequest('trips:refine', { trip_id: tripId, actions });
     await reconcileItinerary(tripId);
@@ -541,6 +562,7 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
       weatherReplan,
       executeRefinement,
       setActivityDone,
+      setTripBudget,
       readyNotice,
       dismissReadyNotice,
     }}>
