@@ -50,6 +50,11 @@ export interface MapFocusTarget {
   address?: string;
   /** Voice look-ups: show it like a map search result (pin + "X km from you"). */
   pin?: boolean;
+  /** Voice "Hawa Mahal ke paas restaurant": these places replace the map's nearby places until cleared. */
+  results?: {
+    title: string;
+    places: { name: string; lat: number; lng: number; placeId?: string; rating?: number; address?: string; category?: string }[];
+  };
 }
 
 export interface EventItem {

@@ -136,6 +136,11 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
     mapFocus: ({ lat, lng, name, placeId }) => tripApiRef.current.setMapFocusTarget({
       id: placeId || `voice-${lat}-${lng}`, name, coordinates: [lat, lng], zoom: 15, highlight: true, pin: true,
     }),
+    // "Hawa Mahal ke paas restaurant": the places become the map's markers and cards (navigate to /map follows).
+    mapResults: ({ title, places }) => tripApiRef.current.setMapFocusTarget({
+      id: `voice-results-${Date.now()}`, name: title, coordinates: [places[0].lat, places[0].lng],
+      results: { title, places },
+    }),
     // Only an ID from the user's own loaded trips; anything else is ignored.
     openTrip: (tripId) => {
       if (!tripApiRef.current.trips.some((t) => t.id === tripId)) return false;

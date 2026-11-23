@@ -331,6 +331,7 @@ The agent is a Groq model with function calling. It never touches the database. 
 | `navigate(page, day?)`: Home, My trips, Trip, Itinerary (day), Map, Food, Rides, Expenses, Explore, Guide, Saved places, More, Plan trip | Look and move | Runs now | 2 (built) |
 | `list_my_trips()`, `open_trip(trip)` | Look and move | Runs now | 3 |
 | `search_places(query)` | Look and move | Runs now (shows the place on the map) | 3 |
+| `search_nearby(category, near?)` | Look and move | Runs now (shows up to 6 places of that kind on the map) | 3+ (built, branch `voice-nearby`) |
 | `answer_question(question)` | Look and move | Runs now; answered by the tour guide (Gemini with Google Search), short for voice | 3 |
 | `update_trip_draft(fields)` | Collect | Fills the server draft; jumps to the review page when complete | 4 |
 | `create_trip(...)` | Big | Waits for Proceed or "haan" | 4 |
@@ -1090,6 +1091,48 @@ That lets "Hawa Mahal wala mark done karo" become an activity ID. The ID is matc
 - Eval (`python -m scripts.eval_actions`, 47 phrases): **not finished.** Groq's free tier (8,000 tokens/min, each call ~2,900 tokens) rate-limited the run. Needs a rerun.
 - Concern: the prompt plus tools is now ~2,900 tokens a call, so Groq's free tier allows only about 2–3 voice turns a minute.
 - Not tested: browser and phone; the Undo, refresh and swap UI live.
+
+---
+
+### Places of a kind near a place (search_nearby, built 23 Nov 2026 on branch `voice-nearby`)
+
+**Why:** "Hawa Mahal ke paas achha restaurant dikhao" used to call `search_places("Hawa Mahal")`: the category was
+dropped and the user heard "Hawa Mahal: map par dikha diya."
+
+**What it does now:**
+
+| User says | Tool call | Where it searches | Reply |
+| --- | --- | --- | --- |
+| "Hawa Mahal ke paas achha restaurant dikhao" | `search_nearby(category="good restaurant", near="Hawa Mahal Jaipur")` | the landmark (in the query text) | "Hawa Mahal ke paas ye restaurants mile: A, B, C. Map par dikha diye." |
+| "India Gate ke paas cafe", "cafe near Marine Drive" | `search_nearby(category="cafe", near=...)` | the landmark | same shape; English: "Cafes near India Gate: A, B, C. Showing them on the map." |
+| "Goa mein beach ke paas hotel" | `search_nearby(category="hotel", near="beach Goa")` | the area said | "beach ke paas ye hotels mile: ..." |
+| "achha restaurant dikhao" (no place) | `search_nearby(category="good restaurant")` | the open trip's destination (owner-checked), else the device location sent with this turn | "Jaipur mein ye restaurants mile: ..." / "Aapke paas ye restaurants mile: ..." |
+| same, no trip and no location | — | nowhere (no Google call) | one question: "Kis jagah ke paas dhoondhun?" |
+| "Hawa Mahal dikhao" (a named place only) | `search_places` as before | — | "Hawa Mahal, Jaipur: map par dikha diya." |
+
+**Rules:**
+- Prompt rule: a kind AND a place ("X ke paas Y", "Y near X", "X ke aas-paas Y", "X mein Y") -> always `search_nearby`, never
+  `search_places` on the landmark alone.
+- Google only, ONE Places Text Search (New) call per request (`places.search_category` ->
+  `google_maps_service.text_search_places(..., included_type, bias, with_rating=True)`), never Place Details. Query like
+  "good restaurants near Hawa Mahal Jaipur" / "restaurants in Jaipur" / "ATMs". `includedType` for known kinds
+  (restaurant, cafe, lodging, atm, hospital, pharmacy, gas_station, ...; a preference, not strict). Trip destination
+  or device location -> a 3 km `locationBias` circle. A landmark's own position isn't known without a second call, so
+  "near X" relies on the query text.
+- Ranking (`places.rank_category`): India only; the landmark itself dropped; same name within 300 m merged; places of
+  the asked kind first, other landmarks last; Google's order otherwise. Up to 6 places with name, place id, rating
+  (when Google has one), address, category.
+- Reply: at most three names spoken. The map opens with the places as its markers and cards (`map_results` ui
+  action, checked in `uiActions.ts`; a blue chip with the title clears them and brings back the nearby places).
+  The cards keep the add-to-itinerary rule: no trip open -> Save + Details; trip open -> Save + Add to itinerary.
+- After a list, the remembered "last place" is cleared, so "yeh jagah save karo" asks which one.
+- Quota / paused key -> the map search message "Map search abhi available nahi hai." Nothing found -> "Hawa Mahal ke
+  paas koi restaurants nahi mile."
+- Cost: the rating fields (`places.rating`, `places.userRatingCount`) may put this call in a higher Text Search SKU than
+  the plain named lookup. Still one call.
+- Tests: `python -m tests.test_voice_nearby` (category + landmark, category with an open trip, no trip and no
+  location -> one question, named place -> search_places, quota, the Google request shape). Not tested: real Google,
+  real OpenAI choosing the tool, browser, phone.
 
 ---
 

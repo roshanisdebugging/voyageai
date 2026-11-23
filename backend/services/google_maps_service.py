@@ -8,7 +8,7 @@ import re
 import json
 import time
 import math
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import httpx
 from dotenv import load_dotenv
 from starlette.concurrency import run_in_threadpool
@@ -498,20 +498,29 @@ async def autocomplete_places(
 TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 # No photos, reviews, ratings or hours: just what a named lookup needs.
 TEXT_SEARCH_FIELDS = "places.id,places.displayName,places.formattedAddress,places.location,places.types"
+TEXT_SEARCH_RATING_FIELDS = ",places.rating,places.userRatingCount"   # category search only
 TEXT_SEARCH_CACHE_VERSION = "v1"
 TEXT_SEARCH_PAGE = 6
 
 
-async def text_search_places(query: str, counter: Optional[GoogleCallCounter] = None) -> List[Dict[str, Any]]:
+async def text_search_places(query: str, counter: Optional[GoogleCallCounter] = None, *,
+                             included_type: Optional[str] = None,
+                             bias: Optional[Tuple[float, float, float]] = None,
+                             with_rating: bool = False) -> List[Dict[str, Any]]:
     """
-    Named lookup with ONE Places Text Search (New) call (regionCode IN): name, address, coordinates and types for
-    up to 6 places. Cached 1 hour like autocomplete. Raises GoogleQuotaError on a quota/paused error; other
-    failures return [].
+    ONE Places Text Search (New) call (regionCode IN): name, address, coordinates and types for up to 6 places.
+    Cached 1 hour like autocomplete. Raises GoogleQuotaError on a quota/paused error; other failures return [].
+    Category search (voice "X ke paas restaurant"): included_type (a Google place type, not strict), bias =
+    (lat, lng, radius_m) as a locationBias circle, with_rating adds rating + userRatingCount. Still one call.
     """
     clean_q = (query or "").strip()
     if len(clean_q) < 2:
         return []
-    cache_key = f"places:textsearch:{TEXT_SEARCH_CACHE_VERSION}:{clean_q.lower()}"
+    extra = ""
+    if included_type or bias or with_rating:
+        b = f"{bias[0]:.3f},{bias[1]:.3f},{int(bias[2])}" if bias else "-"
+        extra = f":{included_type or '-'}:{b}:{'r' if with_rating else '-'}"
+    cache_key = f"places:textsearch:{TEXT_SEARCH_CACHE_VERSION}:{clean_q.lower()}{extra}"
     cached_val = await cache.get(cache_key)
     if cached_val is not None:
         return cached_val
@@ -520,8 +529,13 @@ async def text_search_places(query: str, counter: Optional[GoogleCallCounter] = 
     if await is_paused("textsearch"):
         raise GoogleQuotaError("textsearch")
     headers = {"Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY,
-               "X-Goog-FieldMask": TEXT_SEARCH_FIELDS}
-    payload = {"textQuery": clean_q, "regionCode": "IN", "languageCode": "en", "pageSize": TEXT_SEARCH_PAGE}
+               "X-Goog-FieldMask": TEXT_SEARCH_FIELDS + (TEXT_SEARCH_RATING_FIELDS if with_rating else "")}
+    payload: Dict[str, Any] = {"textQuery": clean_q, "regionCode": "IN", "languageCode": "en", "pageSize": TEXT_SEARCH_PAGE}
+    if included_type:
+        payload["includedType"] = included_type          # a preference, not strictTypeFiltering
+    if bias:
+        payload["locationBias"] = {"circle": {"center": {"latitude": bias[0], "longitude": bias[1]},
+                                              "radius": float(min(max(bias[2], 100), 50000))}}
     try:
         _count(counter)
         async with httpx.AsyncClient(timeout=4.0) as client:
@@ -545,6 +559,8 @@ async def text_search_places(query: str, counter: Optional[GoogleCallCounter] = 
                 "latitude": loc["latitude"], "longitude": loc["longitude"],
                 "displayName": address or name, "display_name": address or name,
                 "types": [t for t in (p.get("types") or []) if isinstance(t, str)],
+                **({"rating": p["rating"], "user_rating_count": p.get("userRatingCount")}
+                   if with_rating and isinstance(p.get("rating"), (int, float)) else {}),
             })
         await cache.set(cache_key, results, ttl_seconds=3600)
         return results

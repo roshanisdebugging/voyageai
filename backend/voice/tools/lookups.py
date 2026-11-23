@@ -168,6 +168,101 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     return ToolResult(reply, action="where", pending_actions=actions, google_calls=calls, place=place_info)
 
 
+# ---------------- category near a place ("Hawa Mahal ke paas achha restaurant dikhao")
+
+NEARBY_SPOKEN = 3     # at most three names are spoken; the map shows up to places.CATEGORY_RESULTS
+
+
+def _names(results: List[Dict[str, Any]]) -> str:
+    names = [str(r.get("name") or "")[:60] for r in results[:NEARBY_SPOKEN] if r.get("name")]
+    return ", ".join(names)
+
+
+def _pin_category(gtype: Optional[str], types: Any) -> str:
+    """The map pin's category word (the app maps it to sights / food / hotels / experiences)."""
+    import places
+    for t in types or []:
+        if isinstance(t, str) and t not in places.GENERIC_TYPES:
+            return t[:40]
+    return (gtype or "sights")[:40]
+
+
+def _spoken_near(near: str, results: List[Dict[str, Any]]) -> str:
+    """'Hawa Mahal Jaipur' -> 'Hawa Mahal' when the results are in Jaipur (the city is said by the places anyway)."""
+    words = near.split(",")[0].split()
+    address = " ".join(str(r.get("city") or r.get("displayName") or "") for r in results[:3]).lower()
+    while len(words) > 1 and words[-1].lower() in address:
+        words.pop()
+    return " ".join(words)
+
+
+def search_nearby(category: Optional[str], near: Optional[str], lang: str, *, user_id: Optional[str] = None,
+                  trip_id: Optional[str] = None, origin: Optional[Tuple[float, float]] = None,
+                  search_fn=None) -> ToolResult:
+    """
+    "Hawa Mahal ke paas achha restaurant", "India Gate ke paas cafe", "achha restaurant dikhao".
+    Where: the landmark/area the user said (near); else the open trip's destination (checked against the user);
+    else the device location sent with this turn; else ONE short question. ONE Google Text Search call
+    (places.search_category), no Place Details. Opens the map with up to 6 markers; speaks at most three names.
+    """
+    import places
+    cat = (category or "").strip()[:60]
+    if len(cat) < 2:
+        return ToolResult({"hi": "Kya dhoondhun? Jaise restaurant, cafe ya hotel.",
+                           "en": "What should I look for? A restaurant, cafe or hotel?"}[lang],
+                          action="reply", error_code="no_category")
+    near_q = (near or "").strip()[:100] or None
+    area_name, bias = None, None
+    if not near_q:
+        trip_dest = _trip_destination(user_id, trip_id)
+        if trip_dest:
+            area_name = str(trip_dest["name"])[:80]
+            bias = (float(trip_dest["latitude"]), float(trip_dest["longitude"]))
+        elif origin:
+            bias = (float(origin[0]), float(origin[1]))
+        else:
+            return ToolResult({"hi": "Kis jagah ke paas dhoondhun?", "en": "Near which place should I look?"}[lang],
+                              action="reply", error_code="no_area")
+    fn = search_fn or places.search_category
+    found = fn(cat, near=near_q, area=area_name, bias=bias)
+    calls = found.google_calls
+    _, _, plural = places.category_info(cat)
+    if near_q:
+        spoken = _spoken_near(near_q, found.results)
+        where_hi, where_en = f"{spoken} ke paas", f"near {spoken}"
+    elif area_name:
+        where_hi, where_en = f"{area_name} mein", f"in {area_name}"
+    else:
+        where_hi, where_en = "aapke paas", "near you"
+    if found.unavailable:
+        return ToolResult(MAPS_UNAVAILABLE[lang], action="map_unavailable", error_code="maps_unavailable",
+                          google_calls=calls)
+    if not found.results:
+        return ToolResult({"hi": f"{where_hi} koi {plural} nahi mile.", "en": f"I couldn't find {plural} {where_en}."}[lang],
+                          action="nearby_none", error_code="not_found", google_calls=calls)
+    gtype, _, _ = places.category_info(cat)
+    shown = []
+    for r in found.results:
+        item = {"name": str(r.get("name") or "")[:120], "lat": float(r["latitude"]), "lng": float(r["longitude"]),
+                "category": _pin_category(gtype, r.get("types"))}
+        pid = str(r.get("place_id") or r.get("id") or "")
+        if pid:
+            item["place_id"] = pid[:300]
+        if isinstance(r.get("rating"), (int, float)):
+            item["rating"] = round(float(r["rating"]), 1)
+        address = r.get("city") or r.get("displayName")
+        if address:
+            item["address"] = str(address)[:200]
+        shown.append(item)
+    title = {"hi": f"{where_hi[:1].upper()}{where_hi[1:]} {plural}", "en": f"{plural[:1].upper()}{plural[1:]} {where_en}"}[lang][:80]
+    actions = [{"type": "map_results", "title": title, "places": shown}, {"type": "navigate", "to": "/map"}]
+    names = _names(found.results)
+    reply = {"hi": f"{where_hi[:1].upper()}{where_hi[1:]} ye {plural} mile: {names}. Map par dikha diye.",
+             "en": f"{plural[:1].upper()}{plural[1:]} {where_en}: {names}. Showing them on the map."}[lang]
+    return ToolResult(reply, ui_actions=actions, action="map_results", google_calls=calls,
+                      note_attribution=None)
+
+
 # ---------------- travel time (Google Routes API via routes_service)
 
 TRAVEL_MODES = {"drive": "drive", "car": "drive", "cab": "drive", "taxi": "drive",

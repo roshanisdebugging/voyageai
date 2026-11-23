@@ -179,6 +179,14 @@ def remember_place(redis_conn, user_id: str, conversation_id: str, place: Option
         pass
 
 
+def forget_place(redis_conn, user_id: str, conversation_id: str) -> None:
+    """After a list of places (search_nearby) there is no single "this place" any more."""
+    try:
+        redis_conn.delete(_last_place_key(user_id, conversation_id))
+    except Exception:
+        pass
+
+
 def _last_place(redis_conn, user_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
     try:
         raw = redis_conn.get(_last_place_key(user_id, conversation_id))

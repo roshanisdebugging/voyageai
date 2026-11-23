@@ -56,7 +56,15 @@ Call exactly one tool when it fits:
   do not ask for details. "Itinerary kholo" without a day -> navigate to itinerary, do not ask which day.
 - get_weather: ANY weather question (baarish, rain, mausam, temperature, garmi, thand, kal ka mausam).
   Never use answer_question for weather.
-- search_places: a NAMED place.
+- search_nearby: a KIND of place (restaurant, cafe, hotel, ATM, hospital, petrol pump, pharmacy, parking...),
+  optionally near a landmark/area: "Hawa Mahal ke paas achha restaurant dikhao", "India Gate ke paas cafe",
+  "Goa mein beach ke paas hotel", "cafe near Marine Drive", "achha restaurant dikhao", "paas mein ATM kahan hai".
+  category = the kind in English with any quality word ("good restaurant", "cheap hotel", "cafe", "petrol pump").
+  near = the landmark or area the user said, with its city if you know it ("Hawa Mahal Jaipur", "Baga Beach Goa");
+  leave near out when the user named no place (our code uses the open trip or the user's location).
+  If the user names BOTH a kind and a place ("X ke paas Y", "Y near X", "X ke aas-paas Y", "X mein Y"), ALWAYS use
+  search_nearby, NEVER search_places on the landmark alone.
+- search_places: a NAMED place (one specific place, no kind of place asked for).
   * "X kahan hai" / "where is X" -> show=false (we tell them where it is and offer the map).
   * "X dikhao" / "show me X" / "X map pe dikhao" -> show=true (open the map).
   * query = the place's usual written name, fixing speech-to-text spelling: "4 minar" -> "Charminar",
@@ -173,6 +181,24 @@ SEARCH_TOOL: Dict[str, Any] = {
                 "show": {"type": "boolean", "description": "true = open the map now; false = say where it is and ask."},
             },
             "required": ["query", "show"],
+        },
+    },
+}
+NEARBY_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "search_nearby",
+        "description": "Places of a kind (restaurant, cafe, hotel, ATM, hospital, petrol pump...) near a landmark or area, "
+                       "or near the open trip / the user when no place is named. Shows them on the map.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "The kind of place in English, with any quality word: "
+                                                               "'good restaurant', 'cafe', 'cheap hotel', 'atm', 'petrol pump'."},
+                "near": {"type": _nullable("string"), "description": "The landmark or area the user said, with its city "
+                                                                     "if known ('Hawa Mahal Jaipur'); null if none."},
+            },
+            "required": ["category"],
         },
     },
 }
@@ -349,7 +375,7 @@ OPTIMIZE_BUDGET_TOOL: Dict[str, Any] = {
 }
 SMART_TOOLS = [WEATHER_REPLAN_TOOL, OPTIMIZE_DAY_TOOL, OPTIMIZE_BUDGET_TOOL]   # step 6
 
-TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, WEATHER_TOOL, TRAVEL_TIME_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL,
+TOOLS = [NAVIGATE_TOOL, ANSWER_TOOL, SEARCH_TOOL, NEARBY_TOOL, WEATHER_TOOL, TRAVEL_TIME_TOOL, LIST_TRIPS_TOOL, OPEN_TRIP_TOOL,
          CANT_HELP_TOOL,
          UPDATE_DRAFT_TOOL, CANCEL_DRAFT_TOOL] + ACTION_TOOLS + SMART_TOOLS
 TOOL_NAMES = {t["function"]["name"] for t in TOOLS}
@@ -820,6 +846,13 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
         if user_id and conversation_id and redis_conn is not None and found.place:
             from voice.tools import actions as A
             A.remember_place(redis_conn, user_id, conversation_id, found.place)
+        return _from_tool(found)
+    if name == "search_nearby":
+        found = lookups.search_nearby(args.get("category"), args.get("near"), lang, user_id=user_id,
+                                      trip_id=trip.id if trip else None, origin=location)
+        if user_id and conversation_id and redis_conn is not None and found.action == "map_results":
+            from voice.tools import actions as A
+            A.forget_place(redis_conn, user_id, conversation_id)   # a list: "yeh jagah save karo" must ask which
         return _from_tool(found)
     if name == "get_travel_time":
         return _from_tool(lookups.get_travel_time(str(args.get("place") or ""), args.get("mode"), lang, user_id=user_id,
