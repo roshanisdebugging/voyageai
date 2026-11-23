@@ -293,34 +293,58 @@ async def reverse_geocode(lat: float, lng: float) -> Dict[str, Any]:
     return result
 
 
+class GoogleNearbyError(Exception):
+    """searchNearby failed for a reason other than quota (no key, HTTP error, network). strict=True only."""
+
+
+# Jarvis "nearest hospital / medical shop / cafe" (tour_guide_service.lookup_places): exactly these fields.
+NEARBY_ESSENTIAL_FIELDS = (
+    "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,"
+    "places.currentOpeningHours.openNow,places.nationalPhoneNumber,places.googleMapsUri"
+)
+
+
 async def search_nearby_places(
     lat: float,
     lng: float,
     radius: int = 5000,
-    place_types: Optional[List[str]] = None
+    place_types: Optional[List[str]] = None,
+    *,
+    strict: bool = False,
+    counter: Optional[GoogleCallCounter] = None,
 ) -> List[Dict[str, Any]]:
     """
     Search nearby places using Google Places API (New) searchNearby.
     Caches results in Redis for 2 hours with key places:nearby:{lat}:{lng}:{radius}.
     Outputs formatted schema with is_mock=False.
+
+    strict=True (Jarvis place lookups): no cache here (the caller caches 60 s), rankPreference DISTANCE,
+    maxResultCount 5, field mask NEARBY_ESSENTIAL_FIELDS (adds open_now, phone, maps_uri to each place), and
+    errors are raised instead of returning []: GoogleQuotaError (quota / paused key, which also pauses
+    "nearby" until Google's reset) or GoogleNearbyError. One HTTP request; never a Place Details call.
     """
     # Clamp radius between 500m and 50000m
     clamped_radius = max(500, min(int(radius or 5000), 50000))
     type_tag = "_".join(sorted(place_types)) if place_types else "all"
     cache_key = f"places:nearby:{round(lat, 3)}:{round(lng, 3)}:{clamped_radius}:{type_tag}"
-    cached_places = await cache.get(cache_key)
-    if cached_places is not None and isinstance(cached_places, list):
-        return cached_places
+    if not strict:
+        cached_places = await cache.get(cache_key)
+        if cached_places is not None and isinstance(cached_places, list):
+            return cached_places
 
     if not GOOGLE_MAPS_SERVER_KEY:
         print("[GOOGLE PLACES] No API key configured. Returning empty list.", flush=True)
+        if strict:
+            raise GoogleNearbyError("no_key")
         return []
+    if strict and await is_paused("nearby"):
+        raise GoogleQuotaError("nearby")
 
     url = "https://places.googleapis.com/v1/places:searchNearby"
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": GOOGLE_MAPS_SERVER_KEY,
-        "X-Goog-FieldMask": (
+        "X-Goog-FieldMask": NEARBY_ESSENTIAL_FIELDS if strict else (
             "places.id,places.displayName,places.formattedAddress,places.location,"
             "places.rating,places.userRatingCount,places.primaryType,places.editorialSummary"
         ),
@@ -332,7 +356,7 @@ async def search_nearby_places(
 
     payload = {
         "includedTypes": safe_types,
-        "maxResultCount": 15,
+        "maxResultCount": 5 if strict else 15,
         "locationRestriction": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
@@ -340,10 +364,16 @@ async def search_nearby_places(
             }
         },
     }
+    if strict:
+        payload["rankPreference"] = "DISTANCE"
 
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
+            _count(counter)
             res = await client.post(url, headers=headers, json=payload)
+            if strict and is_quota_error(res):
+                await mark_paused("nearby", res)
+                raise GoogleQuotaError("nearby")
             if res.status_code == 200:
                 data = res.json()
                 raw_places = data.get("places", [])
@@ -372,7 +402,7 @@ async def search_nearby_places(
                     if rating is not None:
                         rating = round(float(rating), 1)
 
-                    transformed.append({
+                    item = {
                         "id": place.get("id"),
                         "name": name,
                         "title": name,
@@ -386,17 +416,34 @@ async def search_nearby_places(
                         "description": summary,
                         "is_mock": False,
                         "_isMock": False,
-                    })
+                    }
+                    if strict:
+                        # Google's own values only; None when Google doesn't say (shown as unknown, never guessed).
+                        open_now = (place.get("currentOpeningHours") or {}).get("openNow")
+                        item["open_now"] = open_now if isinstance(open_now, bool) else None
+                        item["phone"] = place.get("nationalPhoneNumber") or None
+                        item["maps_uri"] = place.get("googleMapsUri") or None
+                    transformed.append(item)
 
                 # Sort by distance
                 transformed.sort(key=lambda x: x["distanceMeters"])
 
+                if strict:
+                    return transformed
                 # Cache in Redis with 2-hour TTL
                 await cache.set(cache_key, transformed, ttl_seconds=7200)
                 return transformed
             else:
+                if strict:
+                    print(f"[GOOGLE PLACES ERROR] nearby HTTP {res.status_code}", flush=True)
+                    raise GoogleNearbyError(f"http_{res.status_code}")
                 print(f"[GOOGLE PLACES ERROR] Status: {res.status_code} Body: {res.text[:300]}", flush=True)
+    except (GoogleQuotaError, GoogleNearbyError):
+        raise
     except Exception as e:
+        if strict:
+            print(f"[GOOGLE PLACES EXCEPTION] nearby {type(e).__name__}", flush=True)
+            raise GoogleNearbyError(type(e).__name__) from e
         print(f"[GOOGLE PLACES EXCEPTION] {e}", flush=True)
 
     return []
