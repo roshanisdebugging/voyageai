@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from voice import pages
 from voice.lang import detect_lang
+from voice.text_utils import canon, is_devanagari_letter, normalize_text as tu_normalize, words as tu_words
 
 logger = logging.getLogger("voice")
 
@@ -476,8 +477,12 @@ def trim_sentences(text: str, limit: int = 2) -> str:
 
 def is_garbled(text: str) -> bool:
     """No real words at all (noise, a single letter, only symbols): no LLM call needed.
-    A number counts as content: "50000" is a real answer to "kitna budget hai?"."""
+    A number counts as content: "50000" is a real answer to "kitna budget hai?".
+    Devanagari: one letter is a real word ("हाँ", "जी" are a consonant plus vowel signs, which are marks, not
+    letters). Latin keeps the old rule: fewer than 2 letters ("a") is noise."""
     if re.search(r"\d", text or ""):
+        return False
+    if any(is_devanagari_letter(ch) for w in tu_words(text) for ch in w):
         return False
     letters = re.findall(r"[^\W\d_]", text or "", re.UNICODE)
     return len(letters) < 2
@@ -493,9 +498,23 @@ _NO.update({"cancel", "karo", "kar", "trip", "banao", "galat", "wrong"})
 _YES.update({"sahi", "correct", "right", "confirm", "proceed", "kar", "banao", "haanji", "bilkul"})
 _YES_CORE.update({"sahi", "correct", "right", "confirm", "proceed"})
 
+# Devanagari (Whisper often writes Hindi answers in Devanagari: "हाँ।"). Stored in the canonical form words()
+# produces (हाँ -> हां, ज़रूर -> जरूर, नही -> नहीं), so every spelling variant matches one entry.
+# Same rule as the Roman sets: yes only if every word is a yes word and at least one is a core yes word.
+_YES_HI_CORE = {"हां", "हा", "हांजी", "जी", "ठीक", "सही", "बिल्कुल", "ज़रूर", "जरूर", "ओके", "यस", "कन्फर्म", "दिखाओ"}
+_YES_HI = _YES_HI_CORE | {"है", "कर", "दो", "करो", "दिखा", "दीजिए", "दीजिये"}
+_NO_HI_CORE = {"नहीं", "नही", "ना", "मत", "रहने", "रुको", "कैंसल", "रद्द", "नो"}
+_NO_HI = _NO_HI_CORE | {"दो", "करो", "कर", "गलत", "ग़लत", "दीजिए", "दीजिये", "जी"}
+_YES.update(canon(w) for w in _YES_HI)
+_YES_CORE.update(canon(w) for w in _YES_HI_CORE)
+_NO.update(canon(w) for w in _NO_HI)
+_NO_CORE.update(canon(w) for w in _NO_HI_CORE)
+# First word that cancels a trip draft ("cancel karo", "रद्द करो", "कैंसल").
+_CANCEL_FIRST_WORDS = {canon("कैंसल"), canon("रद्द")}
+
 
 def yes_or_no(text: str) -> Optional[str]:
-    words = re.findall(r"[a-z]+", (text or "").lower())
+    words = tu_words(text)
     if not words or len(words) > 5:
         return None
     if set(words) <= _YES and set(words) & _YES_CORE:
@@ -598,7 +617,13 @@ def _from_tool(r) -> AgentResult:
 
 
 def _norm_text(s: str) -> str:
-    return re.sub(r"[^a-z ]", "", (s or "").lower()).strip()
+    """Lowercase words joined by spaces, any script (voice/text_utils.normalize_text)."""
+    return tu_normalize(s)
+
+
+def _starts_cancel(transcript: str) -> bool:
+    words = tu_words(transcript)
+    return bool(words) and (words[0].startswith("cancel") or words[0] in _CANCEL_FIRST_WORDS)
 
 
 # ---------------- create a trip by voice (step 4)
@@ -953,7 +978,7 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         D.save(redis_conn, user_id, conversation_id, draft_state)
         result = AgentResult(DATE_AGAIN[lang], action="trip_draft", step="ask",
                              missing_count=len(draft_state.missing_fields()))
-    elif draft_state is not None and said == "no" and _norm_text(transcript).startswith("cancel"):
+    elif draft_state is not None and said == "no" and _starts_cancel(transcript):
         result = cancel_trip(redis_conn, user_id, conversation_id, lang)
 
     if result is not None:
