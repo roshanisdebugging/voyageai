@@ -6,7 +6,8 @@ import { isMockPayload } from '../../utils/mockIndicator';
 import { MockCardAlert } from '../common/MockCardAlert';
 import { AddToItineraryModal, type ItineraryDayOption } from '../itinerary/AddToItineraryModal';
 import { useTrip } from '../../features/trip/TripContext';
-import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
+import { useCanAddToTrip } from '../../features/trip/useCanAddToTrip';
+import { coordsFromPair } from '../../features/trip/tripArea';
 import { useSavedPlaceToggle } from '../places/useSavedPlaceToggle';
 
 interface Activity {
@@ -32,6 +33,7 @@ interface UpcomingEvent {
   category?: string;
   description?: string;
   time?: string;
+  coordinates?: [number, number];
   image?: string;
 }
 
@@ -128,7 +130,7 @@ export const TripSpotlightBanner: React.FC<{
     : (coarseLat !== undefined && coarseLng !== undefined ? `geo:${coarseLat}_${coarseLng}` : '');
 
   const { currentTrip, currentItinerary, refetchItinerary } = useTrip();
-  const tripOpen = useHasActiveTrip(); // "Add" only while a trip is open; "Save" always
+  const addToTrip = useCanAddToTrip(); // "Add" only for places in the open trip's area; "Save" always
   const savedToggle = useSavedPlaceToggle();
 
   const [data, setData] = useState<SpotlightData | null>(() => {
@@ -259,6 +261,7 @@ export const TripSpotlightBanner: React.FC<{
       title: selectedItemForModal.title,
       location: loc,
       location_name: loc,
+      ...coordsFromPair(selectedItemForModal.coordinates),
       tag: ('tag' in selectedItemForModal && selectedItemForModal.tag) ? selectedItemForModal.tag : (selectedItemType === 'event' ? 'EVENT' : 'SIGHTSEEING'),
       price: priceStr,
       estimated_cost_inr: costInt,
@@ -314,8 +317,13 @@ export const TripSpotlightBanner: React.FC<{
     }
   };
 
-  const stateFor = (id: string): AddState =>
-    addedIds[id] ? 'added' : addingId === id ? 'adding' : failedId === id ? 'failed' : 'idle';
+  const addFor = (item: Activity | UpcomingEvent) => {
+    const add = addToTrip({ id: item.id, name: item.title, ...coordsFromPair(item.coordinates) });
+    const added = Boolean(addedIds[item.id]) || add.addedDay !== undefined;
+    return { added, showAdd: add.canAdd || added, hint: added ? null : add.hint };
+  };
+  const stateFor = (id: string, added: boolean): AddState =>
+    added ? 'added' : addingId === id ? 'adding' : failedId === id ? 'failed' : 'idle';
 
   if (!cleanDest && (latitude === undefined || longitude === undefined)) {
     return null; // Don't fetch default mock Kolkata/Goa highlights
@@ -414,6 +422,7 @@ export const TripSpotlightBanner: React.FC<{
             );
           }
 
+          const add = addFor(act);
           return (
             <li key={act.id} className="w-60 sm:w-64 shrink-0 snap-start">
               <article className="h-full flex flex-col gap-3 rounded-2xl bg-[var(--color-surface)] border border-[var(--color-border)] p-4 shadow-[0_2px_8px_rgba(31,37,34,0.06)]">
@@ -429,6 +438,7 @@ export const TripSpotlightBanner: React.FC<{
                   <span className="line-clamp-1">{act.location}</span>
                 </p>
 
+                {add.hint && <p className="text-[11px] text-[var(--color-text-secondary)]">{add.hint}</p>}
                 <div className="mt-auto flex items-end justify-between gap-2 border-t border-[var(--color-border)] pt-3">
                   <div>
                     <p className="text-sm font-bold text-[var(--color-text-primary)]">{act.cost === 0 ? 'Free' : `₹${act.cost}`}</p>
@@ -443,7 +453,7 @@ export const TripSpotlightBanner: React.FC<{
                     <SaveButton
                       title={act.title}
                       saved={savedToggle.isSaved(act.id)}
-                      compact={tripOpen}
+                      compact={add.showAdd}
                       onClick={() => savedToggle.toggle({
                         place_id: act.id,
                         title: act.title,
@@ -456,10 +466,10 @@ export const TripSpotlightBanner: React.FC<{
                         description: act.description,
                       })}
                     />
-                    {tripOpen && (
+                    {add.showAdd && (
                       <AddButton
                         title={act.title}
-                        state={stateFor(act.id)}
+                        state={stateFor(act.id, add.added)}
                         onClick={() => handleOpenAddModal(act, 'activity')}
                       />
                     )}
@@ -483,6 +493,7 @@ export const TripSpotlightBanner: React.FC<{
             );
           }
 
+          const add = addFor(evt);
           const when = parseISODate(evt.date);
           return (
             <li key={evt.id} className="w-60 sm:w-64 shrink-0 snap-start">
@@ -525,12 +536,13 @@ export const TripSpotlightBanner: React.FC<{
                   </p>
                 </div>
 
+                {add.hint && <p className="text-[11px] text-[var(--color-text-secondary)]">{add.hint}</p>}
                 <div className="mt-auto flex items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3">
                   <p className="text-sm font-bold text-[var(--color-text-primary)]">{evt.price === 0 ? 'Free' : `₹${evt.price}`}</p>
-                  {tripOpen && (
+                  {add.showAdd && (
                     <AddButton
                       title={evt.title}
-                      state={stateFor(evt.id)}
+                      state={stateFor(evt.id, add.added)}
                       onClick={() => handleOpenAddModal(evt, 'event')}
                     />
                   )}

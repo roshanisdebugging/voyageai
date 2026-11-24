@@ -564,6 +564,15 @@ def execute_refinement_actions_service(db: Session, trip_id: str, actions: List[
         .all()
     }
 
+    # A replacement outside the trip's area refuses the whole batch before anything changes.
+    from trip_area import require_replacement_in_trip_area
+    for act in actions:
+        rep = act.get("replacement") or {}
+        target = db.query(ItineraryActivityModel).filter(ItineraryActivityModel.id == act.get("activityId")).first() \
+            if act.get("activityId") in trip_activity_ids else None
+        if target and (act.get("type") or act.get("action")) == "REPLACE_ACTIVITY":
+            require_replacement_in_trip_area(trip, target, rep.get("latitude"), rep.get("longitude"))
+
     executed_count = 0
     try:
         for act in actions:

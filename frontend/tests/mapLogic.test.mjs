@@ -38,8 +38,8 @@ check('haversine Jaipur -> Agra about 221 km', d > 215000 && d < 228000, d);
 check('haversine same point = 0', m.haversineMeters(10, 10, 10, 10) === 0);
 
 // Trip-open button rule
-check('no trip open: Save + Details only', eq(m.placeActions(false), ['save', 'details']));
-check('trip open: Add + Save + Details', eq(m.placeActions(true), ['add', 'save', 'details']));
+check('not addable (no trip, or outside its area): Save + Details only', eq(m.placeActions(false), ['save', 'details']));
+check('addable: Add + Save + Details', eq(m.placeActions(true), ['add', 'save', 'details']));
 
 // Map types and camera
 check('map types: Map, Satellite, Terrain', eq(m.MAP_TYPES.map((t) => t.key), ['roadmap', 'satellite', 'terrain']));

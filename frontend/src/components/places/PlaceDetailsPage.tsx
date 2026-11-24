@@ -6,7 +6,7 @@ import { checkPlaceSaved, removeSavedPlace, savePlace, type SavedPlaceItem } fro
 import { useToast } from '../common/UndoToast';
 import { AddToItineraryModal } from '../itinerary/AddToItineraryModal';
 import { usePlaceItineraryAdd } from '../itinerary/usePlaceItineraryAdd';
-import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
+import { useCanAddToTrip } from '../../features/trip/useCanAddToTrip';
 import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 import { SAVED_PLACES_CHANGED, setScreenPlace } from '../../voice/screenPlace';
 
@@ -76,7 +76,7 @@ const PlaceDetailsView: React.FC<{ placeId: string }> = ({ placeId }) => {
   const [isSaving, setIsSaving] = useState(false);
   const savedTouchedRef = useRef(false); // once the user taps Save, a late initial check must not undo it
   const itineraryAdd = usePlaceItineraryAdd();
-  const tripOpen = useHasActiveTrip();
+  const addToTrip = useCanAddToTrip();
 
   useEffect(() => {
     if (!canFetch) return;
@@ -169,7 +169,7 @@ const PlaceDetailsView: React.FC<{ placeId: string }> = ({ placeId }) => {
     }
   };
 
-  const added = itineraryAdd.addedPlaceDays.get(placeId);
+  const add = addToTrip({ id: placeId, name, latitude: lat, longitude: lng }, itineraryAdd.addedPlaceDays.get(placeId));
 
   return (
     <div className="max-w-xl mx-auto px-4 pt-2 space-y-4 animate-fadeIn" style={{ paddingBottom: 'calc(var(--bottom-nav-h, 72px) + env(safe-area-inset-bottom, 0px) + 140px)' }}>
@@ -247,14 +247,16 @@ const PlaceDetailsView: React.FC<{ placeId: string }> = ({ placeId }) => {
         </div>
       )}
 
-      {/* Trip open: Add + Save + Open in Google Maps. No trip open: Save + Open in Google Maps. */}
-      <div className={`grid grid-cols-1 gap-2 ${tripOpen ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
-        {tripOpen && (
-          <button type="button" onClick={() => itineraryAdd.open({ id: placeId, name, category: cardMatches?.category, address, price_approx: cardMatches?.price_approx })}
-            className={`min-h-[44px] px-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5 press-scale ${added
+      {/* In the open trip's area: Add + Save + Open in Google Maps. Otherwise: Save + Open in Google Maps. */}
+      {add.hint && <p className="text-xs text-gray-500 dark:text-zinc-400">{add.hint}</p>}
+      <div className={`grid grid-cols-1 gap-2 ${add.showAdd ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
+        {add.showAdd && (
+          <button type="button" disabled={!add.canAdd}
+            onClick={() => itineraryAdd.open({ id: placeId, name, category: cardMatches?.category, address, latitude: lat, longitude: lng, price_approx: cardMatches?.price_approx })}
+            className={`min-h-[44px] px-3 rounded-xl font-semibold text-sm flex items-center justify-center gap-1.5 press-scale ${add.addedDay !== undefined
               ? 'bg-[#1F5A3F]/10 text-[#1F5A3F] dark:text-emerald-400 border border-[#1F5A3F]/30'
               : 'bg-[#1F5A3F] hover:bg-[#194B34] text-white'}`}>
-            {added ? <><Check className="w-4 h-4" aria-hidden="true" /> Added to Day {added}</> : <><Plus className="w-4 h-4" aria-hidden="true" /> Add to Itinerary</>}
+            {add.addedDay !== undefined ? <><Check className="w-4 h-4" aria-hidden="true" /> Added to Day {add.addedDay}</> : <><Plus className="w-4 h-4" aria-hidden="true" /> Add to Itinerary</>}
           </button>
         )}
         <button type="button" onClick={() => setSaved(!isSaved, true)} disabled={isSaving}

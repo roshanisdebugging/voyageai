@@ -29,12 +29,17 @@ import {
   removeTripDetail, invalidateTrips,
 } from '../../store';
 import { useAuth } from '../../auth/AuthContext';
+import { useCanAddToTrip } from '../../features/trip/useCanAddToTrip';
+import { selectTripDetail } from '../../store/reducers/tripDetailsSlice';
+import { useToast } from '../common/UndoToast';
 
 export interface ActionCardData {
   id: string;
   title: string;
   category?: string;
   location?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   duration?: string;
   cost?: number;
   heads_up?: string;
@@ -108,6 +113,10 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
   const activeTrip = selectedTripId
     ? trips.find(t => t.id === selectedTripId) || currentTrip
     : currentTrip || trips.find(t => !isPastTrip(t)) || null;
+
+  const activeItinerary = useSelector((state: RootState) => selectTripDetail(state, activeTrip?.id)?.itinerary ?? null);
+  const addToTrip = useCanAddToTrip({ trip: activeTrip, itinerary: activeItinerary });
+  const { showToast } = useToast();
 
   const destinationName = mode === 'trip'
     ? (activeTrip?.destination?.name || activeTrip?.title || 'Trip Destination')
@@ -438,6 +447,8 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
           item_id: card.id,
           title: card.title,
           location: card.location || destinationName || 'Location',
+          latitude: card.latitude ?? undefined,
+          longitude: card.longitude ?? undefined,
           tag: card.category || 'Sight',
           price: card.cost || 0
         })
@@ -452,6 +463,9 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
         if (refetchItinerary) {
           await refetchItinerary();
         }
+      } else {
+        const detail = (await res.json().catch(() => null))?.detail;
+        showToast({ message: typeof detail === 'string' ? detail : "Couldn't add this place. Please try again.", tone: 'error' });
       }
     } catch (err) {
       console.error('Failed to add activity to itinerary:', err);
@@ -550,6 +564,7 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
             const isUser = m.role === 'user' || m.sender === 'user';
             const textContent = m.text || m.content || '';
             const cardData = m.card || m.metadata?.card;
+            const cardAdd = cardData?.title && mode === 'trip' && activeTrip ? addToTrip({ id: cardData.id, name: cardData.title, latitude: cardData.latitude, longitude: cardData.longitude }) : null;
             const chipsList = m.chips || m.metadata?.chips;
 
             return (
@@ -651,18 +666,19 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
                         </div>
 
                         <div className="px-4 py-3 flex flex-wrap gap-2">
-                          {mode === 'trip' && activeTrip && (
+                          {cardAdd?.hint && <p className="basis-full text-[11px] text-[var(--guide-muted)]">{cardAdd.hint}</p>}
+                          {cardAdd?.showAdd && (
                             <button
                               type="button"
                               onClick={() => handleAddToItinerary(cardData)}
-                              disabled={addingCardId === cardData.id}
+                              disabled={addingCardId === cardData.id || !cardAdd.canAdd || cardAdd.addedDay !== undefined}
                               className="flex-1 min-h-[40px] px-4 rounded-lg guide-control text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60 transition-colors"
                             >
                               {addingCardId === cardData.id ? (
                                 <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" aria-label="Adding" />
-                              ) : addedSuccessId === cardData.id ? (
+                              ) : addedSuccessId === cardData.id || cardAdd.addedDay !== undefined ? (
                                 <>
-                                  <Check className="w-4 h-4" aria-hidden="true" /> Added to Day 1
+                                  <Check className="w-4 h-4" aria-hidden="true" /> Added to Day {cardAdd.addedDay ?? 1}
                                 </>
                               ) : (
                                 <>

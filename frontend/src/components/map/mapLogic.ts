@@ -66,9 +66,9 @@ export function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: 
 
 export type PlaceAction = 'add' | 'save' | 'details';
 
-/** The trip-open rule for a place card: "Add to itinerary" only while a trip is open; Save and Details always. */
-export function placeActions(tripOpen: boolean): PlaceAction[] {
-  return tripOpen ? ['add', 'save', 'details'] : ['save', 'details'];
+/** A place card's buttons. showAdd: the place is in the open trip's area, or already added (useCanAddToTrip). */
+export function placeActions(showAdd: boolean): PlaceAction[] {
+  return showAdd ? ['add', 'save', 'details'] : ['save', 'details'];
 }
 
 export type MapTypeKey = 'roadmap' | 'satellite' | 'terrain';
