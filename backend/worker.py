@@ -79,8 +79,10 @@ def start_worker():
                 print(f"\n[WORKER RUNNING] Processing AI Itinerary for trip: {trip_id}", flush=True)
                 final_status = process_async_itinerary_generation(trip_id, SessionLocal)
                 if final_status:
+                    # The event is called ITINERARY_READY even when status is "FAILED": the name is kept for
+                    # compatibility (the frontend listens for it and reads `status` to show ready or failed).
                     publish_trip_event(trip_id=trip_id, status=final_status, event_type="ITINERARY_READY")
-                print(f"[WORKER COMPLETED] Trip {trip_id} generated and published.\n", flush=True)
+                print(f"[WORKER COMPLETED] Trip {trip_id}: {final_status}; event published.\n", flush=True)
 
             else:
                 logger.warning(f"Malformed job payload received: {raw_payload}")

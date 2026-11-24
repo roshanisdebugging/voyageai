@@ -21,7 +21,8 @@ def enqueue_itinerary_generation(trip_id: str) -> bool:
         return False
 
 def publish_trip_event(trip_id: str, status: str, event_type: str = "ITINERARY_READY"):
-    """Publishes a completion event to Redis Pub/Sub."""
+    """Publishes a completion event to Redis Pub/Sub.
+    ITINERARY_READY is also sent with status "FAILED"; the name is kept for compatibility (clients read `status`)."""
     try:
         payload = json.dumps({
             "event": event_type,

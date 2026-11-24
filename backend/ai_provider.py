@@ -5,9 +5,10 @@ import json
 import time
 import asyncio
 import logging
+import random
 import requests
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from dotenv import load_dotenv
 
 # Load environment variables (force override so running server process picks up .env updates)
@@ -1217,10 +1218,189 @@ class OpenAIProvider(GeminiProvider):
     def _execute_gemini_request(self, prompt: str, temperature: float = 0.2, timeout: int = 25) -> str:
         from openai_client import chat_json
         raw_text = chat_json(prompt, temperature=temperature, timeout=max(timeout, 30))
-        if raw_text.startswith("```"):
-            raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text, flags=re.IGNORECASE)
-            raw_text = re.sub(r"\n?```$", "", raw_text)
-        return raw_text
+        return _strip_fences(raw_text)
+
+    def generate_itinerary_json(self, ai_input: Dict[str, Any], prompt: str) -> str:
+        """One OpenAI itinerary call with the itinerary timeout (not the 30 s used for short calls)."""
+        return _openai_itinerary_once(prompt)
+
+
+# --------------------------------------------------------------------------
+# Itinerary generation: OpenAI, then Groq, then STOP.
+# Gemini is deliberately NOT in this chain: it was returning 503 (overloaded) for itinerary-sized requests and
+# every failed attempt added its timeout to the user's wait. Gemini stays for the other AI features above
+# (swap / chat / optimizations via FallbackAIProvider) and in the tour guide and the cost guard.
+# --------------------------------------------------------------------------
+ITINERARY_CONNECT_TIMEOUT_S = 10.0
+
+
+def _env_seconds(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name) or default)
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def itinerary_openai_timeout() -> float:
+    """OPENAI_ITINERARY_TIMEOUT_S (default 90): read timeout for one OpenAI itinerary call. A 6-day plan is
+    ~4-5k output tokens; gpt-4.1-mini needs well over 30 s for that, which is why 30 s ended in ReadTimeout."""
+    return _env_seconds("OPENAI_ITINERARY_TIMEOUT_S", 90.0)
+
+
+def itinerary_groq_timeout() -> float:
+    """GROQ_ITINERARY_TIMEOUT_S (default 60)."""
+    return _env_seconds("GROQ_ITINERARY_TIMEOUT_S", 60.0)
+
+
+def _strip_fences(raw_text: str) -> str:
+    if raw_text.startswith("```"):
+        raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\n?```$", "", raw_text)
+    return raw_text
+
+
+def _openai_itinerary_once(prompt: str) -> str:
+    from openai_client import chat_json
+    return _strip_fences(chat_json(prompt, temperature=0.2,
+                                   timeout=(ITINERARY_CONNECT_TIMEOUT_S, itinerary_openai_timeout())))
+
+
+# Groq's default output limit cut a 6-day plan off (finish_reason "length"; gpt-oss also spends part of it on
+# reasoning). 16k fits the longest plan (30 days is ~20k only in theory; real 6-day plans are ~5k) with room to think.
+GROQ_ITINERARY_MAX_TOKENS = 16384
+
+
+def _groq_itinerary_once(prompt: str) -> str:
+    from openai_client import GROQ_CHAT_URL, chat_json, groq_api_key, groq_model
+    return _strip_fences(chat_json(prompt, temperature=0.2,
+                                   timeout=(ITINERARY_CONNECT_TIMEOUT_S, itinerary_groq_timeout()),
+                                   model=groq_model(), url=GROQ_CHAT_URL, api_key=groq_api_key(),
+                                   max_completion_tokens=GROQ_ITINERARY_MAX_TOKENS))
+
+
+class ItineraryGenerationError(RuntimeError):
+    """OpenAI and Groq both failed (or gave invalid itineraries). The trip becomes FAILED; nothing else is tried."""
+
+
+# Patched by tests; real waits otherwise.
+_sleep = time.sleep
+_FAST_FAILURE_CODES = {"ConnectionError", "ConnectTimeout", "SSLError", "ChunkedEncodingError", "ProxyError"}
+_groq_missing_logged = False
+
+
+def _failure_reason(err: Exception) -> str:
+    code = getattr(err, "code", None)
+    status = getattr(err, "status", None)
+    if status and status != 200:
+        return f"http_{status}" + (f"_{code}" if code else "")
+    return str(code or type(err).__name__)
+
+
+def _is_fast_failure(err: Exception) -> bool:
+    """429, 5xx or a connection error: worth one quick retry. A ReadTimeout (we already waited the full
+    timeout) or another 4xx (bad key, bad request) is not."""
+    status = getattr(err, "status", None)
+    if status == 429 or (isinstance(status, int) and status >= 500):
+        return True
+    return status is None and getattr(err, "code", None) in _FAST_FAILURE_CODES
+
+
+def _call_openai(prompt: str, attempts: List[Tuple[str, str, int]]) -> str:
+    for attempt in range(2):
+        started = time.monotonic()
+        try:
+            raw = _openai_itinerary_once(prompt)
+            attempts.append(("OPENAI", "ok", int((time.monotonic() - started) * 1000)))
+            return raw
+        except Exception as err:
+            attempts.append(("OPENAI", _failure_reason(err), int((time.monotonic() - started) * 1000)))
+            if attempt == 0 and _is_fast_failure(err):
+                _sleep(random.uniform(1.0, 2.0))
+                continue
+            raise
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def _call_groq(prompt: str, attempts: List[Tuple[str, str, int]]) -> str:
+    from openai_client import LLMRateLimited
+    for attempt in range(2):
+        started = time.monotonic()
+        try:
+            raw = _groq_itinerary_once(prompt)
+            attempts.append(("GROQ", "ok", int((time.monotonic() - started) * 1000)))
+            return raw
+        except Exception as err:
+            attempts.append(("GROQ", _failure_reason(err), int((time.monotonic() - started) * 1000)))
+            if attempt == 0 and isinstance(err, LLMRateLimited):
+                try:
+                    wait = float(err.retry_after) if err.retry_after else None
+                except ValueError:
+                    wait = None
+                if wait is not None and wait <= 5:
+                    _sleep(wait)
+                    continue
+            raise
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def generate_itinerary(prompt: str, validate, correction_prompt) -> Tuple[Any, str]:
+    """
+    The itinerary chain: OpenAI (90 s, one retry only for 429/5xx/connection errors), then Groq (60 s, one retry
+    only after a 429 whose retry-after is <= 5 s), then STOP. No Gemini.
+    validate(raw_json) -> (parsed, "") when the output passes GeneratedItinerarySchema (and the integrity check),
+    else (None, reason). An invalid output is retried once with the same provider (correction_prompt(reason)),
+    then the chain moves on. Returns (parsed, "OPENAI" | "GROQ"); raises ItineraryGenerationError.
+    Prints one summary line: the provider that answered, every attempt with its outcome and ms, total ms.
+    """
+    global _groq_missing_logged
+    from openai_client import groq_api_key
+    started = time.monotonic()
+    attempts: List[Tuple[str, str, int]] = []
+    reasons: List[str] = []
+
+    def summary(result: str, extra: str) -> None:
+        steps = "; ".join(f"{p}#{i + 1} {outcome} {ms}ms" for i, (p, outcome, ms) in
+                          enumerate(attempts))
+        print(f"[ITINERARY GEN] result={result} {extra} total_ms={int((time.monotonic() - started) * 1000)} "
+              f"attempts=[{steps}]", flush=True)
+
+    for label, call in (("OPENAI", _call_openai), ("GROQ", _call_groq)):
+        if label == "GROQ" and not groq_api_key():
+            if not _groq_missing_logged:
+                _groq_missing_logged = True
+                print("[ITINERARY GEN] GROQ_API_KEY is not set: the Groq fallback is skipped", flush=True)
+            attempts.append(("GROQ", "skipped_no_key", 0))
+            reasons.append("GROQ: no key")
+            continue
+        try:
+            raw = call(prompt, attempts)
+        except Exception as err:
+            reasons.append(f"{label}: {_failure_reason(err)}")
+            continue
+        parsed, why = validate(raw)
+        why = (why or "invalid").splitlines()[0]
+        if parsed is not None:
+            summary("ok", f"provider={label}")
+            return parsed, label
+        attempts[-1] = (label, "invalid_output", attempts[-1][2])
+        print(f"[ITINERARY GEN] {label} output failed validation; retrying once with {label}: {why[:200]}", flush=True)
+        try:
+            raw = call(correction_prompt(why), attempts)
+        except Exception as err:
+            reasons.append(f"{label}: {_failure_reason(err)}")
+            continue
+        parsed, why = validate(raw)
+        why = (why or "invalid").splitlines()[0]
+        if parsed is not None:
+            summary("ok", f"provider={label}")
+            return parsed, label
+        attempts[-1] = (label, "invalid_output", attempts[-1][2])
+        reasons.append(f"{label}: invalid output ({why[:120]})")
+
+    reason = "; ".join(reasons) or "no provider answered"
+    summary("failed", f"reason=\"{reason}\"")
+    raise ItineraryGenerationError(f"AI_GENERATION_ERROR: itinerary generation failed ({reason})")
 
 
 class FallbackAIProvider:
@@ -1233,6 +1413,18 @@ class FallbackAIProvider:
         self.providers = providers
 
     def __getattr__(self, name: str):
+        if name == "generate_itinerary_json":
+            # Itineraries never use this OpenAI -> Gemini fallback: they go OpenAI -> Groq -> stop.
+            def itinerary(ai_input: Dict[str, Any], prompt: str) -> str:
+                def json_only(raw: str):
+                    try:
+                        return json.loads(raw), ""
+                    except ValueError as err:
+                        return None, f"not JSON: {err}"
+                parsed, _provider = generate_itinerary(prompt, json_only, lambda why: prompt)
+                return json.dumps(parsed)
+            return itinerary
+
         def call(*args, **kwargs):
             last_error: Optional[Exception] = None
             for provider in self.providers:

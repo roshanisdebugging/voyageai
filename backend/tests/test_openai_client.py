@@ -66,19 +66,34 @@ check("chat returns the text", out == "hello")
 check("chat posts to api.openai.com chat completions", url == "https://api.openai.com/v1/chat/completions", url)
 check("chat sends the key", headers["Authorization"] == "Bearer test-key-not-real")
 check("default model is gpt-4.1-mini", body["model"] == "gpt-4.1-mini", body["model"])
-check("reasoning_effort=low is sent", body.get("reasoning_effort") == "low", body)
+check("gpt-4.1-mini never gets reasoning_effort (decided up front, no wasted request)",
+      "reasoning_effort" not in body and len(calls) == 1, body)
 
 reset()
 os.environ["OPENAI_MODEL"] = "gpt-5-mini"
 with mock.patch.object(openai_client.requests, "post", ok_post):
     openai_client.chat(MSG)
 check("OPENAI_MODEL overrides the model", calls[-1][2]["model"] == "gpt-5-mini")
+check("a reasoning model (gpt-5-mini) gets reasoning_effort=low", calls[-1][2].get("reasoning_effort") == "low")
 
 reset()
+os.environ["OPENAI_MODEL"] = "gpt-5-mini"
 os.environ["OPENAI_REASONING_EFFORT"] = "medium"
 with mock.patch.object(openai_client.requests, "post", ok_post):
     openai_client.chat(MSG, reasoning_effort="low")
 check("OPENAI_REASONING_EFFORT overrides the caller's value", calls[-1][2].get("reasoning_effort") == "medium")
+
+reset()
+os.environ["OPENAI_REASONING_EFFORT"] = "low"
+n_before = len(calls)
+with mock.patch.object(openai_client.requests, "post", ok_post):
+    openai_client.chat_json("x")
+check("OPENAI_REASONING_EFFORT=low set + gpt-4.1-mini: still not sent, one request",
+      "reasoning_effort" not in calls[-1][2] and len(calls) == n_before + 1, calls[-1][2])
+check("supports_reasoning_effort: o-series, gpt-5, gpt-oss yes; gpt-4.1 / gpt-4o / llama no",
+      all(openai_client.supports_reasoning_effort(m) for m in ("o4-mini", "o3", "gpt-5-mini", "openai/gpt-oss-120b"))
+      and not any(openai_client.supports_reasoning_effort(m) for m in ("gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini",
+                                                                        "llama-3.3-70b-versatile", "")))
 
 reset()
 os.environ.pop("OPENAI_API_KEY")
@@ -89,8 +104,9 @@ except openai_client.LLMError as e:
     check("missing key -> LLMError", "OPENAI_API_KEY" in str(e), str(e))
 os.environ["OPENAI_API_KEY"] = "test-key-not-real"
 
-# ---------------- reasoning_effort rejected by the model: one retry without it, then remembered
+# ---------------- safety net: a reasoning model rejects reasoning_effort anyway -> one retry without it, remembered
 reset()
+os.environ["OPENAI_MODEL"] = "o4-mini"
 seen_bodies = []
 rejecting = [Resp(400, {"error": {"code": "unsupported_parameter", "param": "reasoning_effort", "message": "user words"}})]
 
@@ -112,8 +128,9 @@ with mock.patch.object(openai_client.requests, "post", reject_once):
     check("the next call for that model omits reasoning_effort (remembered)",
           len(seen_bodies) == 1 and "reasoning_effort" not in seen_bodies[0], seen_bodies)
 
-# gpt-4.1-mini's real answer: code=null, param=null, only the message names the argument
+# the shape gpt-4.1-mini used to answer with: code=null, param=null, only the message names the argument
 reset()
+os.environ["OPENAI_MODEL"] = "o4-mini"
 seen_bodies = []
 rejecting = [Resp(400, {"error": {"code": None, "param": None,
                                   "message": "Unrecognized request argument supplied: reasoning_effort"}})]

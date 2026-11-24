@@ -279,33 +279,39 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
                 print(f"[CACHE WARN] Invalid cached schema: {cache_err}. Falling back to fresh generation.", flush=True)
                 cached_base_plan = None
 
+        # The provider that actually produced this itinerary (saved as provider_name).
+        # A cache hit was generated earlier by OpenAI or Groq; which one isn't stored with the cached plan.
+        answered_by = "CACHED"
         if not cached_base_plan or not is_valid:
-            print(f">>> [CACHE MISS] Calling Gemini for {cache_key} (~3-4 seconds)...", flush=True)
-            print(f"[TRIP CREATION STEP 2/3] Invoking AI Provider ({ai_provider_service.__class__.__name__})...", flush=True)
-            raw_json = ai_provider_service.generate_itinerary_json(ai_input, prompt)
-
-            try:
-                parsed_schema = GeneratedItinerarySchema.model_validate_json(raw_json)
-                is_valid, validation_msg = validate_and_sanitize_itinerary(parsed_schema, trip.total_days, trip.start_date)
-            except Exception as pyd_err:
-                validation_msg = f"Schema parsing failed: {pyd_err}"
-
-            # Retry attempt if initial LLM generation was invalid
-            from ai_provider import ai_provider_name
+            from ai_provider import ai_provider_name, generate_itinerary
             current_provider = ai_provider_name()
-            if not is_valid and current_provider != "mock":
-                print(f"[TRIP CREATION WARN] Validation retry triggered: {validation_msg}", flush=True)
-                retry_prompt = prompt + f"\n\nIMPORTANT CORRECTION: Your previous JSON response failed validation: {validation_msg}. Please fix this and return a valid JSON itinerary."
-                try:
-                    raw_json_retry = ai_provider_service.generate_itinerary_json(ai_input, retry_prompt)
-                    parsed_schema = GeneratedItinerarySchema.model_validate_json(raw_json_retry)
-                    is_valid, validation_msg = validate_and_sanitize_itinerary(parsed_schema, trip.total_days, trip.start_date)
-                except Exception as retry_err:
-                    validation_msg = f"Retry failed: {retry_err}"
+            print(f">>> [CACHE MISS] Generating a fresh itinerary for {cache_key} (OpenAI, Groq as backup; "
+                  f"often 20-60 s for longer trips)...", flush=True)
+            print("[TRIP CREATION STEP 2/3] Invoking AI Provider...", flush=True)
 
-            if not is_valid:
-                print(f"[TRIP CREATION FAILED] Integrity check failed: {validation_msg}", flush=True)
-                raise ValueError(f"AI_GENERATION_ERROR: {validation_msg}")
+            def validate_output(raw: str):
+                """GeneratedItinerarySchema + the integrity check, before anything is saved."""
+                try:
+                    candidate = GeneratedItinerarySchema.model_validate_json(raw)
+                except Exception as pyd_err:
+                    return None, f"Schema parsing failed: {pyd_err}"
+                ok, msg = validate_and_sanitize_itinerary(candidate, trip.total_days, trip.start_date)
+                return (candidate, "") if ok else (None, msg)
+
+            def correction_prompt(msg: str) -> str:
+                return prompt + f"\n\nIMPORTANT CORRECTION: Your previous JSON response failed validation: {msg}. Please fix this and return a valid JSON itinerary."
+
+            if current_provider == "mock":
+                parsed_schema, validation_msg = validate_output(ai_provider_service.generate_itinerary_json(ai_input, prompt))
+                is_valid = parsed_schema is not None
+                answered_by = "MOCK"
+                if not is_valid:
+                    print(f"[TRIP CREATION FAILED] Integrity check failed: {validation_msg}", flush=True)
+                    raise ValueError(f"AI_GENERATION_ERROR: {validation_msg}")
+            else:
+                # OpenAI, then Groq, then stop (raises ItineraryGenerationError -> the trip becomes FAILED below).
+                parsed_schema, answered_by = generate_itinerary(prompt, validate_output, correction_prompt)
+                is_valid = True
 
             # Store clean baseline template in Redis with 7-Day TTL.
             # Mock output is never cached, or it would be served as real later.
@@ -316,8 +322,7 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
 
 
         # 4. Save to Database
-        from ai_provider import ai_provider_name
-        provider_name = ai_provider_name().upper()  # OPENAI means OpenAI with Gemini as backup
+        provider_name = answered_by  # OPENAI | GROQ (who answered), CACHED (a cache hit) or MOCK
 
         print(f"[TRIP CREATION STEP 3/3] Saving itinerary ({len(parsed_schema.days)} Days) to PostgreSQL database...", flush=True)
         itinerary_id = f"itin_{uuid.uuid4().hex[:12]}"
