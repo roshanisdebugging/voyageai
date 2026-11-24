@@ -1,7 +1,42 @@
 .map-view {
-  /* Google draws its own logo/attribution at the bottom edge; cards sit just above it. */
+  /* Google draws its logo, "Keyboard shortcuts", map data and Terms along the bottom edge of the map element.
+     They must never be covered (Google Maps Platform terms). On phones the map element ends --map-gap above the
+     card, so that strip sits right above the card; the card itself sits just above the bottom nav. */
   --map-attribution-height: 1.5rem;
   --map-controls-clearance: 6.5rem;
+  --map-gap: 0.5rem;
+  /* Height of the card / sheet, kept up to date by MapView. */
+  --map-card-h: 0px;
+  --map-card-space: calc(var(--map-card-h) + var(--map-gap) * 2);
+  /* Type controls + floating buttons + attribution: always left free above the card. */
+  --map-min-clear: 8.5rem;
+}
+
+.map-canvas {
+  position: absolute;
+  inset: 0 0 var(--map-card-space) 0;
+}
+
+/* Floating buttons (Ask Cruiser + mic): over the map, above the attribution strip. */
+.map-app-tools {
+  position: absolute;
+  z-index: 504;
+  inset-inline-end: max(0.75rem, env(safe-area-inset-right, 0px));
+  inset-block-end: calc(var(--map-card-space) + var(--map-attribution-height) + var(--map-gap));
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.map-app-tools > *,
+.map-app-tools button {
+  pointer-events: auto;
+}
+
+.map-app-tools button {
+  border-radius: 9999px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.22);
 }
 
 .map-view[data-map-search-result] {
@@ -25,8 +60,8 @@
 }
 
 .map-places-overlay {
-  inset-block-end: var(--map-attribution-height);
-  max-block-size: max(4rem, calc(100% - var(--map-controls-clearance) - var(--map-attribution-height)));
+  inset-block-end: var(--map-gap);
+  max-block-size: max(4rem, calc(100% - var(--map-controls-clearance) - var(--map-min-clear) - var(--map-gap) * 2));
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -43,7 +78,37 @@
   }
 }
 
+/* Little map left above a tall card: type controls side by side, clear of the floating buttons. */
+.map-view[data-map-compact] .map-type-controls {
+  flex-direction: row;
+}
+
+/* Desktop: room to spare, so the card lies over a full-height map and ends --map-gap above the strip. */
+@media (min-width: 64rem) {
+  .map-canvas {
+    inset: 0;
+  }
+
+  .map-places-overlay {
+    inset-block-end: calc(var(--map-attribution-height) + var(--map-gap));
+  }
+
+  .map-app-tools {
+    inset-block-end: calc(var(--map-attribution-height) + var(--map-card-space));
+  }
+}
+
+/* Landscape phones: card on the right over a full-size map, ending --map-gap above the strip. */
 @media (orientation: landscape) and (min-width: 35rem) and (max-height: 30rem) {
+  .map-canvas {
+    inset: 0;
+  }
+
+  .map-app-tools {
+    inset-inline-end: calc(var(--map-places-width) + 1rem);
+    inset-block-end: calc(var(--map-attribution-height) + var(--map-gap));
+  }
+
   .map-view,
   .map-view[data-map-search-result] {
     --map-controls-clearance: 3.75rem;
@@ -59,6 +124,8 @@
   }
 
   .map-places-overlay {
+    inset-block-end: calc(var(--map-attribution-height) + var(--map-gap));
+    max-block-size: max(4rem, calc(100% - var(--map-controls-clearance) - var(--map-attribution-height) - var(--map-gap)));
     inset-inline-start: auto;
     inset-inline-end: 0.5rem;
     inline-size: var(--map-places-width);

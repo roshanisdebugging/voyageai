@@ -103,7 +103,6 @@ export const HomePage: React.FC = () => {
 
       {nearbyPlaces.length > 0 && (
         <div className="relative">
-          <div className="flex justify-end mb-1"><GoogleMapsAttribution /></div>
           <div
             className="flex gap-4 overflow-x-auto overflow-y-hidden pb-4
                  snap-x snap-mandatory scroll-smooth
@@ -221,6 +220,10 @@ export const HomePage: React.FC = () => {
               );
             })}
           </div>
+
+          <p data-places-attribution className="text-[11px] text-[var(--color-text-secondary)]">
+            Places data: <GoogleMapsAttribution />
+          </p>
 
           {nearbyPlaces.length > 1 && (
             <p className="mt-1 flex items-center justify-center gap-2 text-xs
