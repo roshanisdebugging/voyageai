@@ -95,7 +95,7 @@ const LocaleRedirect: React.FC = () => {
   return null;
 };
 
-const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement> }> = ({ guideMicSlotRef }) => {
+const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement>; mapTools: React.ReactNode }> = ({ guideMicSlotRef, mapTools }) => {
   const { appUIState, setAppUIState, navigationTarget, setNavigationTarget, tripView, setTripView } = useApp();
   const location = useLocation();
 
@@ -134,7 +134,7 @@ const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement> }> = ({
   if ((navigationTarget || tripView === 'map') && (location.pathname === '/map' || location.pathname === '/trip/map' || location.pathname === '/')) {
     return (
       <React.Suspense fallback={<MapLoadingFallback />}>
-        <MapView />
+        <MapView tools={mapTools} />
       </React.Suspense>
     );
   }
@@ -169,12 +169,12 @@ const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement> }> = ({
       } />
       <Route path="/map" element={
         <React.Suspense fallback={<MapLoadingFallback />}>
-          <MapView />
+          <MapView tools={mapTools} />
         </React.Suspense>
       } />
       <Route path="/trip/map" element={
         <React.Suspense fallback={<MapLoadingFallback />}>
-          <MapView />
+          <MapView tools={mapTools} />
         </React.Suspense>
       } />
       <Route path="/food" element={<FoodPage />} />
@@ -255,19 +255,20 @@ const AppShell: React.FC = () => {
         <DesktopSidebar />
 
         <main className={`flex-1 min-w-0 flex flex-col max-w-full overflow-x-hidden ${isGuideView ? 'px-0 sm:px-4 py-0 sm:py-2 overflow-hidden' : isMapView ? 'min-h-0 overflow-hidden' : 'px-4 lg:px-8 py-4 lg:py-6 overflow-y-auto'}`}>
-          <MainContent guideMicSlotRef={setGuideMicSlot} />
+          <MainContent
+            guideMicSlotRef={setGuideMicSlot}
+            mapTools={<>
+              <FloatingAIButton inFlow />
+              <div ref={setMapMicSlot} />
+            </>}
+          />
         </main>
       </div>
 
-      {isMapView && (
-        <div className="map-app-tools">
-          <FloatingAIButton inFlow />
-          <div ref={setMapMicSlot} />
-        </div>
-      )}
       <MobileBottomNav inFlow={isGuideView || isMapView} />
 
-      {!isGuideView && !isMapView && <FloatingAIButton />}
+      {/* On the map it floats inside the map view (mapTools) */}
+      {!isGuideView && !(isMapView && mapMicSlot) && <FloatingAIButton />}
 
       {/* Bottom Sheets & Modals */}
       <NotificationDrawer />

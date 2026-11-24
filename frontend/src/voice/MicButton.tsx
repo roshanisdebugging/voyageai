@@ -439,7 +439,8 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           role="status"
           data-voice-note
           className="fixed z-[var(--z-floating)] right-4 max-w-[220px] px-2.5 py-1 rounded-lg bg-white/95 dark:bg-zinc-900/95 border border-[#D9DEDA] dark:border-zinc-700 text-[11px] text-[#5F6863] dark:text-zinc-400 shadow-sm"
-          style={{ bottom: `calc(${micBottom} + 64px)` }}
+          // The map sets --mic-note-bottom so the note stays off Google's attribution.
+          style={{ bottom: `var(--mic-note-bottom, calc(${micBottom} + 64px))` }}
         >
           {note}
           {noteAttribution && <GoogleMapsAttribution className="block mt-0.5" />}

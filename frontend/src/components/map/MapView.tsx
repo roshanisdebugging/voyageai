@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
 import { useNavigation } from '../../context/NavigationContext';
@@ -42,7 +42,13 @@ const SEARCH_DEBOUNCE_MS = 300;
 const formatSearchDistance = formatStraightLine;
 const calculateDistance = haversineMeters;
 /** Room for the search bar on top and the card row at the bottom when fitting markers. */
-const FIT_PADDING = { top: 120, bottom: 240, left: 40, right: 40 };
+/** Room fitBounds leaves free: at the bottom, whatever lies over the map element from the floating buttons down
+ *  (phones: buttons + attribution; desktop: also the cards, which overlay the map there). */
+const fitPadding = (canvas: HTMLElement | null, side: number): google.maps.Padding => {
+  const tools = canvas?.parentElement?.querySelector('.map-app-tools');
+  const covered = canvas && tools ? canvas.getBoundingClientRect().bottom - tools.getBoundingClientRect().top + 14 : 0;
+  return { top: 120, bottom: Math.max(90, Math.round(covered)), left: side, right: side };
+};
 
 export interface PlaceItem {
   id: string;
@@ -78,7 +84,8 @@ interface SavedView { center: google.maps.LatLngLiteral; zoom: number; tilt: num
 const prefersReducedMotion = () =>
   typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
-export const MapView: React.FC = () => {
+/** `tools`: the floating buttons (Ask Cruiser + the mic slot), drawn over the map above Google's attribution. */
+export const MapView: React.FC<{ tools?: React.ReactNode }> = ({ tools }) => {
   const { userLocation, isFollowMode, setIsFollowMode } = useApp();
   const { currentTrip } = useTrip();
   const { mapFocusTarget, setMapFocusTarget, navigateToExplore } = useNavigation();
@@ -688,7 +695,7 @@ export const MapView: React.FC = () => {
     const bounds = new google.maps.LatLngBounds();
     filteredPlaces.forEach((p) => bounds.extend({ lat: p.latitude, lng: p.longitude }));
     if (userLocation) bounds.extend({ lat: userLocation[0], lng: userLocation[1] });
-    map.fitBounds(bounds, FIT_PADDING);
+    map.fitBounds(bounds, fitPadding(mapContainerRef.current, 40));
   }, [filteredPlaces, mapGen, searchResult, mapFocusTarget, userLocation]);
 
   // ── BRIDGE LOGIC: Deep Link Target from Explore Mode / voice ──
@@ -730,7 +737,7 @@ export const MapView: React.FC = () => {
         const bounds = new google.maps.LatLngBounds();
         items.forEach((p) => bounds.extend({ lat: p.latitude, lng: p.longitude }));
         if (items.length === 1) flyTo(items[0].latitude, items[0].longitude, 16);
-        else map.fitBounds(bounds, FIT_PADDING);
+        else map.fitBounds(bounds, fitPadding(mapContainerRef.current, 40));
       }
       setMapFocusTarget(null);
       return;
@@ -809,7 +816,7 @@ export const MapView: React.FC = () => {
       const bounds = new google.maps.LatLngBounds();
       path.forEach((pt) => bounds.extend(pt));
       cancelFly();
-      map.fitBounds(bounds, { top: 170, bottom: 330, left: 50, right: 60 });
+      map.fitBounds(bounds, fitPadding(mapContainerRef.current, 55));
     } catch {
       clearRouteLine(); // no line; the sheet still shows the time
     }
@@ -971,7 +978,7 @@ export const MapView: React.FC = () => {
     flyRafRef.current = requestAnimationFrame(step);
   };
 
-  const renderCardBody = (place: PlaceItem) => (
+  const renderCardBody = (place: PlaceItem, onClose?: () => void) => (
     <>
       {/* No Google map on screen (key missing/paused): the card itself carries the attribution. */}
       {mapStatus === 'unavailable' && <div className="flex justify-end -mt-1"><GoogleMapsAttribution /></div>}
@@ -993,6 +1000,7 @@ export const MapView: React.FC = () => {
                     </p>
                   </div>
 
+                  <div className="flex shrink-0 items-center gap-2">
                   {/* Audio Narration TTS Control */}
                   <button
                     type="button"
@@ -1012,6 +1020,17 @@ export const MapView: React.FC = () => {
                       <Volume2 className="w-5 h-5 text-[#1F5A3F] dark:text-emerald-400" aria-hidden="true" />
                     )}
                   </button>
+                  {onClose && (
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      aria-label="Close"
+                      className="w-10 h-10 shrink-0 rounded-full bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 flex items-center justify-center text-gray-600 dark:text-zinc-300 press-scale"
+                    >
+                      <X className="w-4 h-4" aria-hidden="true" />
+                    </button>
+                  )}
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-zinc-800">
@@ -1096,13 +1115,59 @@ export const MapView: React.FC = () => {
     </>
   );
 
+  // The card / sheet height drives where the map element ends (mapView.css), so Google's attribution strip always
+  // sits fully visible just above it.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const observedRef = useRef<Element | null>(null);
+  const cardObserverRef = useRef<ResizeObserver | null>(null);
+  const syncCardSpace = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const overlay = root.querySelector<HTMLElement>('.map-places-overlay');
+    root.style.setProperty('--map-card-h', `${overlay?.offsetHeight ?? 0}px`);
+    const canvas = mapContainerRef.current;
+    const tools_ = root.querySelector<HTMLElement>('.map-app-tools');
+    const controls = root.querySelector<HTMLElement>('.map-type-controls');
+    // Two stacked 40 px type buttons + gaps must end above the floating buttons.
+    const free = tools_ && controls ? tools_.offsetTop - controls.offsetTop : Infinity;
+    root.toggleAttribute('data-map-compact', free < 100);
+    // The voice note is fixed to the screen: keep it above the floating buttons, off the attribution.
+    if (tools_ && canvas) {
+      const bottom = window.innerHeight - tools_.getBoundingClientRect().top + 8;
+      document.documentElement.style.setProperty('--mic-note-bottom', `${Math.round(bottom)}px`);
+    }
+  }, []);
+  // Every render: the overlay may be a different element (cards, sheet, loading, empty).
+  useLayoutEffect(() => {
+    const overlay = rootRef.current?.querySelector('.map-places-overlay') ?? null;
+    if (overlay !== observedRef.current) {
+      cardObserverRef.current?.disconnect();
+      observedRef.current = overlay;
+      if (rootRef.current && typeof ResizeObserver !== 'undefined') {
+        const observer = new ResizeObserver(syncCardSpace);
+        observer.observe(rootRef.current);
+        if (overlay) observer.observe(overlay);
+        cardObserverRef.current = observer;
+      }
+    }
+    syncCardSpace();
+  });
+  useEffect(() => () => {
+    cardObserverRef.current?.disconnect();
+    observedRef.current = null;
+    document.documentElement.style.removeProperty('--mic-note-bottom');
+  }, []);
+
   return (
     <div
+      ref={rootRef}
       className="map-view relative isolate w-full min-h-0 flex-1 overflow-hidden bg-[#EFF1ED] dark:bg-zinc-950 select-none transition-colors"
       data-map-search-result={Boolean(searchResult) || undefined}
     >
       {/* Map (Google Maps JavaScript API) */}
-      <div ref={mapContainerRef} className="absolute inset-0 z-0" aria-label="Map" role="region" />
+      <div ref={mapContainerRef} className="map-canvas z-0" aria-label="Map" role="region" />
+
+      {tools && <div className="map-app-tools">{tools}</div>}
 
       {mapStatus === 'unavailable' && (
         <div className="absolute inset-0 z-[1] flex items-center justify-center p-6 pointer-events-none">
@@ -1323,15 +1388,7 @@ export const MapView: React.FC = () => {
       {sheetPlace ? (
         <div className="map-places-overlay absolute inset-x-3 z-[506] pointer-events-auto" role="dialog" aria-label={sheetPlace.name}>
           <div className="map-selected-sheet relative rounded-3xl bg-white dark:bg-zinc-900 border border-[#1F5A3F]/30 dark:border-emerald-800/50 p-4 shadow-2xl space-y-3">
-            <button
-              type="button"
-              onClick={() => setSheetPlace(null)}
-              aria-label="Close"
-              className="absolute -top-3 right-4 w-8 h-8 rounded-full bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 shadow flex items-center justify-center text-gray-600 dark:text-zinc-300 press-scale"
-            >
-              <X className="w-4 h-4" aria-hidden="true" />
-            </button>
-            {renderCardBody(sheetPlace)}
+            {renderCardBody(sheetPlace, () => setSheetPlace(null))}
             {renderRouteSection(sheetPlace)}
             {originSheetFor && originSheetFor.id === sheetPlace.id && devLoc.reading && (
               <RouteOriginSheet
