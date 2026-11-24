@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
 from trip_lifecycle import MAX_BUDGET_INR, MIN_BUDGET_INR   # the one budget range, shared with trip creation
+from trip_area import PlaceOutsideTripArea
 from voice import pages
 from voice import pending as P
 
@@ -554,6 +555,8 @@ def apply_confirmed(pending: Dict[str, Any], user_id: str, lang: str, redis_conn
                 route, _ = pages.resolve("itinerary", n if 1 <= n <= pages.MAX_DAY else None, True)
             else:
                 return _result(_t("failed", lang), action="smart_failed", step="failed", code="unknown_pending_tool")
+    except PlaceOutsideTripArea as err:
+        return _result(err.message, action="smart_failed", step="failed", code=err.code)
     except Exception as err:
         logger.warning("[VOICE SMART] apply failed: %s", type(err).__name__, exc_info=True)
         return _result(_t("failed", lang), action="smart_failed", step="failed", code="service_failed",

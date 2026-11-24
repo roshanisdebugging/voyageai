@@ -4,6 +4,7 @@ import { useTrip } from '../../features/trip/TripContext';
 import { getApiBaseUrl, DEFAULT_HEADERS, getAuthHeaders, fetchWithAuth } from '../../config/apiConfig';
 import { sanitizeLocationName } from '../../utils/locationSanitizer';
 import type { ItineraryDayOption } from './AddToItineraryModal';
+import { useToast } from '../common/UndoToast';
 
 /** The place fields "Add to Itinerary" needs. */
 export interface ItineraryPlace {
@@ -11,6 +12,8 @@ export interface ItineraryPlace {
   name: string;
   category?: string;
   address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   price_approx?: string;
 }
 
@@ -22,6 +25,7 @@ export interface ItineraryPlace {
 export function usePlaceItineraryAdd() {
   const { userLocationName } = useApp();
   const { currentTrip, currentItinerary, refetchItinerary } = useTrip();
+  const { showToast } = useToast();
   const [selected, setSelected] = useState<ItineraryPlace | null>(null);
   const [addedPlaceDays, setAddedPlaceDays] = useState<Map<string, number>>(new Map());
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -52,6 +56,8 @@ export function usePlaceItineraryAdd() {
       title: selected.name,
       location: loc,
       location_name: loc,
+      latitude: selected.latitude ?? undefined,
+      longitude: selected.longitude ?? undefined,
       tag: selected.category || 'spotlight',
       price: selected.price_approx || undefined,
       estimated_cost_inr: costInt,
@@ -68,6 +74,11 @@ export function usePlaceItineraryAdd() {
         setAddedPlaceDays((prev) => new Map(prev).set(selected.id, dayNumber));
         setSelected(null);
         if (refetchItinerary) await refetchItinerary(currentTrip?.id || payload.trip_id);
+      } else {
+        // e.g. place_outside_trip_area: the server's own words.
+        const detail = (await res.json().catch(() => null))?.detail;
+        setSelected(null);
+        showToast({ message: typeof detail === 'string' ? detail : "Couldn't add this place. Please try again.", tone: 'error' });
       }
     } catch (err) {
       console.warn('[ITINERARY] Add to itinerary error:', err);

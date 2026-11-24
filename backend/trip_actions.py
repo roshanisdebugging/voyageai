@@ -117,6 +117,8 @@ def swap_activity(db: Session, user_id: str, trip_id: str, activity_id: Optional
     act = owned[0]
     replacement = replacement or {}
     if replacement:
+        from trip_area import require_replacement_in_trip_area
+        require_replacement_in_trip_area(trip, act, replacement.get("latitude") or None, replacement.get("longitude") or None)
         act.title = replacement.get("name") or replacement.get("title") or act.title
         act.description = replacement.get("description", act.description)
         act.location_name = replacement.get("locationName", act.location_name)

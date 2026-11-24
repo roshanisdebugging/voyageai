@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Portal } from '../common/Portal';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
+import { tripAreaResult } from '../../features/trip/tripArea';
 import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, fetchWithAuth } from '../../config/apiConfig';
 import { Sparkles, RefreshCw, X, Clock, MapPin, Check, AlertCircle } from 'lucide-react';
 import { isMockPayload } from '../../utils/mockIndicator';
@@ -16,12 +17,14 @@ export interface SwapOptionItem {
   duration: string;
   cost: number;
   location: string;
+  latitude?: number | null;
+  longitude?: number | null;
   description: string;
 }
 
 export const SwapActivityModal: React.FC = () => {
   const { isSwapModalOpen, closeSwapAssistant, swapContext } = useApp();
-  const { currentTrip, refetchItinerary } = useTrip();
+  const { trips, currentTrip, refetchItinerary } = useTrip();
 
   const [alternatives, setAlternatives] = useState<SwapOptionItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -32,6 +35,8 @@ export const SwapActivityModal: React.FC = () => {
   const destName = swapContext?.destination || currentTrip?.destination?.name || 'Jaipur';
   const targetTitle = swapContext?.activityName || 'Current Activity';
   const dayNum = Number(swapContext?.selectedDay) || 1;
+
+  const swapTrip = trips.find((t) => t.id === swapContext?.tripId) || currentTrip;
 
   useEffect(() => {
     if (!isSwapModalOpen || !swapContext) {
@@ -65,7 +70,8 @@ export const SwapActivityModal: React.FC = () => {
           const data = await res.json();
           if (isMounted) {
             const alts = Array.isArray(data?.alternatives) ? data.alternatives : [];
-            setAlternatives(alts);
+            // Alternatives known to be outside the trip's area are not offered (the server refuses them too).
+            setAlternatives(alts.filter((a: SwapOptionItem) => tripAreaResult(a, swapTrip) !== 'outside'));
             setIsLoading(false);
           }
         } else {
@@ -88,7 +94,7 @@ export const SwapActivityModal: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [isSwapModalOpen, swapContext, destName, targetTitle, dayNum, currentTrip]);
+  }, [isSwapModalOpen, swapContext, destName, targetTitle, dayNum, currentTrip, swapTrip]);
 
   if (!isSwapModalOpen || !swapContext) return null;
 
@@ -116,7 +122,8 @@ export const SwapActivityModal: React.FC = () => {
           closeSwapAssistant();
         }, 800);
       } else {
-        setErrorMsg('Failed to commit swap. Please try again.');
+        const detail = (await res.json().catch(() => null))?.detail;
+        setErrorMsg(typeof detail === 'string' ? detail : 'Failed to commit swap. Please try again.');
       }
     } catch (err) {
       console.error('[EXECUTE SWAP ERROR]', err);

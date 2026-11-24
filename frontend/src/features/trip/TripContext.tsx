@@ -447,12 +447,18 @@ export const TripProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (wsErr) {
       console.warn('WebSocket swap_activity failed, trying HTTP PATCH fallback...', wsErr);
       try {
-        await fetchWithAuth(`${getApiBaseUrl()}/api/trips/${tripId}/itinerary/activities/${activityId}`, {
+        const res = await fetchWithAuth(`${getApiBaseUrl()}/api/trips/${tripId}/itinerary/activities/${activityId}`, {
           method: 'PATCH',
           body: JSON.stringify(payload),
         });
+        if (!res.ok) {
+          // e.g. place_outside_trip_area: the caller shows the server's words, never "swapped".
+          const detail = (await res.json().catch(() => null))?.detail;
+          throw new Error(typeof detail === 'string' ? detail : "Couldn't swap this activity. Please try again.");
+        }
       } catch (httpErr) {
         console.error('HTTP swap_activity fallback failed:', httpErr);
+        throw httpErr;
       }
     }
     await reconcileItinerary(tripId);

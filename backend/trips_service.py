@@ -106,6 +106,7 @@ Return strictly valid JSON matching this exact schema:
       "time": "06:00 PM onwards",
       "price": 250,
       "location": "Exact venue or area, {clean_dest}",
+      "coordinates": null,
       "category": "Festival | Music | Culture",
       "tag": "Live Experience",
       "description": "Short vivid description of the event vibe."
@@ -113,6 +114,7 @@ Return strictly valid JSON matching this exact schema:
   ]
 }}
 Provide 5 diverse real activities and 2 real events. Replace [{lat}, {lng}] with actual lat/lng coordinates of each place in or near {clean_dest}.
+For events, "coordinates" is the venue's actual [lat, lng]; keep null when the venue is not known.
 """
     else:
         prompt = f"""
@@ -146,6 +148,7 @@ Return strictly valid JSON matching this exact schema:
       "time": "06:00 PM onwards",
       "price": 250,
       "location": "Exact venue or area, {clean_dest}",
+      "coordinates": null,
       "category": "Festival | Music | Culture",
       "tag": "Live Experience",
       "description": "Short vivid description of the event vibe."
@@ -153,6 +156,7 @@ Return strictly valid JSON matching this exact schema:
   ]
 }}
 Provide 5 diverse real activities and 2 real events. Replace [26.9124, 75.7873] with actual lat/lng coordinates of each place in {clean_dest}.
+For events, "coordinates" is the venue's actual [lat, lng]; keep null when the venue is not known.
 """
 
     parsed_data = None

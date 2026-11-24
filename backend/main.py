@@ -185,6 +185,12 @@ async def global_exception_handler(request: Request, exc: Exception):
         headers=headers,
     )
 
+from trip_area import PlaceOutsideTripArea, require_place_in_trip_area, require_replacement_in_trip_area
+
+@app.exception_handler(PlaceOutsideTripArea)
+async def place_outside_trip_area_handler(request: Request, exc: PlaceOutsideTripArea):
+    return JSONResponse(status_code=422, content={"detail": exc.message, "error_code": exc.code})
+
 from rate_limiter import (
     NetworkRateLimiter,
     UserRateLimiter,
@@ -1570,6 +1576,8 @@ def _ws_error_status(err: Exception) -> int:
         return 401
     if isinstance(err, LookupError):
         return 404
+    if isinstance(err, PlaceOutsideTripArea):
+        return 422
     return 400
 
 
@@ -1642,6 +1650,7 @@ async def websocket_tour_app_endpoint(websocket: WebSocket):
                     "status": status_code,
                     "data": None,
                     "error": _ws_error_message(err),
+                    "error_code": err.code if isinstance(err, PlaceOutsideTripArea) else None,
                     "type": "response",
                     "reqname": f"{action}:response",
                     "requestId": req_id
@@ -2139,6 +2148,8 @@ class AddItineraryItemRequest(BaseModel):
     order_index: Optional[int] = 0
     activity_type: Optional[str] = None
     is_confirmed: Optional[bool] = True
+    latitude: Optional[float] = None    # where the place is, for the trip-area check
+    longitude: Optional[float] = None
 
 @app.post("/api/trips/itinerary/add")
 def add_to_itinerary(
@@ -2161,6 +2172,9 @@ def add_to_itinerary(
     target_trip = find_owned_trip(db, req_trip_id, current_user.id)
     if not target_trip:
         raise HTTPException(status_code=404, detail="Trip not found.")
+
+    # A place far from the trip's destination is refused (the app hides the Add button with the same rule).
+    require_place_in_trip_area(target_trip, req.latitude, req.longitude)
 
     target_trip_id = target_trip.id
     day_num = req.day_number or 1
@@ -2377,10 +2391,13 @@ def get_swap_options(req: SwapRecommendationRequest):
           "duration": "2 hours",
           "cost": 400,
           "location": "Exact area in {dest_clean}",
+          "latitude": null,
+          "longitude": null,
           "description": "1 crisp sentence why this is a great alternative to {title_clean}."
         }}
       ]
     }}
+    Fill latitude and longitude with the place's actual decimal coordinates; keep null when you are not sure.
     """
 
     try:
@@ -2432,6 +2449,7 @@ def execute_swap(
     new_cost = int(new_act.get("cost", new_act.get("estimatedCost", 0)))
     new_desc = new_act.get("description", f"Authentic experience in {new_loc}")
     new_tag = new_act.get("tag", new_act.get("category", "Sights"))
+    require_place_in_trip_area(target_trip, new_act.get("latitude"), new_act.get("longitude"))
 
     # 1. Update PostgreSQL Database
     if target_trip:
@@ -3665,6 +3683,7 @@ def process_activity_swap_mutation(
     if trip_id and trip_id != "active_trip" and target_trip.id not in trip_id_candidates(trip_id):
         raise HTTPException(status_code=404, detail="Activity not found to swap")
 
+    require_replacement_in_trip_area(target_trip, activity, rep_data.get("latitude"), rep_data.get("longitude"))
     day = db.query(ItineraryDayModel).filter(ItineraryDayModel.id == activity.day_id).first()
 
     # 3. Apply Fields from replacement payload
@@ -3796,7 +3815,8 @@ def patch_itinerary_activity(
     from models_itinerary import ItineraryActivityModel, ItineraryDayModel
     from models_package import TripExpenseModel
 
-    activity, _trip = require_owned_activity(db, activity_id, current_user.id)
+    activity, owned_trip = require_owned_activity(db, activity_id, current_user.id)
+    require_replacement_in_trip_area(owned_trip, activity, req.latitude, req.longitude)
 
     day = db.query(ItineraryDayModel).filter(ItineraryDayModel.id == activity.day_id).first()
 
@@ -3968,6 +3988,8 @@ def execute_refinements_endpoint(
     try:
         res = execute_refinement_actions_service(db, trip_id, req.actions)
         return res
+    except PlaceOutsideTripArea:
+        raise   # 422 + error_code
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -3,6 +3,8 @@ import { useToast } from '../common/UndoToast';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { useTrip } from '../../features/trip/TripContext';
+import { useCanAddToTrip } from '../../features/trip/useCanAddToTrip';
+import { coordsFromPair } from '../../features/trip/tripArea';
 import { useHasActiveTrip } from '../../features/trip/useHasActiveTrip';
 import { useNavigation } from '../../context/NavigationContext';
 import { getApiBaseUrl, DEFAULT_FETCH_OPTIONS, getAuthHeaders, fetchWithAuth } from '../../config/apiConfig';
@@ -30,6 +32,9 @@ export const ExplorePage: React.FC = () => {
   const liveLocationCity = sanitizeLocationName(userLocationName);
   const liveCityName = liveLocationCity;
   const hasActiveTrip = useHasActiveTrip();
+  const addToTrip = useCanAddToTrip();
+  const addStateFor = (item: ActivityItem | EventItem) =>
+    addToTrip({ id: item.id, name: item.title, ...coordsFromPair(item.coordinates) }, addedItemDays.get(item.id));
 
   // Context switch state: 'gps' or 'trip'
   const [contextMode, setContextMode] = useState<'gps' | 'trip'>('gps');
@@ -258,6 +263,7 @@ export const ExplorePage: React.FC = () => {
       title: selectedPlaceForModal.title || selectedPlaceForModal.name,
       location: loc,
       location_name: loc,
+      ...coordsFromPair(selectedPlaceForModal.coordinates),
       tag: selectedPlaceForModal.tag || selectedPlaceForModal.category || 'spotlight',
       price: priceStr,
       estimated_cost_inr: costInt,
@@ -451,7 +457,9 @@ export const ExplorePage: React.FC = () => {
           </div>
 
           <div className="w-full max-w-full flex gap-4 overflow-x-auto no-scrollbar pb-2">
-            {spotlightEvents.map((evt) => (
+            {spotlightEvents.map((evt) => {
+              const add = addStateFor(evt);
+              return (
               <div
                 key={evt.id}
                 className="w-64 max-w-full shrink-0 rounded-2xl bg-(--color-surface) border border-(--color-border) overflow-hidden shadow-sm space-y-2 p-3"
@@ -470,19 +478,21 @@ export const ExplorePage: React.FC = () => {
                     <Clock className="w-3 h-3 text-(--color-text-secondary)" /> {evt.date} • {evt.time}
                   </p>
                   <p className="text-[11px] text-(--color-primary) font-semibold mt-1">₹{evt.price} per ticket</p>
-                  {contextMode === 'trip' && hasActiveTrip && (
+                  {contextMode === 'trip' && add.hint && <p className="text-[11px] text-(--color-text-secondary) mt-1">{add.hint}</p>}
+                  {contextMode === 'trip' && add.showAdd && (
                     <button
                       type="button"
+                      disabled={!add.canAdd}
                       onClick={() => setSelectedPlaceForModal(evt)}
                       className={`w-full mt-2 py-1.5 px-3 rounded-xl font-semibold text-xs flex items-center justify-center gap-1.5 transition-all press-scale ${
-                        addedItemDays.has(evt.id)
+                        add.addedDay !== undefined
                           ? 'bg-(--color-primary-glow) text-(--color-primary) border border-(--color-primary)'
                           : 'bg-(--color-primary) hover:brightness-95 text-white dark:text-zinc-950 shadow-xs'
                       }`}
                     >
-                      {addedItemDays.has(evt.id) ? (
+                      {add.addedDay !== undefined ? (
                         <>
-                          <Check className="w-3.5 h-3.5 stroke-[3]" /> Added to Day {addedItemDays.get(evt.id)}
+                          <Check className="w-3.5 h-3.5 stroke-[3]" /> Added to Day {add.addedDay}
                         </>
                       ) : (
                         <>
@@ -494,7 +504,8 @@ export const ExplorePage: React.FC = () => {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -531,6 +542,10 @@ export const ExplorePage: React.FC = () => {
               }
 
               const isFocusTarget = exploreFocusTarget?.placeId === act.id;
+              const add = addStateFor(act);
+              // Trip mode without Add: Save place takes its room.
+              const wideSave = contextMode === 'trip' && hasActiveTrip && !add.showAdd;
+              const isSaved = savedPlaceIds.has(act.id);
 
               return (
                 <div
@@ -592,12 +607,13 @@ export const ExplorePage: React.FC = () => {
                       {act.description}
                     </p>
 
+                    {contextMode === 'trip' && add.hint && <p className="text-[11px] text-(--color-text-secondary)">{add.hint}</p>}
                     <div className="flex flex-wrap items-center justify-between pt-3 border-t border-(--color-border) text-xs gap-2">
                       <span className="font-semibold text-(--color-primary)">
                         {act.cost > 0 ? `Est. ₹${act.cost}` : 'Free Entry'}
                       </span>
 
-                      <div className="flex flex-wrap items-center gap-1.5">
+                      <div className={`flex flex-wrap items-center gap-1.5 ${wideSave ? 'w-full' : ''}`}>
                         {/* 1. Navigate / Directions (Both Modes) */}
                         <button
                           onClick={() => handleNavigate(act)}
@@ -610,15 +626,16 @@ export const ExplorePage: React.FC = () => {
                         {/* 2. Save Place / Bookmark (Both Modes) */}
                         <button
                           onClick={() => handleToggleSave(act)}
-                          className={`p-2 rounded-xl border transition-all press-scale ${savedPlaceIds.has(act.id)
+                          className={`rounded-xl border transition-all press-scale ${wideSave ? 'order-last basis-full min-h-[44px] px-3 font-semibold text-xs flex items-center justify-center gap-1.5' : 'p-2'} ${isSaved
                               ? 'bg-(--color-primary-glow) text-(--color-primary) border-(--color-primary)'
                               : 'bg-(--color-surface-elevated) hover:bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-(--color-text-primary) border-(--color-border)'
                             }`}
                           aria-label="Save Place"
-                          aria-pressed={savedPlaceIds.has(act.id)}
-                          title={savedPlaceIds.has(act.id) ? 'Saved' : 'Save Place'}
+                          aria-pressed={isSaved}
+                          title={isSaved ? 'Saved' : 'Save Place'}
                         >
-                          <Bookmark className={`w-3.5 h-3.5 ${savedPlaceIds.has(act.id) ? 'fill-current text-(--color-primary)' : ''}`} />
+                          <Bookmark className={`w-3.5 h-3.5 ${isSaved ? 'fill-current text-(--color-primary)' : ''}`} />
+                          {wideSave && (isSaved ? 'Saved' : 'Save place')}
                         </button>
 
                         {/* 3. Ask AI (Both Modes) */}
@@ -630,18 +647,19 @@ export const ExplorePage: React.FC = () => {
                           <Sparkles className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300" />
                         </button>
 
-                        {/* 4. Add to Itinerary (only in trip mode, and only while a trip is open) */}
-                        {contextMode === 'trip' && hasActiveTrip && (
+                        {/* 4. Add to Itinerary (only in trip mode, for places in the open trip's area) */}
+                        {contextMode === 'trip' && add.showAdd && (
                           <button
+                            disabled={!add.canAdd}
                             onClick={() => setSelectedPlaceForModal(act)}
-                            className={`px-3 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-all press-scale ${addedItemDays.has(act.id)
+                            className={`px-3 py-2 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-all press-scale ${add.addedDay !== undefined
                                 ? 'bg-(--color-primary-glow) text-(--color-primary) border border-(--color-primary)'
                                 : 'bg-(--color-primary) hover:brightness-95 text-white dark:text-zinc-950 shadow-sm'
                               }`}
                           >
-                            {addedItemDays.has(act.id) ? (
+                            {add.addedDay !== undefined ? (
                               <>
-                                <Check className="w-3.5 h-3.5 stroke-[3]" /> Added to Day {addedItemDays.get(act.id)}
+                                <Check className="w-3.5 h-3.5 stroke-[3]" /> Added to Day {add.addedDay}
                               </>
                             ) : (
                               <>
