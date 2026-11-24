@@ -65,10 +65,15 @@ export interface EventItem {
   location: string;
   coordinates: [number, number];
   category: string;
-  image: string;
+  /** Set by the server (Google place photo proxy, Wikimedia or Pexels); null = show the placeholder. */
+  image: string | null;
   price: number;
   description: string;
   tag?: string;
+  photoSource?: string | null;
+  photoCredit?: string | null;
+  photoCreditUrl?: string | null;
+  placeId?: string;
 }
 
 export interface ActivityItem {
@@ -87,6 +92,10 @@ export interface ActivityItem {
   isCompleted?: boolean;
   tag?: string;
   rating?: number;
+  photoSource?: string | null;
+  photoCredit?: string | null;
+  photoCreditUrl?: string | null;
+  placeId?: string;
 }
 
 export interface ItineraryDay {

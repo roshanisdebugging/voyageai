@@ -205,6 +205,8 @@ ai_chat_limiter = UserRateLimiter(requests=20, window_seconds=60, key_prefix="rl
 tts_limiter = UserRateLimiter(requests=15, window_seconds=60, key_prefix="rl:ai:tts", fail_closed=True)
 
 places_limiter = UserRateLimiter(requests=60, window_seconds=60, key_prefix="rl:places", allow_guest=True)
+# Place photos through our proxy (each one is a paid Google Place Photo call; the browser caches them for 1 h).
+place_photo_limiter = UserRateLimiter(requests=120, window_seconds=60, key_prefix="rl:places:photo", allow_guest=True)
 # Google Routes (paid; the demo key pauses at its daily limit): login required, fails closed.
 routes_limiter = UserRateLimiter(requests=20, window_seconds=60, key_prefix="rl:routes", fail_closed=True)
 osm_limiter = places_limiter
@@ -1721,6 +1723,26 @@ async def places_details(place_id: str):
     if not detail:
         raise HTTPException(status_code=404, detail="Place details not found.")
     return detail
+
+@app.get("/api/place-photo", dependencies=[Depends(place_photo_limiter)])
+def place_photo(name: str = Query(""), w: str = Query("800"), sig: str = Query("")):
+    """
+    One Google place photo, proxied so the API key never reaches the browser. Only photo names this server handed
+    out are served: "places/<id>/photos/<ref>" plus an HMAC signature (no open proxy). Width capped at 1600 px.
+    Bytes are never stored; the browser may keep them for 1 hour (private).
+    """
+    import image_service as img
+    try:
+        data, ctype = img.fetch_place_photo(name, w, sig)
+    except img.PhotoNotAllowed:
+        raise HTTPException(status_code=400, detail="Invalid photo request.")
+    except img.PhotoNotFound:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+    except img.PhotoUnavailable:
+        raise HTTPException(status_code=503, detail="Photo isn't available right now.")
+    return Response(content=data, media_type=ctype, headers={
+        "Cache-Control": img.PHOTO_CACHE_CONTROL, "X-Content-Type-Options": "nosniff"})
+
 
 class LatLng(BaseModel):
     lat: float

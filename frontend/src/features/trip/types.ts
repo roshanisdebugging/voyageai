@@ -15,9 +15,13 @@ export interface DestinationReference {
 }
 
 export interface CoverMedia {
+  /** "" when there is no picture (provider "none"): the app shows a placeholder. */
   url: string;
   alt: string;
+  /** catalog | wikipedia | pexels | none ("fallback" on older trips: ignored). */
   provider: string;
+  credit?: string | null;
+  creditUrl?: string | null;
 }
 
 export interface TripTraveler {

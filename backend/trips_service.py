@@ -64,7 +64,8 @@ def generate_live_destination_highlights(
                 if isinstance(cached, bytes):
                     cached = cached.decode("utf-8")
                 print(f"[CACHE HIT] Loaded genuine data for {clean_dest} (Key: {cache_key})", flush=True)
-                return json.loads(cached)
+                # The cache holds text only (older entries may still carry model-made URLs: dropped here).
+                return attach_highlight_images(strip_model_images(json.loads(cached)), clean_dest)
         except Exception as e:
             print(f"[REDIS READ ERROR] {e}", flush=True)
 
@@ -94,7 +95,6 @@ Return strictly valid JSON matching this exact schema:
       "duration": "2 hours",
       "location": "Specific street or neighborhood, {clean_dest}",
       "coordinates": [{lat}, {lng}],
-      "photos": ["https://images.unsplash.com/photo-1599661046289-e31897846e41?auto=format&fit=crop&w=600&q=80"],
       "description": "Authentic description of what to see and experience here."
     }}
   ],
@@ -108,7 +108,6 @@ Return strictly valid JSON matching this exact schema:
       "location": "Exact venue or area, {clean_dest}",
       "category": "Festival | Music | Culture",
       "tag": "Live Experience",
-      "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=600&q=80",
       "description": "Short vivid description of the event vibe."
     }}
   ]
@@ -136,7 +135,6 @@ Return strictly valid JSON matching this exact schema:
       "duration": "2 hours",
       "location": "Specific street or neighborhood, {clean_dest}",
       "coordinates": [26.9124, 75.7873],
-      "photos": ["https://images.unsplash.com/photo-1599661046289-e31897846e41?auto=format&fit=crop&w=600&q=80"],
       "description": "Authentic description of what to see and experience here."
     }}
   ],
@@ -150,7 +148,6 @@ Return strictly valid JSON matching this exact schema:
       "location": "Exact venue or area, {clean_dest}",
       "category": "Festival | Music | Culture",
       "tag": "Live Experience",
-      "image": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&w=600&q=80",
       "description": "Short vivid description of the event vibe."
     }}
   ]
@@ -177,16 +174,80 @@ Provide 5 diverse real activities and 2 real events. Replace [26.9124, 75.7873] 
     parsed_data["overview"] = parsed_data.get("overview", f"Discover top attractions and local culture in {clean_dest}.")
     parsed_data["activities"] = parsed_data.get("activities", parsed_data.get("famous_activities", []))
     parsed_data["events"] = parsed_data.get("events", parsed_data.get("upcoming_events", []))
+    strip_model_images(parsed_data)   # the model is no longer asked for pictures; drop any URL it still returns
 
     # 2. Store genuine result in Redis (48 hours TTL = 172800 seconds)
     if redis_conn:
         try:
-            redis_conn.setex(cache_key, SPOTLIGHT_CACHE_TTL, json.dumps(parsed_data))
+            redis_conn.setex(cache_key, SPOTLIGHT_CACHE_TTL, json.dumps(parsed_data))   # text only: no pictures yet
             print(f">>> [REDIS SPOTLIGHT CACHED] Saved genuine key: {cache_key} (48h TTL)", flush=True)
         except Exception as e:
             print(f"[REDIS SAVE ERROR] {e}", flush=True)
 
-    return parsed_data
+    return attach_highlight_images(parsed_data, clean_dest)
+
+
+# Picture fields the model must never fill: they are set server-side by attach_highlight_images.
+MODEL_IMAGE_FIELDS = ("photos", "image", "images", "photo", "imageUrl", "image_url", "thumbnail",
+                      "photoCredit", "photoCreditUrl", "photoSource", "placeId")
+
+
+def strip_model_images(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Removes every picture field from activities and events (in place) and returns data."""
+    for key in ("activities", "events"):
+        items = data.get(key)
+        if not isinstance(items, list):
+            data[key] = []
+            continue
+        data[key] = [it for it in items if isinstance(it, dict)]
+        for it in data[key]:
+            for field in MODEL_IMAGE_FIELDS:
+                it.pop(field, None)
+    return data
+
+
+def _coords_of(item: Dict[str, Any]):
+    c = item.get("coordinates")
+    if isinstance(c, (list, tuple)) and len(c) == 2:
+        return c[0], c[1]
+    return item.get("lat") or item.get("latitude"), item.get("lng") or item.get("longitude")
+
+
+def attach_highlight_images(data: Dict[str, Any], destination: str) -> Dict[str, Any]:
+    """
+    Real pictures (image_service: Google, then Wikipedia, then Pexels for broad categories) for up to 7 items:
+    activities first, then events. Activities get photos=[url] or [], events image=url or None, both with
+    photoCredit / photoCreditUrl / photoSource. Image trouble never fails the highlights.
+    """
+    activities, events = data.get("activities") or [], data.get("events") or []
+    for act in activities:
+        act["photos"], act["photoCredit"], act["photoCreditUrl"], act["photoSource"] = [], None, None, None
+    for evt in events:
+        evt["image"], evt["photoCredit"], evt["photoCreditUrl"], evt["photoSource"] = None, None, None, None
+    try:
+        import image_service
+        targets = [("act", a) for a in activities] + [("evt", e) for e in events]
+        targets = targets[:image_service.MAX_LOOKUPS]
+        requests_ = []
+        for kind, it in targets:
+            lat, lng = _coords_of(it)
+            title = it.get("title") or it.get("name") or ""
+            requests_.append({"title": title, "destination": data.get("destination") or destination,
+                              "lat": lat, "lng": lng, "category": it.get("category")})
+        found = image_service.resolve_many(requests_)
+        for (kind, it), img in zip(targets, found):
+            if not img:
+                continue
+            if kind == "act":
+                it["photos"] = [img["url"]]
+            else:
+                it["image"] = img["url"]
+            it["photoCredit"], it["photoCreditUrl"], it["photoSource"] = img.get("credit"), img.get("credit_url"), img["source"]
+            if img.get("place_id"):
+                it["placeId"] = img["place_id"]
+    except Exception as e:
+        print(f"[IMAGES] highlights pictures skipped: {type(e).__name__}", flush=True)
+    return data
 
 # Alias for backward compatibility
 def get_destination_spotlight(dest_name: str, redis_client=None) -> Dict[str, Any]:
