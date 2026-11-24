@@ -8,8 +8,13 @@ Settings (backend/.env):
   OPENAI_REASONING_EFFORT  optional override for every call (none|minimal|low|medium|high|xhigh|max);
                            unset = each caller's own value, which is "low"
 
-reasoning_effort is sent on every call. A model that does not take it (OpenAI answers HTTP 400,
-code unsupported_parameter) is retried once without it, then remembered for this process.
+reasoning_effort is sent only to models that take it, decided up front from the model name
+(supports_reasoning_effort: o-series, gpt-5*, gpt-oss*; never gpt-4*), so no first request is wasted.
+OPENAI_REASONING_EFFORT changes the value, never which models get it. Safety net: a model that still rejects it
+(HTTP 400 naming reasoning_effort) is retried once without it, then remembered for this process.
+
+The same code also talks to Groq's OpenAI-compatible endpoint (itinerary fallback only): pass url=GROQ_CHAT_URL,
+api_key=groq_api_key(), model=groq_model().
 """
 import json as _json
 import logging
@@ -23,6 +28,25 @@ logger = logging.getLogger("voyageai.openai")
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+# llama-3.3-70b-versatile is no longer in Groq's model list (checked 24 Nov 2026); gpt-oss-120b is, with JSON mode.
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+
+# Model families that take reasoning_effort. Anything else (gpt-4*, gpt-3.5*, llama, ...) never gets it.
+_EFFORT_PREFIXES = ("o1", "o3", "o4", "gpt-5", "gpt-oss", "openai/gpt-oss")
+
+
+def supports_reasoning_effort(model: str) -> bool:
+    m = (model or "").strip().lower()
+    return m.startswith(_EFFORT_PREFIXES)
+
+
+def groq_model() -> str:
+    return (os.getenv("GROQ_MODEL") or DEFAULT_GROQ_MODEL).strip()
+
+
+def groq_api_key() -> str:
+    return (os.getenv("GROQ_API_KEY") or "").strip()
 
 # Models that rejected reasoning_effort. Per process; the skip is logged once per model.
 _NO_REASONING_EFFORT: Set[str] = set()
@@ -103,23 +127,25 @@ def _error_fields(res) -> Dict[str, str]:
     return {"code": "", "param": "", "effort": False}
 
 
-def _post(body: Dict[str, Any], timeout: Any, effort: Optional[str], *, request_error=LLMError, stream: bool = False):
-    """POST one chat request. Adds reasoning_effort, and retries once without it if the model rejects it.
-    stream=True asks requests not to read the body yet (used by chat_stream)."""
-    api_key = _api_key()
+def _post(body: Dict[str, Any], timeout: Any, effort: Optional[str], *, request_error=LLMError, stream: bool = False,
+          url: str = OPENAI_CHAT_URL, api_key: Optional[str] = None):
+    """POST one chat request. Adds reasoning_effort only for models that take it (and retries once without it if
+    the model rejects it anyway). stream=True asks requests not to read the body yet (used by chat_stream).
+    url / api_key: another OpenAI-compatible endpoint (Groq); default OpenAI with OPENAI_API_KEY."""
+    api_key = api_key or _api_key()
     model = body["model"]
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    send_effort = effort if (effort and model not in _NO_REASONING_EFFORT) else None
+    send_effort = effort if (effort and supports_reasoning_effort(model) and model not in _NO_REASONING_EFFORT) else None
     for _attempt in range(2):
         payload = dict(body)
         if send_effort:
             payload["reasoning_effort"] = send_effort
         try:
             if stream:
-                res = requests.post(OPENAI_CHAT_URL, headers=headers, json=payload, timeout=timeout, stream=True)
+                res = requests.post(url, headers=headers, json=payload, timeout=timeout, stream=True)
             else:
-                res = requests.post(OPENAI_CHAT_URL, headers=headers, json=payload, timeout=timeout)
+                res = requests.post(url, headers=headers, json=payload, timeout=timeout)
         except requests.RequestException as exc:
             raise request_error(f"OpenAI request failed: {type(exc).__name__}", code=type(exc).__name__,
                                 model=model) from exc
@@ -135,12 +161,12 @@ def _post(body: Dict[str, Any], timeout: Any, effort: Optional[str], *, request_
     return res  # pragma: no cover (the loop always returns)
 
 
-def _raise_for_status(res, *, transient_5xx: bool) -> None:
+def _raise_for_status(res, *, transient_5xx: bool, model: Optional[str] = None) -> None:
     if res.status_code == 200:
         return
     fields = _error_fields(res)
     code = _safe_code(fields["code"])
-    model = llm_model()
+    model = model or llm_model()
     if res.status_code == 429:
         raise LLMRateLimited("OpenAI rate limit reached", status=429, code=code, model=model,
                              retry_after=_retry_after(res))
@@ -158,28 +184,33 @@ def chat(
     response_format: Optional[Dict[str, Any]] = None,
     max_completion_tokens: Optional[int] = None,
     reasoning_effort: Optional[str] = "low",
+    model: Optional[str] = None,
+    url: str = OPENAI_CHAT_URL,
+    api_key: Optional[str] = None,
 ) -> str:
-    """Returns the assistant message text. Raises LLMError / LLMRateLimited."""
-    body: Dict[str, Any] = {"model": llm_model(), "messages": messages, "temperature": temperature}
+    """Returns the assistant message text. Raises LLMError / LLMRateLimited.
+    timeout: seconds, or a (connect, read) tuple. model/url/api_key: another OpenAI-compatible endpoint (Groq)."""
+    model = model or llm_model()
+    body: Dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
     if response_format:
         body["response_format"] = response_format
     if max_completion_tokens:
         body["max_completion_tokens"] = max_completion_tokens
 
-    res = _post(body, timeout, _effort(reasoning_effort))
-    _raise_for_status(res, transient_5xx=False)
+    res = _post(body, timeout, _effort(reasoning_effort), url=url, api_key=api_key)
+    _raise_for_status(res, transient_5xx=False, model=model)
 
     try:
         choice = res.json()["choices"][0]
         content = (choice.get("message") or {}).get("content") or ""
     except (ValueError, KeyError, IndexError) as exc:
         raise LLMError("OpenAI returned an unexpected response", status=200, code="unexpected_response",
-                       model=llm_model()) from exc
+                       model=model) from exc
     if choice.get("finish_reason") not in (None, "stop"):
         reason = _safe_code(choice.get("finish_reason")) or "unknown"
-        raise LLMError(f"OpenAI answer incomplete ({reason})", status=200, code=f"incomplete_{reason}", model=llm_model())
+        raise LLMError(f"OpenAI answer incomplete ({reason})", status=200, code=f"incomplete_{reason}", model=model)
     if not content.strip():
-        raise LLMError("OpenAI returned an empty answer", status=200, code="empty_answer", model=llm_model())
+        raise LLMError("OpenAI returned an empty answer", status=200, code="empty_answer", model=model)
     return content.strip()
 
 
@@ -298,13 +329,19 @@ def chat_tools(
     return {"content": content, "tool_calls": calls}
 
 
-def chat_json(prompt: str, *, temperature: float = 0.2, timeout: float = 30,
-              reasoning_effort: Optional[str] = "low") -> str:
-    """One user prompt in, a JSON string out (JSON mode)."""
+def chat_json(prompt: str, *, temperature: float = 0.2, timeout: Any = 30,
+              reasoning_effort: Optional[str] = "low", model: Optional[str] = None,
+              url: str = OPENAI_CHAT_URL, api_key: Optional[str] = None,
+              max_completion_tokens: Optional[int] = None) -> str:
+    """One user prompt in, a JSON string out (JSON mode). model/url/api_key: see chat()."""
     return chat(
         [{"role": "user", "content": prompt}],
         temperature=temperature,
         timeout=timeout,
         response_format={"type": "json_object"},
+        max_completion_tokens=max_completion_tokens,
         reasoning_effort=reasoning_effort,
+        model=model,
+        url=url,
+        api_key=api_key,
     )
