@@ -14,7 +14,6 @@ export interface CategoryStyle {
   ring: string;
   dot: string;
   shadow: string;
-  coverImage: string;
 }
 
 export const MAP_CATEGORY_CONFIG: Record<string, CategoryStyle> = {
@@ -27,7 +26,6 @@ export const MAP_CATEGORY_CONFIG: Record<string, CategoryStyle> = {
     ring: '#D9A15A',
     dot: '#B5762A',
     shadow: '0 2px 10px rgba(15, 23, 42, 0.18)',
-    coverImage: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=400&q=80',
   },
   sights: {
     id: 'sights',
@@ -38,7 +36,6 @@ export const MAP_CATEGORY_CONFIG: Record<string, CategoryStyle> = {
     ring: '#C68B63',
     dot: '#A9663F',
     shadow: '0 2px 10px rgba(15, 23, 42, 0.18)',
-    coverImage: 'https://images.unsplash.com/photo-1564507592333-c60657eea523?auto=format&fit=crop&w=400&q=80',
   },
   culture: {
     id: 'culture',
@@ -49,7 +46,6 @@ export const MAP_CATEGORY_CONFIG: Record<string, CategoryStyle> = {
     ring: '#A797BE',
     dot: '#7C6A9C',
     shadow: '0 2px 10px rgba(15, 23, 42, 0.18)',
-    coverImage: 'https://images.unsplash.com/photo-1564507592333-c60657eea523?auto=format&fit=crop&w=400&q=80',
   },
   hotels: {
     id: 'hotels',
@@ -60,7 +56,6 @@ export const MAP_CATEGORY_CONFIG: Record<string, CategoryStyle> = {
     ring: '#8C99B5',
     dot: '#5C6B8C',
     shadow: '0 2px 10px rgba(15, 23, 42, 0.18)',
-    coverImage: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=400&q=80',
   },
   experiences: {
     id: 'experiences',
@@ -71,7 +66,6 @@ export const MAP_CATEGORY_CONFIG: Record<string, CategoryStyle> = {
     ring: '#82AC9E',
     dot: '#4F8272',
     shadow: '0 2px 10px rgba(15, 23, 42, 0.18)',
-    coverImage: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&w=400&q=80',
   },
   all: {
     id: 'all',
@@ -82,7 +76,6 @@ export const MAP_CATEGORY_CONFIG: Record<string, CategoryStyle> = {
     ring: '#1F5A3F',
     dot: '#1F5A3F',
     shadow: '0 2px 10px rgba(15, 23, 42, 0.18)',
-    coverImage: 'https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&w=400&q=80',
   }
 };
 
@@ -144,12 +137,4 @@ export const getCategoryConfig = (category: string, name: string = ''): Category
   if (cat === 'all') return MAP_CATEGORY_CONFIG.all;
   const canonical = getCanonicalCategory(category, name);
   return MAP_CATEGORY_CONFIG[canonical] || MAP_CATEGORY_CONFIG.sights;
-};
-
-/**
- * Returns high-quality cover photo URL based on category.
- */
-export const getPlaceImage = (category: string, name?: string): string => {
-  const cfg = getCategoryConfig(category, name);
-  return cfg.coverImage;
 };

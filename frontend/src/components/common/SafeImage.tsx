@@ -1,51 +1,44 @@
 import React, { useState } from 'react';
-import { optimizeUnsplashUrl } from '../../utils/imageUtils';
+import { resolveImageUrl } from '../../utils/imageUtils';
+import { pickImageSrc } from '../../utils/imageSources';
+import { ImagePlaceholder } from './ImagePlaceholder';
 
-interface SafeImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
-  fallbackSrc?: string;
+interface SafeImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
+  src?: string | null;
+  /** Category for the placeholder icon. */
+  category?: string | null;
+  /** Name shown on the placeholder (defaults to alt). */
+  placeholderName?: string;
   containerClassName?: string;
 }
 
 /**
- * Safe Image component that handles broken image URLs gracefully without displaying broken browser icons.
+ * An image that never shows a broken-image icon and never swaps in a random photo: no src, or a src that fails
+ * to load, renders <ImagePlaceholder> (gradient + category icon + name).
  */
 export const SafeImage: React.FC<SafeImageProps> = ({
   src,
   alt = 'Image',
   className = 'w-full h-full object-cover',
-  fallbackSrc = 'https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?auto=format&fit=crop&w=600&q=80',
+  category,
+  placeholderName,
   containerClassName = '',
   ...props
 }) => {
-  const [hasError, setHasError] = useState(false);
-  const resolvedFallback = optimizeUnsplashUrl(fallbackSrc, 600, 80);
-  const resolvedSrc = src ? optimizeUnsplashUrl(src, 600, 80) : resolvedFallback;
-  const [currentSrc, setCurrentSrc] = useState(resolvedSrc);
+  const resolved = resolveImageUrl(src);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const current = pickImageSrc(resolved, failedSrc);
 
-  const handleError = () => {
-    if (!hasError) {
-      setHasError(true);
-      setCurrentSrc(resolvedFallback);
-    }
-  };
-
-  if (hasError && currentSrc === resolvedFallback) {
-    // Render gradient banner if fallback also fails or network offline
-    return (
-      <div className={`w-full h-full bg-gradient-to-br from-[#1F2522] via-[#2C504A] to-[#355F58] flex items-center justify-center p-3 text-center ${containerClassName}`}>
-        <span className="text-white font-extrabold text-xs tracking-wider uppercase opacity-90 truncate max-w-full">
-          {alt}
-        </span>
-      </div>
-    );
+  if (!current) {
+    return <ImagePlaceholder name={placeholderName ?? alt} category={category} className={containerClassName} />;
   }
 
   return (
     <img
-      src={currentSrc || fallbackSrc}
+      src={current}
       alt={alt}
       className={className}
-      onError={handleError}
+      onError={() => setFailedSrc(current)}
       loading="lazy"
       decoding="async"
       {...props}

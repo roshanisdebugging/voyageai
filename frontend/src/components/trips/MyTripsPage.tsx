@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTrip } from '../../features/trip/TripContext';
 import { isPastTrip } from '../../features/trip/tripRepository';
-import { getTripCoverImage } from '../../utils/imageUtils';
+import { getTripCover } from '../../utils/imageUtils';
+import { ImageCredit } from '../common/ImageCredit';
 import { SafeImage } from '../common/SafeImage';
 import {
   Calendar, MapPin, Plus, AlertTriangle, Archive, Trash2, ArrowRight
@@ -205,12 +206,22 @@ export const MyTripsPage: React.FC = () => {
               >
                 {/* Cover Image */}
                 <div className="relative h-44 w-full overflow-hidden bg-(--color-surface-elevated)">
-                  <SafeImage
-                    src={getTripCoverImage(trip)}
-                    alt={trip.title}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-(--color-surface) via-(--color-surface)/30 to-transparent" />
+                  {(() => {
+                    const cover = getTripCover(trip);
+                    return (
+                      <>
+                        <SafeImage
+                          src={cover.url}
+                          alt={trip.title}
+                          placeholderName={trip.destination?.name || trip.title}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-(--color-surface) via-(--color-surface)/30 to-transparent" />
+                        <ImageCredit source={cover.source} credit={cover.credit} creditUrl={cover.creditUrl}
+                          className="absolute top-2 right-2 max-w-[70%]" />
+                      </>
+                    );
+                  })()}
                   
                   <div className="absolute inset-x-3 bottom-2 flex flex-wrap items-center gap-2">
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider backdrop-blur-md ${

@@ -15,6 +15,8 @@ import { AddToItineraryModal, type ItineraryDayOption } from '../itinerary/AddTo
 import { sanitizeLocationName } from '../../utils/locationSanitizer';
 import { isMockPayload } from '../../utils/mockIndicator';
 import { MockCardAlert } from '../common/MockCardAlert';
+import { SafeImage } from '../common/SafeImage';
+import { ImageCredit } from '../common/ImageCredit';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import { fetchSavedPlaces, savePlaceThunk, unsavePlaceThunk } from '../../store/reducers/savedPlacesSlice';
 
@@ -455,7 +457,9 @@ export const ExplorePage: React.FC = () => {
                 className="w-64 max-w-full shrink-0 rounded-2xl bg-(--color-surface) border border-(--color-border) overflow-hidden shadow-sm space-y-2 p-3"
               >
                 <div className="h-32 rounded-xl overflow-hidden relative bg-(--color-surface-elevated)">
-                  <img src={evt.image} alt={evt.title} className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                  <SafeImage src={evt.image} alt={evt.title} category={evt.category} />
+                  <ImageCredit source={evt.photoSource} credit={evt.photoCredit} creditUrl={evt.photoCreditUrl}
+                    className="absolute bottom-1.5 right-1.5 max-w-[calc(100%-12px)]" />
                   <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-(--color-surface) text-[10px] font-semibold text-(--color-primary) border border-(--color-border)">
                     {evt.tag || evt.category}
                   </span>
@@ -539,14 +543,16 @@ export const ExplorePage: React.FC = () => {
                 >
                   {/* Card Cover Image with Gradient Overlay */}
                   <div className="h-48 relative overflow-hidden bg-(--color-surface-elevated)">
-                    <img
-                      src={act.photos?.[0] || getFallbackImage(act.category)}
+                    <SafeImage
+                      src={act.photos?.[0]}
                       alt={act.title}
+                      category={act.category}
+                      placeholderName=""
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                      loading="lazy"
-                      decoding="async"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-black via-black/65 to-transparent" />
+                    <ImageCredit source={act.photoSource} credit={act.photoCredit} creditUrl={act.photoCreditUrl}
+                      className="absolute top-12 right-3 max-w-[60%]" />
 
                     <div className="absolute inset-x-3 top-3 flex items-start justify-between gap-1">
                       {/* Tag Pill */}
@@ -692,20 +698,5 @@ export const ExplorePage: React.FC = () => {
     </div>
   );
 };
-
-// Fallback image provider
-function getFallbackImage(category: string): string {
-  const cat = (category || '').toLowerCase();
-  if (cat.includes('food') || cat.includes('culinary')) {
-    return 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=600&q=80';
-  }
-  if (cat.includes('beach') || cat.includes('sights')) {
-    return 'https://images.unsplash.com/photo-1512343879784-a960bf40e7f2?auto=format&fit=crop&w=600&q=80';
-  }
-  if (cat.includes('culture') || cat.includes('heritage')) {
-    return 'https://images.unsplash.com/photo-1548013146-72479768bada?auto=format&fit=crop&w=600&q=80';
-  }
-  return 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=600&q=80';
-}
 
 
