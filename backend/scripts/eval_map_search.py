@@ -33,6 +33,9 @@ class MemCache:
     async def set(self, key, value, ttl_seconds=0):
         self.d[key] = value
 
+    async def ttl_left(self, key):
+        return -1 if key in self.d else None
+
 
 gms.cache = MemCache()
 

@@ -42,6 +42,7 @@ from redis_client import redis_conn  # noqa: E402
 import image_service as IS  # noqa: E402
 import media_service as MS  # noqa: E402
 import trips_service as TS  # noqa: E402
+from services import google_maps_service as gms  # noqa: E402
 
 main.SessionLocal = database.SessionLocal
 database.Base.metadata.create_all(bind=database.engine)
@@ -79,6 +80,9 @@ class FakeRedis:
 
     def expire(self, k, ttl):
         pass
+
+    def ttl(self, k):
+        return -1 if k in self.d else -2
 
     def keys_like(self, prefix):
         return [k for k in self.d if k.startswith(prefix)]
@@ -425,7 +429,7 @@ check("network errors -> None, never raises", IS.resolve_place_image("Hawa Mahal
 fresh()
 NET.google = lambda payload: Res(429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded per day"}})
 IS.resolve_place_image("Hawa Mahal", "Jaipur", 26.9, 75.8, "Sights")
-check("Google quota -> textsearch paused", FAKE_REDIS.get("gmaps:paused:textsearch") is not None)
+check("Google quota -> textsearch paused", FAKE_REDIS.get(gms.pause_key("textsearch")) is not None)
 NET.calls.clear()
 IS.resolve_place_image("Amber Fort", "Jaipur", 26.98, 75.85, "Sights")
 check("while paused, no Google call", "places.googleapis.com" not in NET.hosts(), NET.hosts())
@@ -552,7 +556,7 @@ with TestClient(main.app) as client:
     check("proxy: over 4 MB -> 404", client.get(good_url).status_code == 404)
     NET.media = lambda params: Res(429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "per day"}})
     r = client.get(good_url)
-    check("proxy: Google quota -> 503 + photo paused", r.status_code == 503 and FAKE_REDIS.get("gmaps:paused:photo") is not None)
+    check("proxy: Google quota -> 503 + photo paused", r.status_code == 503 and FAKE_REDIS.get(gms.pause_key("photo")) is not None)
     NET.calls.clear()
     check("proxy: while paused, no Google call", client.get(good_url).status_code == 503 and NET.calls == [])
 

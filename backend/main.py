@@ -89,6 +89,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"⚠️ [REDIS CLEANUP WARN] {e}", flush=True)
 
+    # Which Google key is in use (name + fingerprint only) and which of its APIs are paused
+    from services.google_maps_service import status_line
+    print(await run_in_threadpool(status_line), flush=True)
+
     # STARTUP: Launch Pub/Sub listener as a concurrent background task
     listener_task = asyncio.create_task(
         start_redis_events_listener(broadcast_trip_update_to_clients)
