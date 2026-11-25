@@ -19,6 +19,7 @@ os.environ["DATABASE_URL"] = "postgresql://x:y@127.0.0.1:1/none"
 os.environ["AI_PROVIDER"] = "mock"
 os.environ["GOOGLE_MAPS_SERVER_KEY"] = "test-key-not-real"
 os.environ["PEXELS_API_KEY"] = "pexels-test-key-not-real"
+os.environ["GOOGLE_IMAGES_ENABLED"] = "true"       # sections 1-6: the Google path; section 7: the default (off)
 for old in ("GOOGLE_MAPS_API_KEY", "GOOGLE_MAP_DEMO_KEY"):
     os.environ.pop(old, None)
 
@@ -58,17 +59,21 @@ def check(name, cond, detail=""):
 class FakeRedis:
     def __init__(self):
         self.d = {}
+        self.touched = []         # every key read or written
 
     def get(self, k):
+        self.touched.append(k)
         return self.d.get(k)
 
     def set(self, k, v, ex=None):
+        self.touched.append(k)
         self.d[k] = v if isinstance(v, str) else str(v)
 
     def setex(self, k, ttl, v):
         self.d[k] = v
 
     def incr(self, k):
+        self.touched.append(k)
         self.d[k] = str(int(self.d.get(k) or 0) + 1)
         return int(self.d[k])
 
@@ -144,8 +149,10 @@ NET = Net()
 def fresh(reset_cache=True):
     global NET
     NET = Net()
+    FAKE_REDIS.touched.clear()
     if reset_cache:
         FAKE_REDIS.d.clear()
+        IS._wiki_blocked_until = 0.0
     return NET
 
 
@@ -548,6 +555,164 @@ with TestClient(main.app) as client:
     check("proxy: Google quota -> 503 + photo paused", r.status_code == 503 and FAKE_REDIS.get("gmaps:paused:photo") is not None)
     NET.calls.clear()
     check("proxy: while paused, no Google call", client.get(good_url).status_code == 503 and NET.calls == [])
+
+# ======================================================================= 7. GOOGLE_IMAGES_ENABLED off (the default)
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+
+def logged(fn):
+    """(result, the [IMAGES] lines it printed)"""
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out_ = fn()
+        IS.wait_background()
+    return out_, [ln for ln in buf.getvalue().splitlines() if ln.startswith(("[IMAGES]", "[GOOGLE", "[PLACE PHOTO]"))]
+
+
+def google_free():
+    return (not any("google" in h for h in NET.hosts())
+            and not any("gmaps:paused" in k or k.startswith("img:calls:") for k in FAKE_REDIS.touched))
+
+
+for val, want in (("true", True), ("1", True), ("TRUE", True), ("false", False), ("0", False), ("", False), ("junk", False)):
+    os.environ["GOOGLE_IMAGES_ENABLED"] = val
+    check(f"flag {val!r} -> {want}", IS.google_images_enabled() is want)
+os.environ.pop("GOOGLE_IMAGES_ENABLED")
+check("flag unset -> off (the default)", IS.google_images_enabled() is False)
+
+fresh()
+NET.google = google_place()                                 # Google WOULD have a photo
+NET.wiki_summary["Hawa Mahal, Jaipur"] = wiki_page("Hawa Mahal", 26.9239, 75.8267)
+r = IS.resolve_place_image("Hawa Mahal", "Jaipur", 26.92, 75.82, "Sights")
+check("off: named landmark -> Wikipedia first", r and r["source"] == "wikipedia", r)
+check("off: no Google request, no gmaps:paused:* read or write, no Google counter", google_free(), (NET.hosts(), FAKE_REDIS.touched))
+
+fresh()
+NET.google, NET.pexels = google_place(), PEXELS_HIT
+r = IS.resolve_place_image("Street food at Johari Bazaar", "Jaipur", 26.92, 75.82, "Food")
+hosts = NET.hosts()
+check("off: generic category -> Wikipedia, then Pexels", r and r["source"] == "pexels" and hosts[0] == "en.wikipedia.org"
+      and hosts[-1] == "api.pexels.com" and google_free(), hosts)
+
+fresh()
+NET.google, NET.pexels = google_place(), PEXELS_HIT
+r = IS.resolve_place_image("Amber Fort", "Jaipur", 26.98, 75.85, "Sights")
+check("off: named landmark, nothing on Wikipedia -> None, never Pexels", r is None and "api.pexels.com" not in NET.hosts() and google_free(), NET.hosts())
+
+fresh()
+NET.google = google_place()
+os.environ["PEXELS_API_KEY"] = ""
+r = IS.resolve_place_image("Street food", "Jaipur", 26.92, 75.82, "Food")
+os.environ["PEXELS_API_KEY"] = "pexels-test-key-not-real"
+check("off: generic, no PEXELS_API_KEY -> None", r is None and "api.pexels.com" not in NET.hosts() and google_free(), NET.hosts())
+
+fresh()
+NET.google, NET.pexels = google_place(), PEXELS_HIT
+m = MS.media_service.resolve_cover_media({"name": "Nowhereville", "latitude": 22.0, "longitude": 80.0})
+check("off: covers unchanged (Wikipedia, then Pexels)", m["provider"] == "pexels" and google_free(), m)
+
+fresh()
+FAKE_REDIS.d["gmaps:paused:textsearch"] = "true"            # a pause set by place search: left alone
+NET.wiki_summary["Hawa Mahal, Jaipur"] = wiki_page("Hawa Mahal", 26.9239, 75.8267)
+IS.resolve_place_image("Hawa Mahal", "Jaipur", 26.92, 75.82, "Sights")
+check("off: an existing pause flag is neither read nor changed", google_free() and FAKE_REDIS.d["gmaps:paused:textsearch"] == "true")
+
+fresh()
+found = IS._google_lookup("Hawa Mahal", "Jaipur", (26.92, 75.82), time.monotonic() + 2)
+check("off: even a direct _google_lookup makes no request", found == (None, None) and NET.calls == [] and google_free())
+
+fresh()
+os.environ["GOOGLE_IMAGES_ENABLED"] = "true"
+good_url = IS.photo_proxy_url(PHOTO_NAME, 800)
+os.environ["GOOGLE_IMAGES_ENABLED"] = "false"
+with TestClient(main.app) as client:
+    res = client.get(good_url)
+    check("off: /api/place-photo (an old link) -> 503, no Google call, no flag touched", res.status_code == 503 and NET.calls == [] and google_free(), res.status_code)
+    check("off: a bad photo name is still 400", client.get("/api/place-photo", params={"name": "x", "w": "800", "sig": "x"}).status_code == 400)
+
+
+# highlights: the log line, and a 429 that must not break them
+def fake_llm_goa(prompt, **kw):
+    return json.dumps({"destination": "Goa", "overview": "Beaches.",
+                       "activities": [{"id": f"a{i}", "title": t, "category": c, "coordinates": [15.5, 73.91]} for i, (t, c) in enumerate(
+                           [("Basilica of Bom Jesus", "Sights"), ("Fort Aguada", "Sights"), ("Goan fish thali", "Food"),
+                            ("Se Cathedral", "Culture"), ("Chapora Fort", "Sights")])],
+                       "events": [{"id": "e1", "title": "Shigmo", "category": "Festival"}, {"id": "e2", "title": "Goa Carnival", "category": "Festival"}]})
+
+
+def goa():
+    with mock.patch.object(ai_provider, "complete_json", fake_llm_goa):
+        return TS.generate_live_destination_highlights("Goa")
+
+
+fresh()
+NET.google, NET.pexels = google_place(), PEXELS_HIT
+NET.wiki_summary["Basilica of Bom Jesus, Goa"] = wiki_page("Basilica of Bom Jesus", 15.5009, 73.9116)
+out, lines = logged(goa)
+check("off: highlights log line keeps its format and adds google=off", len(lines) == 1 and lines[0].startswith("[IMAGES] 7 lookups in ")
+      and lines[0].endswith("none 3, pexels 3, wikipedia 1, google=off"), lines)
+check("off: no Google request for a whole highlights response", google_free(), NET.hosts())
+os.environ["GOOGLE_IMAGES_ENABLED"] = "true"
+fresh()
+_, lines = logged(goa)
+check("on: log line as before (no google=off)", len(lines) == 1 and lines[0].endswith("none 7"), lines)
+os.environ["GOOGLE_IMAGES_ENABLED"] = "false"
+
+fresh()
+wiki_hits = []
+
+
+def wiki_429(url, **k):
+    if "wikipedia" in url:
+        wiki_hits.append(url)
+        return Res(429, {"error": "too many"}, headers={})
+    return Res(404, {})
+
+
+NET.get = wiki_429
+t0 = time.monotonic()
+out, lines = logged(goa)
+check("429: highlights still returned, placeholders, no waiting", len(out["activities"]) == 5 and all(a["photos"] == [] for a in out["activities"])
+      and time.monotonic() - t0 < 1.5, time.monotonic() - t0)
+check("429: one request, one 429 log line (not one per place)", len(wiki_hits) == 1 and sum("429" in ln for ln in lines) == 1
+      and len(lines) == 2, (len(wiki_hits), lines))
+out, lines = logged(goa)
+check("429: during the 60 s no Wikipedia request and no new 429 line", len(wiki_hits) == 1 and not any("429" in ln for ln in lines), lines)
+FAKE_REDIS.d.pop(IS.WIKI_COOLDOWN_KEY, None)
+check("429: the skip is in this process (Redis flag gone, still skipped)", IS.resolve_place_image("Fort X", "Goa", 15.5, 73.9, "Sights") is None and len(wiki_hits) == 1)
+left = IS._wiki_blocked_until - time.monotonic()
+check("429: the skip lasts 60 s", 55 < left <= 60, left)
+check("429: nothing cached as 'no picture'", not FAKE_REDIS.keys_like("img:v2:"))
+IS._wiki_blocked_until = time.monotonic() - 0.01            # 60 s later
+IS.resolve_place_image("Fort X", "Goa", 15.5, 73.9, "Sights")
+check("429: after 60 s Wikipedia is asked again", len(wiki_hits) == 2, len(wiki_hits))
+
+# a 429 in the middle of the per-place lookups: the places already queued for a slot are skipped, one line
+fresh()
+wiki_hits.clear()
+
+
+def geo_429(url, params=None, **k):
+    wiki_hits.append(params)
+    if (params or {}).get("list") == "geosearch":
+        time.sleep(0.2)
+        return Res(429, {"error": "too many"}, headers={"Retry-After": "5"})
+    return Res(200, {"query": {"pages": []}})
+
+
+NET.get = geo_429
+out, lines = logged(goa)
+geo = sum(1 for p_ in wiki_hits if (p_ or {}).get("list") == "geosearch")
+check("429 mid-batch: at most the 2 running requests, the waiting ones are skipped", geo <= 2, geo)
+check("429 mid-batch: one log line, highlights fine", sum("429" in ln for ln in lines) == 1 and len(out["activities"]) == 5, lines)
+
+os.environ["WIKIMEDIA_USER_AGENT"] = "VoyageAI/1.0 (https://example.org/; contact@example.org)"
+fresh()
+IS.resolve_place_image("Hawa Mahal", "Jaipur", 26.92, 75.82, "Sights")
+check("Wikipedia User-Agent: app name + contact from WIKIMEDIA_USER_AGENT", NET.calls and all(
+    c[3].get("User-Agent") == "VoyageAI/1.0 (https://example.org/; contact@example.org)" for c in NET.calls if "wikipedia" in c[1]))
+os.environ.pop("WIKIMEDIA_USER_AGENT")
 
 for key in redis_conn.scan_iter("rl:*"):
     redis_conn.delete(key)
