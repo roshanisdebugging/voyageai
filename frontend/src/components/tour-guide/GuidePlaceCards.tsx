@@ -2,7 +2,7 @@ import React from 'react';
 import { MapPin, Navigation, Phone, Star, Siren } from 'lucide-react';
 import { GoogleMapsAttribution } from '../common/GoogleMapsAttribution';
 import type { GuidePlace } from '../../services/guideStream';
-import { placeDistanceLabel, directionsUrl, telHref } from './guidePlaces';
+import { placeDistanceLabel, placeRating, directionsUrl, telHref } from './guidePlaces';
 
 const EmergencyStrip: React.FC = () => (
   <div
@@ -22,7 +22,8 @@ const EmergencyStrip: React.FC = () => (
 );
 
 /**
- * Real places under a Jarvis reply (from Google; unknown values are hidden, never guessed).
+ * Real places under a Jarvis reply (from Google; unknown values are never guessed: no hours -> "Hours not available",
+ * a rating only with its review count, "Few reviews" under 5).
  * Call only when Google gave a phone (live replies; history leaves phones out), Directions, Show on map.
  */
 export const GuidePlaceCards: React.FC<{
@@ -38,6 +39,7 @@ export const GuidePlaceCards: React.FC<{
         <ul className="space-y-2" aria-label="Nearby places">
           {places.map((p, idx) => {
             const distance = placeDistanceLabel(p.distance_m);
+            const rating = placeRating(p);
             return (
               <li
                 key={`${p.name}-${idx}`}
@@ -45,7 +47,7 @@ export const GuidePlaceCards: React.FC<{
               >
                 <div className="flex items-start justify-between gap-3">
                   <h4 className="min-w-0 text-sm font-semibold leading-snug wrap-anywhere">{p.name}</h4>
-                  {p.open_now !== null && (
+                  {p.open_now !== null ? (
                     <span
                       className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                         p.open_now
@@ -55,17 +57,19 @@ export const GuidePlaceCards: React.FC<{
                     >
                       {p.open_now ? 'Open now' : 'Closed'}
                     </span>
+                  ) : (
+                    <span className="shrink-0 py-0.5 text-[11px] text-[var(--guide-muted)]">Hours not available</span>
                   )}
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--guide-muted)]">
                   {distance && <span className="tabular-nums">{distance} away</span>}
-                  {p.rating !== null && (
+                  {rating && (
                     <span className="flex items-center gap-1 tabular-nums">
                       <Star className="w-3 h-3 fill-current" aria-hidden="true" />
-                      {p.rating.toFixed(1)}
-                      {p.rating_count ? ` (${p.rating_count})` : ''}
+                      {rating.text}
                     </span>
                   )}
+                  {rating?.few && <span>Few reviews</span>}
                 </div>
                 {p.address && <p className="mt-1 text-xs text-[var(--guide-muted)] wrap-anywhere">{p.address}</p>}
                 <div className="mt-2.5 flex flex-wrap gap-2">

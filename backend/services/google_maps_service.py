@@ -300,7 +300,8 @@ class GoogleNearbyError(Exception):
 # Jarvis "nearest hospital / medical shop / cafe" (tour_guide_service.lookup_places): exactly these fields.
 NEARBY_ESSENTIAL_FIELDS = (
     "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,"
-    "places.currentOpeningHours.openNow,places.nationalPhoneNumber,places.googleMapsUri"
+    "places.currentOpeningHours.openNow,places.nationalPhoneNumber,places.googleMapsUri,"
+    "places.primaryType,places.types"      # same price tier; used to drop medicine shops from hospital results
 )
 
 
@@ -312,6 +313,7 @@ async def search_nearby_places(
     *,
     strict: bool = False,
     counter: Optional[GoogleCallCounter] = None,
+    max_results: int = 5,
 ) -> List[Dict[str, Any]]:
     """
     Search nearby places using Google Places API (New) searchNearby.
@@ -319,7 +321,7 @@ async def search_nearby_places(
     Outputs formatted schema with is_mock=False.
 
     strict=True (Jarvis place lookups): no cache here (the caller caches 60 s), rankPreference DISTANCE,
-    maxResultCount 5, field mask NEARBY_ESSENTIAL_FIELDS (adds open_now, phone, maps_uri to each place), and
+    maxResultCount max_results (default 5), field mask NEARBY_ESSENTIAL_FIELDS (adds open_now, phone, maps_uri, primary_type, types), and
     errors are raised instead of returning []: GoogleQuotaError (quota / paused key, which also pauses
     "nearby" until Google's reset) or GoogleNearbyError. One HTTP request; never a Place Details call.
     """
@@ -356,7 +358,7 @@ async def search_nearby_places(
 
     payload = {
         "includedTypes": safe_types,
-        "maxResultCount": 5 if strict else 15,
+        "maxResultCount": max_results if strict else 15,
         "locationRestriction": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
@@ -423,6 +425,8 @@ async def search_nearby_places(
                         item["open_now"] = open_now if isinstance(open_now, bool) else None
                         item["phone"] = place.get("nationalPhoneNumber") or None
                         item["maps_uri"] = place.get("googleMapsUri") or None
+                        item["primary_type"] = place.get("primaryType") or None
+                        item["types"] = [t for t in place.get("types") or [] if isinstance(t, str)]
                     transformed.append(item)
 
                 # Sort by distance
