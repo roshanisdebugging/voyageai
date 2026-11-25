@@ -57,7 +57,6 @@ interface AppContextType {
   setIsAiOpen: (open: boolean) => void;
   aiPromptQuery: string;
   setAiPromptQuery: (q: string) => void;
-  aiContextLabel: string;
 
   swapContext: SwapActivityPayload | null;
   setSwapContext: (ctx: SwapActivityPayload | null) => void;
@@ -316,19 +315,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isFoodSheetOpen, setIsFoodSheetOpen] = useState(false);
   const [isEmergencyOpen, setIsEmergencyOpen] = useState(false);
 
-  // Contextual AI label
-  const aiContextLabel = useMemo(() => {
-    if (activeTab === 'home') return 'Plan my trip';
-    if (activeTab === 'explore') return 'Discover packages';
-    if (activeTab === 'trips') {
-      if (tripView === 'map') return "What's nearby?";
-      if (tripView === 'expenses') return 'Save money';
-      if (tripView === 'reservations') return 'Manage bookings';
-      return 'What should I do?';
-    }
-    return 'Ask Cruiser Copilot';
-  }, [activeTab, tripView]);
-
   const [swapContext, setSwapContext] = useState<SwapActivityPayload | null>(null);
   const [isSwapModalOpen, setIsSwapModalOpen] = useState<boolean>(false);
   const [navigationTarget, setNavigationTarget] = useState<NavigationTarget | null>(null);
@@ -410,7 +396,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isLiveTracking, toggleLiveTracking, startLiveTracking, stopLiveTracking, liveTrackingLastUpdated,
       isFollowMode, setIsFollowMode, toggleFollowMode, retryGPS,
       bookings, expenses, notifications,
-      isAiOpen, setIsAiOpen, aiPromptQuery, setAiPromptQuery, aiContextLabel,
+      isAiOpen, setIsAiOpen, aiPromptQuery, setAiPromptQuery,
       swapContext, setSwapContext, isSwapModalOpen, setIsSwapModalOpen, openSwapAssistant, closeSwapAssistant,
       navigationTarget, setNavigationTarget, openInAppNavigation,
       isCabModalOpen, setIsCabModalOpen, cabDestination, setCabDestination,

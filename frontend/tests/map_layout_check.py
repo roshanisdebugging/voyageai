@@ -1,6 +1,6 @@
 """
 Browser check of the map page layout: Google's logo / "Keyboard shortcuts" / map data / "Terms" are never covered,
-and the place card, the floating buttons and the bottom nav don't overlap. Also the Home "Google Maps" line.
+and the place card, the floating mic and the bottom nav don't overlap. Also the Home "Google Maps" line.
 
 Needs: the dev server (npm run dev, http://localhost:5173), Chrome, and `pip install playwright`. Not part of npm test.
 The app's own API and WebSockets are faked (no account, no Places calls); the map itself is the real Google map
@@ -164,7 +164,7 @@ def check_map(m, tag, portrait=True):
         check(f"{tag}: card does not overlap any attribution", not any(overlap(card, a) for a in m["attribution"]))
     if "sheet" not in tag and tag != "740x360":
         under = [r for r in m["pins"] if any(overlap(r, o) for o in [card, *m["fabs"]])]
-        check(f"{tag}: all 4 place pins on the map, none under the card or buttons", len(m["pins"]) == 4 and not under, (len(m["pins"]), under))
+        check(f"{tag}: all 4 place pins on the map, none under the card or mic", len(m["pins"]) == 4 and not under, (len(m["pins"]), under))
     if card and not portrait:
         check(f"{tag}: card ends {GAP_MIN}-{GAP_MAX + 6} px above the attribution strip", GAP_MIN <= box_bottom - 24 - card["b"] <= GAP_MAX + 6,
               f"{box_bottom - 24 - card['b']:.1f}")
@@ -173,8 +173,8 @@ def check_map(m, tag, portrait=True):
               f"gap {card['y'] - box_bottom:.1f}, strip bottom {strip_bottom:.1f}")
         check(f"{tag}: card sits just above the bottom nav", m["nav"] and 0 <= m["nav"]["y"] - card["b"] <= 16,
               f"{m['nav']['y'] - card['b']:.1f}" if m["nav"] else "no nav")
-    check(f"{tag}: voice note sits above the floating buttons", m["fabs"] and m["noteBottomY"] <= min(f["y"] for f in m["fabs"]), m["noteBottomY"])
-    check(f"{tag}: floating buttons present and floating", len(m["fabs"]) >= 2 and all(f["pos"] == "absolute" for f in m["fabs"]), m["fabs"])
+    check(f"{tag}: voice note sits above the floating mic", m["fabs"] and m["noteBottomY"] <= min(f["y"] for f in m["fabs"]), m["noteBottomY"])
+    check(f"{tag}: only the mic floats over the map", len(m["fabs"]) == 1 and all(f["pos"] == "absolute" for f in m["fabs"]), m["fabs"])
     for f in m["fabs"]:
         others = [("card", card), ("nav", m["nav"]), ("location dot", m["dot"])] + [(a["name"], a) for a in m["attribution"]] + [(b["name"], b) for b in m["typeBtns"]]
         hits = [n for n, o in others if overlap(f, o)]
@@ -183,7 +183,7 @@ def check_map(m, tag, portrait=True):
     inside = m["dot"] and m["dot"]["x"] >= box["x"] and m["dot"]["r"] <= box["r"] and m["dot"]["y"] >= box["y"] and m["dot"]["b"] <= box["b"]
     if "sheet" in tag:
         # The sheet centres the map on the place, so the dot can be off the map; on the map it must not be hidden.
-        check(f"{tag}: location dot not hidden by the sheet or buttons", not inside or m["dotHit"], m["dot"])
+        check(f"{tag}: location dot not hidden by the sheet or mic", not inside or m["dotHit"], m["dot"])
     else:
         check(f"{tag}: location dot visible", inside and m["dotHit"], m["dot"])
 

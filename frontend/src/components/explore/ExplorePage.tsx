@@ -121,12 +121,6 @@ export const ExplorePage: React.FC = () => {
     }
   };
 
-  const handleAskAI = (item: ActivityItem) => {
-    window.dispatchEvent(new CustomEvent('voyage:ai-query', {
-      detail: { query: `Tell me more about ${item.title} in ${item.location}. What are the must-try items, best timings, and local tips?` }
-    }));
-  };
-
   // Highlight ref for deep-linked place
   const cardRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
@@ -626,7 +620,7 @@ export const ExplorePage: React.FC = () => {
                         {/* 2. Save Place / Bookmark (Both Modes) */}
                         <button
                           onClick={() => handleToggleSave(act)}
-                          className={`rounded-xl border transition-all press-scale ${wideSave ? 'order-last basis-full min-h-[44px] px-3 font-semibold text-xs flex items-center justify-center gap-1.5' : 'p-2'} ${isSaved
+                          className={`rounded-xl border transition-all press-scale ${wideSave ? 'flex-1 min-h-[44px] px-3 font-semibold text-xs flex items-center justify-center gap-1.5' : 'p-2'} ${isSaved
                               ? 'bg-(--color-primary-glow) text-(--color-primary) border-(--color-primary)'
                               : 'bg-(--color-surface-elevated) hover:bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-(--color-text-primary) border-(--color-border)'
                             }`}
@@ -638,16 +632,7 @@ export const ExplorePage: React.FC = () => {
                           {wideSave && (isSaved ? 'Saved' : 'Save place')}
                         </button>
 
-                        {/* 3. Ask AI (Both Modes) */}
-                        <button
-                          onClick={() => handleAskAI(act)}
-                          className="p-2 rounded-xl bg-(--color-surface-elevated) hover:bg-(--color-surface-elevated) text-(--color-text-secondary) hover:text-(--color-text-primary) border border-(--color-text-secondary) transition-all press-scale flex items-center gap-1"
-                          title="Ask AI Concierge"
-                        >
-                          <Sparkles className="w-3.5 h-3.5 text-amber-700 dark:text-amber-300" />
-                        </button>
-
-                        {/* 4. Add to Itinerary (only in trip mode, for places in the open trip's area) */}
+                        {/* 3. Add to Itinerary (only in trip mode, for places in the open trip's area) */}
                         {contextMode === 'trip' && add.showAdd && (
                           <button
                             disabled={!add.canAdd}
