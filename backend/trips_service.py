@@ -219,7 +219,7 @@ def _coords_of(item: Dict[str, Any]):
 
 def attach_highlight_images(data: Dict[str, Any], destination: str) -> Dict[str, Any]:
     """
-    Real pictures (image_service: Google, then Wikipedia, then Pexels for broad categories) for up to 7 items:
+    Real pictures (image_service: Google only if GOOGLE_IMAGES_ENABLED, then Wikipedia, then Pexels for broad categories) for up to 7 items:
     activities first, then events. Activities get photos=[url] or [], events image=url or None, both with
     photoCredit / photoCreditUrl / photoSource. Image trouble never fails the highlights.
     """

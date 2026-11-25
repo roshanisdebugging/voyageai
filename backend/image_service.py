@@ -3,7 +3,9 @@ Real pictures for places, events and trip covers that are ALREADY KNOWN (title +
 This module never finds places; place lookup stays Google-only elsewhere.
 
 resolve_place_image(title, destination, lat, lng, category) -> {url, credit, credit_url, source, place_id?} or None
-  1. Google Places Text Search (New), one call: "<title>, <destination>", location bias around lat/lng,
+  1. Google, ONLY with GOOGLE_IMAGES_ENABLED=true (default false: no Google request of any kind from this module, and
+     the gmaps:paused:* flags are neither read nor written; lookups start at step 2).
+     Places Text Search (New), one call: "<title>, <destination>", location bias around lat/lng,
      field mask id/displayName/location/photos. The first photo is served through OUR proxy
      (/api/place-photo?name=...&w=...&sig=...), so the API key never reaches the browser. Nothing from Google is
      cached or stored (Google's terms: no storing photos or photo names); only the place_id is returned.
@@ -12,8 +14,9 @@ resolve_place_image(title, destination, lat, lng, category) -> {url, credit, cre
      "Amer Fort"), then per place a geosearch within 2 km for pages sharing the place's distinctive words
      (generic words like fort / palace don't count). A page is accepted only if it lies within 2 km, or Wikipedia
      resolved this exact name to it AND it names the destination (and lies within 25 km if it has coordinates).
-     Only free Commons images (never en.wikipedia "fair use" files). At most 2 requests at a time; a 429 pauses
-     Wikipedia for its Retry-After (img:wiki:cooldown).
+     Only free Commons images (never en.wikipedia "fair use" files). At most 2 requests at a time; a 429 stops
+     Wikipedia lookups in this process for 60 s (placeholders meanwhile, one log line), and in every process for its
+     Retry-After (img:wiki:cooldown).
   3. Pexels (PEXELS_API_KEY, optional) only for destination covers and broad categories (food, beach, market...),
      never for a named landmark.
   4. None -> the app shows a placeholder, never a random photo.
@@ -86,6 +89,8 @@ _orchestrators = ThreadPoolExecutor(max_workers=4, thread_name_prefix="img-batch
 _wiki_slots = threading.BoundedSemaphore(2)
 WIKI_COOLDOWN_KEY = "img:wiki:cooldown"
 WIKI_COOLDOWN_S = 60
+_wiki_lock = threading.Lock()
+_wiki_blocked_until = 0.0       # time.monotonic() until which this process sends nothing to Wikipedia
 
 
 class _OutOfTime(Exception):
@@ -94,6 +99,10 @@ class _OutOfTime(Exception):
 
 class _Transient(Exception):
     """A provider error (429 / 5xx): the lookup gives None but nothing is cached."""
+
+
+class _WikiCooldown(_Transient):
+    """Skipped because of an earlier 429, which has already been logged: not logged again per place."""
 
 
 class PhotoNotAllowed(Exception):
@@ -109,6 +118,11 @@ class PhotoNotFound(Exception):
 
 
 # ------------------------------------------------------------------ small helpers
+
+def google_images_enabled() -> bool:
+    """GOOGLE_IMAGES_ENABLED, default off: picture lookups share Google's quota with voice place search."""
+    return os.getenv("GOOGLE_IMAGES_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+
 
 def _google_key() -> str:
     from services.maps_keys import resolve_server_key
@@ -248,6 +262,8 @@ def fetch_place_photo(name: str, width: Any, sig: str) -> Tuple[bytes, str]:
     skipHttpRedirect (key in a header) gives a short-lived googleusercontent URL; that URL is fetched WITHOUT the key.
     """
     w = check_photo_request(name, width, sig)
+    if not google_images_enabled():
+        raise PhotoUnavailable("off")
     if _is_paused("photo"):
         raise PhotoUnavailable("paused")
     if not _under_daily_cap("photo", "IMAGE_PHOTO_DAILY_CAP", 1000):
@@ -298,6 +314,8 @@ def fetch_place_photo(name: str, width: Any, sig: str) -> Tuple[bytes, str]:
 def _google_lookup(title: str, destination: str, coords: Optional[Tuple[float, float]],
                    deadline: float) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[float, float]]]:
     """(image or None, Google's location of the matched place or None)."""
+    if not google_images_enabled():
+        return None, None
     key = _google_key()
     if not key or _is_paused("textsearch"):
         return None, None
@@ -344,32 +362,50 @@ def _google_lookup(title: str, destination: str, coords: Optional[Tuple[float, f
 
 # ------------------------------------------------------------------ 2. Wikipedia
 
-def _wiki_request(url: str, params: Optional[Dict[str, Any]], deadline: float):
-    """One Wikipedia GET: at most 2 at a time, none during a 429 cool-down. Raises _Transient on 429 / 5xx."""
+def _wiki_cooling_down() -> bool:
+    if time.monotonic() < _wiki_blocked_until:
+        return True
     try:
-        if redis_conn.get(WIKI_COOLDOWN_KEY):
-            raise _Transient("wikipedia cooling down after a 429")
-    except _Transient:
-        raise
+        return bool(redis_conn.get(WIKI_COOLDOWN_KEY))
+    except Exception:
+        return False
+
+
+def _wiki_start_cooldown(retry_after: Any) -> None:
+    """After a 429: nothing more from this process for 60 s, nor from any process for Wikipedia's Retry-After.
+    One log line, also when both running requests get a 429."""
+    global _wiki_blocked_until
+    try:
+        wait_s = max(5, min(int(retry_after or WIKI_COOLDOWN_S), 600))
+    except (TypeError, ValueError):
+        wait_s = WIKI_COOLDOWN_S
+    with _wiki_lock:
+        first = time.monotonic() >= _wiki_blocked_until
+        _wiki_blocked_until = time.monotonic() + WIKI_COOLDOWN_S
+    try:
+        redis_conn.set(WIKI_COOLDOWN_KEY, "1", ex=wait_s)
     except Exception:
         pass
+    if first:
+        print(f"[IMAGES] wikipedia HTTP 429: no Wikipedia lookups for {max(WIKI_COOLDOWN_S, wait_s)} s", flush=True)
+
+
+def _wiki_request(url: str, params: Optional[Dict[str, Any]], deadline: float):
+    """One Wikipedia GET: at most 2 at a time, none during a 429 cool-down. Raises _WikiCooldown on a 429."""
+    if _wiki_cooling_down():
+        raise _WikiCooldown()
     if not _wiki_slots.acquire(timeout=_remaining(deadline)):
         raise _OutOfTime()
     try:
+        if _wiki_cooling_down():               # a 429 arrived while this one waited for a slot
+            raise _WikiCooldown()
         res = requests.get(url, params=params, headers={"User-Agent": _user_agent(), "Accept": "application/json"},
                            timeout=_remaining(deadline))
+        if res.status_code == 429:
+            _wiki_start_cooldown(res.headers.get("Retry-After"))
+            raise _WikiCooldown()
     finally:
         _wiki_slots.release()
-    if res.status_code == 429:
-        try:
-            wait_s = int(res.headers.get("Retry-After") or WIKI_COOLDOWN_S)
-        except (TypeError, ValueError):
-            wait_s = WIKI_COOLDOWN_S
-        try:
-            redis_conn.set(WIKI_COOLDOWN_KEY, "1", ex=max(5, min(wait_s, 600)))
-        except Exception:
-            pass
-        raise _Transient("wikipedia HTTP 429")
     return res
 
 
@@ -636,6 +672,8 @@ def _finish_item(it: Dict[str, Any], fut: Future, deadline: float) -> None:
         _settle(fut, found)
     except _OutOfTime:
         _settle(fut, None)
+    except _WikiCooldown:
+        _settle(fut, None)
     except _Transient as e:
         print(f"[IMAGES] {e}", flush=True)
         _settle(fut, None)
@@ -646,7 +684,8 @@ def _finish_item(it: Dict[str, Any], fut: Future, deadline: float) -> None:
 
 def _run_batch(items: List[Optional[Dict[str, Any]]], futs: List[Future], response_deadline: float) -> None:
     """
-    1. Google for every item (never for covers), in parallel, until the response deadline.
+    1. Google for every item (never for covers; not at all while GOOGLE_IMAGES_ENABLED is off), in parallel, until
+       the response deadline.
     2. Cached Wikipedia / Pexels links.
     3. ONE Wikipedia query for all remaining titles.
     4. Per item: geosearch, then Pexels (broad categories / covers).
@@ -659,7 +698,8 @@ def _run_batch(items: List[Optional[Dict[str, Any]]], futs: List[Future], respon
             _settle(fut, None)
     live = [i for i, it in enumerate(items) if it is not None]
 
-    google = {_executor.submit(_safe_google, items[i], response_deadline): i for i in live if items[i]["kind"] != "cover"}
+    google = {_executor.submit(_safe_google, items[i], response_deadline): i for i in live
+              if items[i]["kind"] != "cover"} if google_images_enabled() else {}
     if google:
         wait(list(google), timeout=max(0.0, response_deadline - time.monotonic()))
     for f, i in google.items():
@@ -683,7 +723,7 @@ def _run_batch(items: List[Optional[Dict[str, Any]]], futs: List[Future], respon
     try:
         pages = _wiki_pages([c for i in pending for c in items[i]["candidates"]], bg_deadline)
     except (_OutOfTime, _Transient) as e:
-        if isinstance(e, _Transient):
+        if isinstance(e, _Transient) and not isinstance(e, _WikiCooldown):
             print(f"[IMAGES] {e}", flush=True)
         for i in pending:
             _settle(futs[i], None)                  # nothing cached: try again next time
@@ -748,7 +788,8 @@ def resolve_many(items: List[Dict[str, Any]], *, timeout: float = LOOKUP_TIMEOUT
         label = r["source"] if r else ("none" if i < len(futs) and futs[i].done() else "still looking")
         counts[label] = counts.get(label, 0) + 1
     print(f"[IMAGES] {min(len(items), max_items)} lookups in {time.monotonic() - started:.1f} s: "
-          + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())), flush=True)
+          + ", ".join(f"{k} {v}" for k, v in sorted(counts.items()))
+          + ("" if google_images_enabled() else ", google=off"), flush=True)
     return out
 
 
