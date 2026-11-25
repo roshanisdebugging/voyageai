@@ -1,13 +1,15 @@
 """
 VoyageAI - Google Maps Platform backend service: Places API (New), Geocoding API v4.
 Google only (no other provider, no fallback to one). Redis cache with an in-memory fallback; quota/pause
-detection (gmaps:paused:{api}); never invents a place.
+detection (gmaps:paused:{key fingerprint}:{api}, see pause_key); never invents a place.
 """
 
 import re
 import json
 import time
 import math
+import hashlib
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 import httpx
 from dotenv import load_dotenv
@@ -17,10 +19,19 @@ from redis_client import redis_conn
 # Ensure environment variables are loaded
 load_dotenv()
 
-from services.maps_keys import resolve_server_key  # noqa: E402
+from services.maps_keys import resolve_server_key, server_key_source  # noqa: E402
 
 # The server key (GOOGLE_MAPS_SERVER_KEY; the old names still work for one release, with a warning).
 GOOGLE_MAPS_SERVER_KEY = resolve_server_key()
+
+
+def key_fingerprint(key: str) -> str:
+    """First 8 hex characters of SHA-256 of the key ('' without one): tells keys apart, never reveals any part of one."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8] if key else ""
+
+
+KEY_SOURCE = server_key_source()                             # the variable NAME, for the startup line
+KEY_FINGERPRINT = key_fingerprint(GOOGLE_MAPS_SERVER_KEY)
 
 # In-memory LRU/TTL cache fallback when Redis is offline
 _in_memory_cache: Dict[str, tuple[float, Any]] = {}
@@ -44,6 +55,12 @@ def _set_in_memory(key: str, val: Any, ttl_seconds: int):
                 del _in_memory_cache[k]
 
 
+def _redis_ttl(conn: Any, key: str) -> Optional[int]:
+    """Seconds left (-1: no expiry), None when the key doesn't exist."""
+    ttl = int(conn.ttl(key))
+    return None if ttl == -2 else ttl
+
+
 class RedisCacheManager:
     """Reuse the thread-safe Redis pool across the API and highlights event loops."""
 
@@ -62,6 +79,16 @@ class RedisCacheManager:
         except Exception:
             pass
         _set_in_memory(key, value, ttl_seconds)
+
+    async def ttl_left(self, key: str) -> Optional[int]:
+        """Seconds left on a key (-1: no expiry), None when it isn't there. Redis decides; this process's own copy
+        is used only while Redis can't be reached (so a flag cleared in Redis is gone for the running server too)."""
+        try:
+            return await run_in_threadpool(_redis_ttl, redis_conn, key)
+        except Exception:
+            entry = _in_memory_cache.get(key)
+            left = entry[0] - time.time() if entry else 0
+            return max(1, int(left)) if left > 0 else None
 
 
 cache = RedisCacheManager()
@@ -140,18 +167,109 @@ def _seconds_to_google_reset() -> int:
     return max(60, int((midnight - now).total_seconds()) + 60)
 
 
+def pause_seconds(res: Any) -> int:
+    """How long to skip an API after this quota error: until Google's reset, or 60 s for a per-minute limit."""
+    return _seconds_to_google_reset() if _is_daily(res) else PER_MINUTE_PAUSE_S
+
+
+# ---- Pause flags. The quota belongs to the key, so the flag does too: a new key never inherits an old key's pause.
+# pause_key is the ONE place that builds the name. The older unscoped names (gmaps:paused:{api}) are ignored.
+
+PAUSE_PREFIX = "gmaps:paused:"
+SKIP_LOG_EVERY_S = 60
+_skip_log_lock = threading.Lock()
+_skip_logged_at: Dict[str, float] = {}
+
+
+def pause_key(api: str) -> str:
+    return f"{PAUSE_PREFIX}{KEY_FINGERPRINT}:{api}"
+
+
+def _ttl_text(ttl: int) -> str:
+    return f"{ttl}s" if ttl >= 0 else "no expiry"
+
+
+def log_paused_skip(api: str, ttl: int) -> None:
+    """A request was skipped because of a pause flag: one line per API per minute (per process)."""
+    now = time.monotonic()
+    with _skip_log_lock:
+        last = _skip_logged_at.get(api)
+        if last is not None and now - last < SKIP_LOG_EVERY_S:
+            return
+        _skip_logged_at[api] = now
+    print(f"[GOOGLE QUOTA] {api} request skipped: paused, {_ttl_text(ttl)} left (fp={KEY_FINGERPRINT or 'none'})", flush=True)
+
+
 async def mark_paused(api: str, res: Any) -> None:
     """After a quota error, skip this API (no request at all) until Google's reset, or 60 s for a per-minute limit."""
-    ttl = _seconds_to_google_reset() if _is_daily(res) else PER_MINUTE_PAUSE_S
-    await cache.set(f"gmaps:paused:{api}", True, ttl_seconds=ttl)
+    ttl = pause_seconds(res)
+    await cache.set(pause_key(api), True, ttl_seconds=ttl)
     print(f"[GOOGLE QUOTA] {api} paused for {ttl} s", flush=True)
 
 
 async def is_paused(*apis: str) -> bool:
     for api in apis:
-        if await cache.get(f"gmaps:paused:{api}"):
+        ttl = await cache.ttl_left(pause_key(api))
+        if ttl is not None:
+            log_paused_skip(api, ttl)
             return True
     return False
+
+
+def is_paused_sync(conn: Any, api: str) -> bool:
+    """is_paused for code without an event loop (image_service), on its own Redis client. Redis down: not paused."""
+    try:
+        ttl = _redis_ttl(conn, pause_key(api))
+    except Exception:
+        return False
+    if ttl is None:
+        return False
+    log_paused_skip(api, ttl)
+    return True
+
+
+def mark_paused_sync(conn: Any, api: str, res: Any) -> int:
+    """mark_paused for code without an event loop. Returns the seconds."""
+    ttl = pause_seconds(res)
+    try:
+        conn.set(pause_key(api), json.dumps(True), ex=ttl)
+    except Exception:
+        pass
+    return ttl
+
+
+def active_pauses(conn: Any = None) -> List[Tuple[str, int]]:
+    """[(api, seconds left)] for the CURRENT key only. Raises when Redis can't be reached."""
+    conn = conn or redis_conn
+    if not KEY_FINGERPRINT:
+        return []
+    prefix, out = pause_key(""), []
+    for name in conn.scan_iter(prefix + "*"):
+        ttl = _redis_ttl(conn, name)
+        if ttl is not None:
+            out.append((name[len(prefix):], ttl))
+    return sorted(out)
+
+
+def clear_pauses(conn: Any = None) -> List[str]:
+    """Deletes the CURRENT key's pause flags and nothing else. Returns the API names."""
+    conn = conn or redis_conn
+    apis = [api for api, _ in active_pauses(conn)]
+    for api in apis:
+        conn.delete(pause_key(api))
+        _in_memory_cache.pop(pause_key(api), None)
+    return apis
+
+
+def status_line(conn: Any = None) -> str:
+    """The startup line: variable name, fingerprint and active pauses. Never the key, never a flag's value."""
+    if not KEY_FINGERPRINT:
+        return "[MAPS] no server key set: Google Maps calls are off"
+    try:
+        paused = ", ".join(f"{api}:{_ttl_text(ttl)}" for api, ttl in active_pauses(conn))
+    except Exception:
+        paused = "unknown, Redis not reachable"
+    return f"[MAPS] server key from {KEY_SOURCE} fp={KEY_FINGERPRINT} paused=[{paused}]"
 
 
 def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -193,19 +193,13 @@ def _under_daily_cap(name: str, env: str, default: int) -> bool:
 
 
 def _is_paused(api: str) -> bool:
-    try:
-        return bool(redis_conn.get(f"gmaps:paused:{api}"))
-    except Exception:
-        return False
+    from services.google_maps_service import is_paused_sync
+    return is_paused_sync(redis_conn, api)
 
 
 def _mark_paused(api: str, res: Any) -> None:
-    from services.google_maps_service import PER_MINUTE_PAUSE_S, _is_daily, _seconds_to_google_reset
-    ttl = _seconds_to_google_reset() if _is_daily(res) else PER_MINUTE_PAUSE_S
-    try:
-        redis_conn.set(f"gmaps:paused:{api}", json.dumps(True), ex=ttl)
-    except Exception:
-        pass
+    from services.google_maps_service import mark_paused_sync
+    ttl = mark_paused_sync(redis_conn, api, res)
     print(f"[GOOGLE QUOTA] {api} paused for {ttl} s (images)", flush=True)
 
 

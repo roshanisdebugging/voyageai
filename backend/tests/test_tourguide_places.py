@@ -2,7 +2,7 @@
 Jarvis chat: real Google places for "nearest hospital", "medical shop near me", "cafe near Hawa Mahal".
 Run from backend/: python -m tests.test_tourguide_places
 No real Google, OpenAI or Gemini call: httpx (Places searchNearby), the named-place lookup, the model and the cost
-guard are fakes. Uses the local Redis for the 60 s cache (tg:places:* keys and gmaps:paused:nearby are removed).
+guard are fakes. Uses the local Redis for the 60 s cache (tg:places:* keys and this run's nearby pause flag are removed).
 """
 import asyncio
 import json
@@ -38,10 +38,10 @@ def check(name, cond, info=None):
 
 
 def clean_redis():
-    for pattern in ("tg:places:*", "gmaps:paused:nearby"):
+    for pattern in ("tg:places:*", gms.pause_key("nearby")):
         for key in redis_conn.scan_iter(pattern):
             redis_conn.delete(key)
-    gms._in_memory_cache.pop("gmaps:paused:nearby", None)
+    gms._in_memory_cache.pop(gms.pause_key("nearby"), None)
 
 
 clean_redis()

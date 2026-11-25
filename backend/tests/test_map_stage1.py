@@ -61,6 +61,9 @@ class MemCache:
         self.d[key] = value
         self.ttl[key] = ttl_seconds
 
+    async def ttl_left(self, key):
+        return self.ttl.get(key, -1) if key in self.d else None
+
 
 gms.cache = MemCache()
 
@@ -271,11 +274,11 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
     again = places.search_places_detailed("Charminar")
     check("after a quota error the next search calls Google 0 times", again.unavailable and again.google_calls == 0
           and len(FakeGoogle.calls) == n)
-    ttl = gms.cache.ttl.get("gmaps:paused:textsearch", 0)
+    ttl = gms.cache.ttl.get(gms.pause_key("textsearch"), 0)
     check("daily limit -> paused until Google's reset (midnight Pacific)", 60 < ttl <= 86400 + 60, ttl)
     reset()
     places.search_places_detailed("minute please")
-    check("per-minute limit -> paused 60 s only", gms.cache.ttl.get("gmaps:paused:textsearch") == 60, gms.cache.ttl)
+    check("per-minute limit -> paused 60 s only", gms.cache.ttl.get(gms.pause_key("textsearch")) == 60, gms.cache.ttl)
 
     # ---------------- typing suggestions (autocomplete only) and picking one (one Place Details call)
     reset()
@@ -299,7 +302,7 @@ with mock.patch.object(gms.httpx, "AsyncClient", FakeGoogle):
         check("quota on Place Details (picking) -> MapSearchUnavailable", False)
     except places.MapSearchUnavailable:
         check("quota on Place Details (picking) -> MapSearchUnavailable", True)
-    check("Place Details paused", gms.cache.d.get("gmaps:paused:details") is True)
+    check("Place Details paused", gms.cache.d.get(gms.pause_key("details")) is True)
     reset()
     try:
         places.suggest_places("quota please")

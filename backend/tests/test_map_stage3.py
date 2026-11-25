@@ -64,6 +64,9 @@ class MemCache:
         self.d[key] = value
         self.ttl[key] = ttl_seconds
 
+    async def ttl_left(self, key):
+        return self.ttl.get(key, -1) if key in self.d else None
+
 
 gms.cache = MemCache()
 results = []
@@ -188,8 +191,8 @@ with mock.patch.object(rs.httpx, "AsyncClient", FakeRoutes):
     FakeRoutes.queue = [QUOTA]
     r = post({"origin": HAWA, "destination": AMER, "mode": "drive"})
     check("quota -> 503 'Route abhi available nahi hai'", r.status_code == 503 and r.json()["detail"] == "Route abhi available nahi hai", r.text[:120])
-    check("quota -> Routes paused until Google's reset", gms.cache.d.get("gmaps:paused:routes") is True
-          and 60 < gms.cache.ttl.get("gmaps:paused:routes", 0) <= 86460)
+    check("quota -> Routes paused until Google's reset", gms.cache.d.get(gms.pause_key("routes")) is True
+          and 60 < gms.cache.ttl.get(gms.pause_key("routes"), 0) <= 86460)
     n = len(FakeRoutes.calls)
     r = post({"origin": {"lat": 28.6129, "lng": 77.2295}, "destination": {"lat": 28.5245, "lng": 77.1855}, "mode": "drive"})
     check("while paused -> 503 with 0 Google calls (no retry)", r.status_code == 503 and len(FakeRoutes.calls) == n)
