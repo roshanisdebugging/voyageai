@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test": "node tests/activeTrip.test.mjs && node tests/tripArea.test.mjs && node tests/mapLogic.test.mjs && node tests/deviceLocation.test.mjs && node tests/budgetStrip.test.mjs && node tests/voiceUiActions.test.mjs && node tests/guideStream.test.mjs && node tests/imageSources.test.mjs",
+    "test": "node tests/activeTrip.test.mjs && node tests/tripArea.test.mjs && node tests/mapLogic.test.mjs && node tests/deviceLocation.test.mjs && node tests/budgetStrip.test.mjs && node tests/voiceUiActions.test.mjs && node tests/guideStream.test.mjs && node tests/guidePlaceCards.test.mjs && node tests/imageSources.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -28,6 +28,7 @@ import requests
 from dotenv import load_dotenv
 from sqlalchemy import text
 
+import guide_places
 from cost_guard import evaluate_cost_guards
 from database import engine
 
@@ -441,6 +442,8 @@ def _build_history_block(items: List[Dict[str, Any]], window: int = 5, max_chars
 PLACE_CATEGORIES: Dict[str, Dict[str, Any]] = {
     "hospital": {
         "types": ["hospital"],
+        # More than the 5 shown: the nearest results are often dispensaries and shops (guide_places.filter_and_sort).
+        "max_results": 10,
         "words": ["hospital", "hospitals", "clinic", "clinics", "doctor", "doctors", "emergency", "ambulance",
                   "aspatal", "aspataal", "haspatal", "dawakhana"],
         "hindi": ["अस्पताल", "हॉस्पिटल", "हस्पताल", "डॉक्टर", "एम्बुलेंस", "दवाखाना"],
@@ -589,22 +592,7 @@ EMERGENCY_PREFIX = "Emergency ho to 112 ya 108 dial karein."
 PLACES_RADIUS_M = 3000
 PLACES_WIDE_RADIUS_M = 10000
 PLACES_CACHE_SECONDS = 60
-PLACES_PROMPT_RULES = """
-
-VERIFIED PLACES RULES (this turn):
-- Name ONLY places listed in the VERIFIED PLACES block below the context. Never invent or add other places.
-- Never invent phone numbers, opening hours, ratings or prices. Say a place is open only if the block says "open now: yes".
-  Never call a place "24x7", "24 hours" or "always open": the block doesn't say that.
-- If the block says nothing was found, say so plainly.
-- Never write coordinates (lat/lng) in the reply. Do not add a <<<CARD>>>: the app shows these places as cards.
-- 2-3 sentences: the nearest one or two options with their distance, plus one practical tip.
-"""
-
-
-def _fmt_distance(meters: Optional[int]) -> str:
-    if meters is None:
-        return "distance unknown"
-    return f"{meters} m" if meters < 1000 else f"{meters / 1000:.1f} km"
+PLACES_SHOWN = 5
 
 
 def _places_cache_key(category: str, lat: float, lng: float) -> str:
@@ -648,8 +636,9 @@ def _resolve_named_place(place_text: str) -> Dict[str, Any]:
 
 def _nearby_essentials(category: str, lat: float, lng: float) -> Tuple[List[Dict[str, Any]], bool, int, int]:
     """
-    Google Places (New) searchNearby around (lat, lng) for the category: 3 km, then once more at 10 km if empty.
-    rankPreference DISTANCE, 5 results, the essentials field mask, never Place Details.
+    Google Places (New) searchNearby around (lat, lng) for the category: 3 km, then once more at 10 km if none matches
+    the category (guide_places.filter_and_sort: types and order).
+    rankPreference DISTANCE, 5 results (hospital: 10, the best 5 are kept), the essentials field mask, never Place Details.
     Cached 60 s per (category, lat/lng to 3 decimals). Returns (places, cache_hit, radius_used, google_calls).
     Raises GoogleQuotaError / GoogleNearbyError.
     """
@@ -662,33 +651,37 @@ def _nearby_essentials(category: str, lat: float, lng: float) -> Tuple[List[Dict
     from services.google_maps_service import GoogleCallCounter, search_nearby_places
     counter = GoogleCallCounter()
     types = PLACE_CATEGORIES[category]["types"]
-    radius = PLACES_RADIUS_M
-    raw = _run_sync(search_nearby_places(lat, lng, radius, place_types=types, strict=True, counter=counter))
-    if not raw:
-        radius = PLACES_WIDE_RADIUS_M
-        raw = _run_sync(search_nearby_places(lat, lng, radius, place_types=types, strict=True, counter=counter))
+    max_results = PLACE_CATEGORIES[category].get("max_results", PLACES_SHOWN)
 
-    out = []
-    for p in raw or []:
-        p_lat, p_lng = p.get("latitude"), p.get("longitude")
-        if p_lat is None or p_lng is None or not p.get("name"):
-            continue
-        out.append({
-            "name": p["name"],
-            "address": p.get("address") or None,
-            "lat": p_lat,
-            "lng": p_lng,
-            "distance_m": int(round(haversine_meters(lat, lng, p_lat, p_lng))),
-            "rating": p.get("rating"),
-            "rating_count": p.get("userRatingCount") or None,
-            "open_now": p.get("open_now"),
-            "phone": p.get("phone"),
-            "maps_url": p.get("maps_uri"),
-        })
-    if category == "hospital":
-        out.sort(key=lambda x: (x["open_now"] is not True, x["distance_m"]))
-    else:
-        out.sort(key=lambda x: x["distance_m"])
+    def search(radius_m: int) -> Tuple[List[Dict[str, Any]], int]:
+        rows = []
+        for p in _run_sync(search_nearby_places(lat, lng, radius_m, place_types=types, strict=True, counter=counter,
+                                                max_results=max_results)) or []:
+            p_lat, p_lng = p.get("latitude"), p.get("longitude")
+            if p_lat is None or p_lng is None or not p.get("name"):
+                continue
+            rows.append({
+                "name": p["name"],
+                "address": p.get("address") or None,
+                "lat": p_lat,
+                "lng": p_lng,
+                "distance_m": int(round(haversine_meters(lat, lng, p_lat, p_lng))),
+                "rating": p.get("rating"),
+                "rating_count": p.get("userRatingCount") or None,
+                "open_now": p.get("open_now"),
+                "phone": p.get("phone"),
+                "maps_url": p.get("maps_uri"),
+                "primary_type": p.get("primary_type"),
+                "types": p.get("types") or [],
+            })
+        return guide_places.filter_and_sort(category, rows)
+
+    radius = PLACES_RADIUS_M
+    out, matching = search(radius)
+    if not matching:                # nothing of this category in 3 km (an empty answer, or only medicine shops)
+        radius = PLACES_WIDE_RADIUS_M
+        out, matching = search(radius)
+    out = out[:PLACES_SHOWN]
     _cache_set(key, {"places": out, "radius_m": radius}, PLACES_CACHE_SECONDS)
     return out, False, radius, counter.count
 
@@ -738,26 +731,12 @@ def lookup_places(intent: Dict[str, Any], device_lat: Optional[float], device_ln
                       _ms_since(started))
 
 
-def _places_block(found: Dict[str, Any]) -> str:
-    """The prompt block: only what Google returned (name, distance, open now, rating). No phone, no address."""
-    where = f"near {found['label']}" if found.get("source") == "named" else "around the traveler's current location"
-    lines = [f"VERIFIED PLACES (Google, nearest first, {where}):"]
-    for i, p in enumerate(found.get("places") or [], 1):
-        open_txt = {True: "yes", False: "no"}.get(p.get("open_now"), "unknown")
-        rating = f"{p['rating']}" + (f" ({p['rating_count']} reviews)" if p.get("rating_count") else "") \
-            if p.get("rating") is not None else "no rating"
-        lines.append(f"{i}. {p['name']} | {_fmt_distance(p.get('distance_m'))} | open now: {open_txt} | rating: {rating}")
-    if len(lines) == 1:
-        lines.append("(nothing found)")
-    return "\n".join(lines) + "\n\n"
-
-
 def _place_fields(found: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Response fields for every reply: places (cards), emergency (112/108 strip), needs_location (button)."""
     if not found:
         return {"places": [], "emergency": False, "needs_location": False, "place_intent": None}
     return {
-        "places": [dict(p) for p in found.get("places") or []],
+        "places": [guide_places.public_place(p) for p in found.get("places") or []],
         "emergency": found["category"] == "hospital",
         "needs_location": found.get("status") == "needs_location",
         "place_intent": {"category": found["category"], "source": found.get("source"), "near": found.get("label")},
@@ -904,9 +883,10 @@ def _prepare_turn(user_id, message, mode, trip_id, dest, eff_lat, eff_lng, recen
 
     # 2. Choose prompt
     is_essential = gate_reason == ESSENTIAL_GATE
-    system_prompt = EMERGENCY_SYSTEM_PROMPT if is_essential else JARVIS_SYSTEM_PROMPT
-    if found:
-        system_prompt += PLACES_PROMPT_RULES
+    if found:       # nearby places: facts only. The general prompts ask for tips, timings and delivery apps.
+        system_prompt = guide_places.places_system_prompt(found["category"])
+    else:
+        system_prompt = EMERGENCY_SYSTEM_PROMPT if is_essential else JARVIS_SYSTEM_PROMPT
 
     # 3. Build context
     anchor = _build_context_anchor(is_essential, mode, dest, eff_lat, eff_lng, pharmacy_note=found is None)
@@ -915,15 +895,19 @@ def _prepare_turn(user_id, message, mode, trip_id, dest, eff_lat, eff_lng, recen
         rows = fetch_chat_history(user_id, trip_id=trip_id if mode == "trip" else None, limit=6)
         recent_history = [{"role": r["role"], "content": r["content"]} for r in rows]
 
-    places_block = _places_block(found) if found else ""
+    places_block = guide_places.places_block(found) if found else ""
     prompt = f"{anchor}\n\n{places_block}{_build_history_block(recent_history)}Traveler current query: {message}"
     return {**base, "place": found, "deflection": None, "is_essential": is_essential,
-            "system_prompt": system_prompt, "prompt": prompt, "temperature": 0.2 if is_essential else 0.4}
+            "system_prompt": system_prompt, "prompt": prompt, "temperature": 0.2 if is_essential or found else 0.4}
 
 
 def _failure_payload(turn: Dict[str, Any]) -> Dict[str, Any]:
-    """Every model failed: the same friendly text as before. Never saved."""
-    if turn["is_essential"]:
+    """Every model failed: the same friendly text as before (nearby places: the plain facts). Never saved."""
+    found = turn.get("place")
+    if found and found.get("places"):
+        reply = _with_emergency_prefix(found, guide_places.facts_reply(found, turn["message"]))
+        chips = ["Retry now"]
+    elif turn["is_essential"]:
         reply = "Aapke paas ke medical store ya 24x7 pharmacy ke liye Google Maps check karein ya Blinkit/Instamart se order karein."
         chips = ["Locate nearby pharmacy", "Nearest hospital", "Retry"]
     else:
@@ -952,7 +936,11 @@ def _finish_payload(turn: Dict[str, Any], raw_text: str, provider: str, grounded
     found = turn.get("place")
     if found:
         card = None  # the verified places are the cards; a model card could name something Google didn't return
+        clean_text, dropped = guide_places.clean_places_text(clean_text, found, turn["message"])
+        if dropped:
+            turn_log.info("[TOURGUIDE PLACES] text_check category=%s dropped=%s", found["category"], dropped)
         clean_text = _with_emergency_prefix(found, clean_text)
+        chips = guide_places.place_chips(found)
     return {
         "reply": clean_text,
         "chips": chips or default_chips,
@@ -1122,6 +1110,7 @@ async def stream_concierge_events(
 
         worker = loop.run_in_executor(None, pump)
         filt, batch = StreamTagFilter(), TokenBatcher()
+        gate = guide_places.PlaceSentenceGate(turn["place"]) if turn.get("place") else None
         failure: Optional[BaseException] = None
         try:
             while True:
@@ -1134,7 +1123,8 @@ async def stream_concierge_events(
                         return
                     continue
                 if kind == "piece":
-                    out = batch.add(filt.feed(value))
+                    safe = filt.feed(value)
+                    out = batch.add(gate.feed(safe) if gate else safe)
                     if out:
                         if ttft_ms is None:
                             ttft_ms = _ms_since(started)
@@ -1146,7 +1136,8 @@ async def stream_concierge_events(
                                       outcome="client_gone")
                             return
                 elif kind == "end":
-                    out = batch.add(filt.finish(), force=True)
+                    safe = filt.finish()
+                    out = batch.add(gate.feed(safe) + gate.finish() if gate else safe, force=True)
                     if out:
                         if ttft_ms is None:
                             ttft_ms = _ms_since(started)
@@ -1185,6 +1176,8 @@ async def stream_concierge_events(
             clean, _, _ = parse_blocks(raw_text)
             if "```" in clean:
                 clean = CODE_BLOCK_DEFLECTION
+            elif turn.get("place"):
+                clean, _ = guide_places.clean_places_text(clean, turn["place"], message)
             for chunk in _word_chunks(clean):
                 if ttft_ms is None:
                     ttft_ms = _ms_since(started)

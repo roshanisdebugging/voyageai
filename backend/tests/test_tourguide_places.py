@@ -136,10 +136,13 @@ gms.GOOGLE_MAPS_SERVER_KEY = "test-key-not-real"
 JAIPUR = (26.9124, 75.7873)
 
 
-def gplace(name, dlat, dlng, *, rating=4.2, count=120, open_now=None, phone=None, uri=None, addr=None):
+def gplace(name, dlat, dlng, *, rating=4.2, count=120, open_now=None, phone=None, uri=None, addr=None, types=None):
     p = {"displayName": {"text": name}, "formattedAddress": addr or f"{name} Road, Jaipur",
          "location": {"latitude": JAIPUR[0] + dlat, "longitude": JAIPUR[1] + dlng},
          "rating": rating, "userRatingCount": count}
+    types = types or (["pharmacy", "health", "store"] if "Pharmacy" in name else ["cafe", "food"] if "Cafe" in name
+                      else ["hospital", "health"])
+    p["primaryType"], p["types"] = types[0], types
     if open_now is not None:
         p["currentOpeningHours"] = {"openNow": open_now}
     if phone:
@@ -231,36 +234,42 @@ check("no Place Details call (no /v1/places/{id} GET)", not any(c["json"] is Non
 req = nearby[0]
 check("field mask is exactly the essentials", req["headers"].get("X-Goog-FieldMask") == (
     "places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,"
-    "places.currentOpeningHours.openNow,places.nationalPhoneNumber,places.googleMapsUri"), req["headers"].get("X-Goog-FieldMask"))
-check("hospital: includedTypes [hospital], DISTANCE, 5 results, 3000 m around the device",
+    "places.currentOpeningHours.openNow,places.nationalPhoneNumber,places.googleMapsUri,"
+    "places.primaryType,places.types"), req["headers"].get("X-Goog-FieldMask"))
+check("hospital: includedTypes [hospital], DISTANCE, 10 results, 3000 m around the device",
       req["json"]["includedTypes"] == ["hospital"] and req["json"]["rankPreference"] == "DISTANCE"
-      and req["json"]["maxResultCount"] == 5 and req["json"]["locationRestriction"]["circle"]["radius"] == 3000.0
+      and req["json"]["maxResultCount"] == 10 and req["json"]["locationRestriction"]["circle"]["radius"] == 3000.0
       and req["json"]["locationRestriction"]["circle"]["center"] == {"latitude": JAIPUR[0], "longitude": JAIPUR[1]},
       req["json"])
 check("hospital: reply starts with the 112/108 line", out["reply"].startswith("Emergency ho to 112 ya 108 dial karein."),
       out["reply"])
 check("hospital: emergency flag for the call strip", out["emergency"] is True and out["needs_location"] is False)
 names = [p["name"] for p in out["places"]]
-check("hospital: open-now first, then by distance", names == ["SMS Hospital", "City Care Hospital", "Fortis Escorts"], names)
+check("hospital: open now, then unknown, then closed", names == ["SMS Hospital", "Fortis Escorts", "City Care Hospital"], names)
 p0 = out["places"][0]
 check("place fields: name, address, lat, lng, distance_m, rating, open_now, phone, maps_url",
       {"name", "address", "lat", "lng", "distance_m", "rating", "open_now", "phone", "maps_url"} <= set(p0)
       and p0["phone"] == "0141 251 8222" and p0["maps_url"] == "https://maps.google.com/?cid=2"
       and p0["open_now"] is True and 1200 < p0["distance_m"] < 1450, p0)
-check("unknown open-now stays None (never guessed)", out["places"][2]["open_now"] is None)
+check("unknown open-now stays None (never guessed)", out["places"][1]["open_now"] is None)
 check("no model card when places are shown", out["card"] is None)
 check("place_intent says device", out["place_intent"] == {"category": "hospital", "source": "device", "near": None},
       out["place_intent"])
 
-# prompt block = only the returned places, no phone / address
+check("card data shape unchanged (no place types sent)", set(p0) == {
+    "name", "address", "lat", "lng", "distance_m", "rating", "rating_count", "open_now", "phone", "maps_url"}, sorted(p0))
+
+# prompt block = only the returned places (hospital: the first two), no phone
 pr = llm["prompt"] or ""
 check("prompt has the VERIFIED PLACES (Google) block", "VERIFIED PLACES (Google" in pr)
-check("prompt block lists exactly the 3 returned places", all(n in pr for n in names) and pr.count(" | open now: ") == 3, pr)
+check("prompt block (hospital): only the first two", all(n in pr for n in names[:2]) and names[2] not in pr
+      and pr.count(" | open now: ") == 2, pr)
 check("prompt block: open now yes/no/unknown + rating", "SMS Hospital | 1.3 km | open now: yes | rating: 4.2 (120 reviews)" in pr, pr)
-check("prompt has no phone number or address", "0141" not in pr and "Road, Jaipur" not in pr)
+check("prompt has the address, no phone number", "0141" not in pr and "address: SMS Hospital Road, Jaipur" in pr)
 check("system prompt has the 'only these places' rules", "Name ONLY places listed in the VERIFIED PLACES block" in llm["system"]
       and "Never invent phone numbers" in llm["system"])
-check("emergency prompt kept underneath", llm["system"].startswith(tg.EMERGENCY_SYSTEM_PROMPT))
+check("the places prompt replaces the general ones (no delivery apps, no tips)", llm["system"] == tg.guide_places.places_system_prompt("hospital")
+      and "Blinkit" not in llm["system"] and "quick delivery" not in llm["system"])
 check("old pharmacy note not added (no second Google call)", "Nearby verified stores" not in pr)
 
 hist = saved[0][5]
@@ -294,6 +303,7 @@ def empty_then_found(url, body):
 
 reset(empty_then_found)
 out = ask("medical shop near me")
+check("pharmacy: still 5 results", http_calls[0]["json"]["maxResultCount"] == 5)
 check("pharmacy: includedTypes [pharmacy, drugstore]", http_calls[0]["json"]["includedTypes"] == ["pharmacy", "drugstore"],
       http_calls[0]["json"]["includedTypes"])
 check("nothing at 3 km -> one retry at 10 km", calls_by_radius == [3000.0, 10000.0], calls_by_radius)
