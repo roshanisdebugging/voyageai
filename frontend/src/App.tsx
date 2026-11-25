@@ -15,7 +15,6 @@ import { TripCreationWizard } from './features/trip/screens/TripCreationWizard';
 import { MobileHeader } from './components/layout/Navbar';
 import { DesktopSidebar } from './components/layout/Sidebar';
 import { MobileBottomNav } from './components/layout/BottomNav';
-import { FloatingAIButton } from './components/ai/FloatingAIButton';
 import { NotificationDrawer } from './components/common/NotificationDrawer';
 import { AIAssistantSheet } from './components/ai/AIAssistantDrawer';
 import { ProfileSheet } from './components/profile/ProfilePage';
@@ -208,6 +207,8 @@ const AppShell: React.FC = () => {
   const [guideMicSlot, setGuideMicSlot] = useState<HTMLDivElement | null>(null);
   const [mapMicSlot, setMapMicSlot] = useState<HTMLDivElement | null>(null);
   // Voice: the mic button itself is mounted above the routes (it must survive the jump to /trips/new).
+  // Raised: the Undo toast and the itinerary notices use the strip between the mic and the bottom nav.
+  // On the map it sits inside the map view (mapTools).
   useMicLayout(!isGuideView, isMapView ? mapMicSlot : guideMicSlot);
 
   useEffect(() => {
@@ -257,18 +258,12 @@ const AppShell: React.FC = () => {
         <main className={`flex-1 min-w-0 flex flex-col max-w-full overflow-x-hidden ${isGuideView ? 'px-0 sm:px-4 py-0 sm:py-2 overflow-hidden' : isMapView ? 'min-h-0 overflow-hidden' : 'px-4 lg:px-8 py-4 lg:py-6 overflow-y-auto'}`}>
           <MainContent
             guideMicSlotRef={setGuideMicSlot}
-            mapTools={<>
-              <FloatingAIButton inFlow />
-              <div ref={setMapMicSlot} />
-            </>}
+            mapTools={<div ref={setMapMicSlot} />}
           />
         </main>
       </div>
 
       <MobileBottomNav inFlow={isGuideView || isMapView} />
-
-      {/* On the map it floats inside the map view (mapTools) */}
-      {!isGuideView && !(isMapView && mapMicSlot) && <FloatingAIButton />}
 
       {/* Bottom Sheets & Modals */}
       <NotificationDrawer />

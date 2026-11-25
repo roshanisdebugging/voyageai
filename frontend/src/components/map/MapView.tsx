@@ -43,8 +43,8 @@ const SEARCH_DEBOUNCE_MS = 300;
 const formatSearchDistance = formatStraightLine;
 const calculateDistance = haversineMeters;
 /** Room for the search bar on top and the card row at the bottom when fitting markers. */
-/** Room fitBounds leaves free: at the bottom, whatever lies over the map element from the floating buttons down
- *  (phones: buttons + attribution; desktop: also the cards, which overlay the map there). */
+/** Room fitBounds leaves free: at the bottom, whatever lies over the map element from the floating mic down
+ *  (phones: mic + attribution; desktop: also the cards, which overlay the map there). */
 const fitPadding = (canvas: HTMLElement | null, side: number): google.maps.Padding => {
   const tools = canvas?.parentElement?.querySelector('.map-app-tools');
   const covered = canvas && tools ? canvas.getBoundingClientRect().bottom - tools.getBoundingClientRect().top + 14 : 0;
@@ -85,7 +85,7 @@ interface SavedView { center: google.maps.LatLngLiteral; zoom: number; tilt: num
 const prefersReducedMotion = () =>
   typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
-/** `tools`: the floating buttons (Ask Cruiser + the mic slot), drawn over the map above Google's attribution. */
+/** `tools`: the floating mic (its slot), drawn over the map above Google's attribution. */
 export const MapView: React.FC<{ tools?: React.ReactNode }> = ({ tools }) => {
   const { userLocation, isFollowMode, setIsFollowMode } = useApp();
   const { currentTrip } = useTrip();
@@ -1087,10 +1087,10 @@ export const MapView: React.FC<{ tools?: React.ReactNode }> = ({ tools }) => {
     const canvas = mapContainerRef.current;
     const tools_ = root.querySelector<HTMLElement>('.map-app-tools');
     const controls = root.querySelector<HTMLElement>('.map-type-controls');
-    // Two stacked 40 px type buttons + gaps must end above the floating buttons.
+    // Two stacked 40 px type buttons + gaps must end above the floating mic.
     const free = tools_ && controls ? tools_.offsetTop - controls.offsetTop : Infinity;
     root.toggleAttribute('data-map-compact', free < 100);
-    // The voice note is fixed to the screen: keep it above the floating buttons, off the attribution.
+    // The voice note is fixed to the screen: keep it above the floating mic, off the attribution.
     if (tools_ && canvas) {
       const bottom = window.innerHeight - tools_.getBoundingClientRect().top + 8;
       document.documentElement.style.setProperty('--mic-note-bottom', `${Math.round(bottom)}px`);

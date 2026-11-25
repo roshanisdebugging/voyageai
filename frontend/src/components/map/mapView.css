@@ -8,7 +8,7 @@
   /* Height of the card / sheet, kept up to date by MapView. */
   --map-card-h: 0px;
   --map-card-space: calc(var(--map-card-h) + var(--map-gap) * 2);
-  /* Type controls + floating buttons + attribution: always left free above the card. */
+  /* Type controls + floating mic + attribution: always left free above the card. */
   --map-min-clear: 8.5rem;
 }
 
@@ -17,15 +17,13 @@
   inset: 0 0 var(--map-card-space) 0;
 }
 
-/* Floating buttons (Ask Cruiser + mic): over the map, above the attribution strip. */
+/* Floating mic: over the map, above the attribution strip. */
 .map-app-tools {
   position: absolute;
   z-index: 504;
   inset-inline-end: max(0.75rem, env(safe-area-inset-right, 0px));
   inset-block-end: calc(var(--map-card-space) + var(--map-attribution-height) + var(--map-gap));
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
   pointer-events: none;
 }
 
@@ -78,7 +76,7 @@
   }
 }
 
-/* Little map left above a tall card: type controls side by side, clear of the floating buttons. */
+/* Little map left above a tall card: type controls side by side, clear of the floating mic. */
 .map-view[data-map-compact] .map-type-controls {
   flex-direction: row;
 }
