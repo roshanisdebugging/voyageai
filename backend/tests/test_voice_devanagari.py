@@ -98,7 +98,8 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), \
     outcomes = {}
     for said in ("haan", "हाँ।"):
         conv = f"conv_dev_{uuid.uuid4().hex[:6]}"
-        r0 = ra("Goa jaana hai", conv, queue=FULL_DRAFT)
+        ra("Goa jaana hai", conv, queue=FULL_DRAFT)
+        r0 = ra("पता नहीं", conv)                   # "Kahan se jaana hai?" (optional origin) -> skipped, no LLM call
         calls_before = FakeTools.calls
         r1 = ra(said, conv)                         # answer to the date read-back
         no_llm_1 = FakeTools.calls == calls_before
@@ -115,12 +116,14 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), \
 
     conv = f"conv_dev_{uuid.uuid4().hex[:6]}"
     ra("Goa jaana hai", conv, queue=FULL_DRAFT)
+    ra("पता नहीं", conv)
     r = ra("नहीं", conv)
     check("'नहीं' to the date read-back -> dates cleared, asked again (like 'nahi')",
           r.reply_text == agent.DATE_AGAIN["hi"] and D.load(redis_conn, USER, conv).start_date is None, r.reply_text)
 
     conv = f"conv_dev_{uuid.uuid4().hex[:6]}"
     ra("Goa jaana hai", conv, queue=FULL_DRAFT)
+    ra("पता नहीं", conv)
     ra("हाँ", conv)
     r = ra("नहीं", conv)
     check("'नहीं' on the Confirm card -> cancelled (like 'nahi')", r.action == "trip_cancel" and P.get(redis_conn, USER, conv) is None,

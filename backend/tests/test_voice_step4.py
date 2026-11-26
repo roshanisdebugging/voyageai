@@ -117,7 +117,8 @@ check("budget words", [D.parse_budget(x) for x in ("50 hazaar", "1.5 lakh", "bee
 check("people words", [D.parse_int(x) for x in ("do", "teen", "koi nahi", 2)] == [2, 3, 0, 2])
 res = D.apply_update(D.TripDraftState(), {"budget_inr": 500}, "hi", TODAY, None)
 check("budget under ₹1,000 refused", res.problems and res.draft.budget_inr is None)
-dd = D.TripDraftState(destination={"name": "Goa"}, start_date=d(28), end_date=d(31), adults=2, children=0, budget_inr=40000)
+dd = D.TripDraftState(destination={"name": "Goa"}, start_date=d(28), end_date=d(31), adults=2, children=0, budget_inr=40000,
+                      origin_skipped=True)   # booking step 1: the optional origin is asked once; skipped here
 check("all fields but no read-back -> confirm_date, never ready", dd.next_step() == "confirm_date")
 dd.dates_confirmed = True
 check("after the read-back -> ready", dd.next_step() == "ready")
@@ -134,7 +135,8 @@ with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(pla
     r = ra("agle hafte se, 2 adults aur 2 bachche", USER_A, C,
            queue=[("tool", ("update_trip_draft", {"start_date": d(7), "adults": 2, "children": 2}))])
     s7, e9 = TODAY + timedelta(days=7), TODAY + timedelta(days=9)
-    want = f"{s7.day} {D.MONTHS[s7.month - 1]} se {e9.day} {D.MONTHS[e9.month - 1]}, do raat. Sahi hai?"
+    # booking step 1: with a starting city the read-back also says origin, destination and people
+    want = f"New Delhi se Jaipur, {s7.day} {D.MONTHS[s7.month - 1]} se {e9.day} {D.MONTHS[e9.month - 1]}, do raat, do bade log, do bachche. Sahi hai?"
     check("turn 2: dates read back in words, nothing opened yet", r.reply_text == want and r.step == "confirm_date" and r.ui_actions == [], r.reply_text)
     check("the prompt carries the draft and what code says is missing", "still missing" in FakeTools.calls[-1][0]["content"])
     n = len(FakeTools.calls)
@@ -165,6 +167,7 @@ with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(pla
     C2 = f"conv_s4_{uuid.uuid4().hex[:6]}"
     ra("Goa jaana hai", USER_A, C2, queue=[("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(20), "end_date": d(23),
                                                                            "adults": 2, "children": 0, "budget_inr": 50000}))])
+    ra("pata nahi", USER_A, C2)   # "Kahan se jaana hai?" -> skipped: the read-back stays dates-only
     r = ra("nahi", USER_A, C2)
     check("'nahi' to the read-back -> dates cleared, asked again", r.reply_text == agent.DATE_AGAIN["hi"] and D.load(redis_conn, USER_A, C2).start_date is None)
     r = ra("21 se 24", USER_A, C2, queue=[("tool", ("update_trip_draft", {"start_date": d(21), "end_date": d(24)}))])
@@ -189,11 +192,13 @@ with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(pla
     C3 = f"conv_s4_{uuid.uuid4().hex[:6]}"
     ra("Goa", USER_A, C3, queue=[("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(5), "days": 2, "adults": 1,
                                                                  "children": 0, "budget_inr": 9000}))])
+    ra("pata nahi", USER_A, C3)
     ra("haan", USER_A, C3)
     r = ra("nahi", USER_A, C3)
     check("'nahi' on the confirm card -> cancelled", r.action == "trip_cancel" and P.get(redis_conn, USER_A, C3) is None)
     ra("Goa", USER_A, C3, queue=[("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(5), "days": 2, "adults": 1,
                                                                  "children": 0, "budget_inr": 9000}))])
+    ra("pata nahi", USER_A, C3)
     ra("haan", USER_A, C3)
     r = ra("map kholo", USER_A, C3, queue=[("tool", ("navigate", {"page": "map"}))])
     check("a new topic cancels the pending confirmation (draft kept)", P.get(redis_conn, USER_A, C3) is None and D.load(redis_conn, USER_A, C3) is not None)
@@ -204,6 +209,7 @@ with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(pla
     C4 = f"conv_s4_{uuid.uuid4().hex[:6]}"
     ra("Goa", USER_A, C4, queue=[("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(5), "days": 2, "adults": 1,
                                                                  "children": 0, "budget_inr": 9000}))])
+    ra("pata nahi", USER_A, C4)
     pa = ra("haan", USER_A, C4).pending_confirmation
     check("user B can't confirm A's pending (same conversation id)", agent.confirm_trip(redis_conn, USER_B, C4, "hi", pa["id"]).action == "trip_confirm_none"
           and P.get(redis_conn, USER_A, C4) is not None)
@@ -269,7 +275,7 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.objec
         recv_until(ws, {"ready"})
         CW = "conv_s4_ws"
         FakeTools.queue = [("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(12), "days": 3, "adults": 2,
-                                                            "children": 0, "budget_inr": 30000}))]
+                                                            "children": 0, "budget_inr": 30000, "origin_city": "Delhi"}))]
         voice_turn(ws, CW, "Goa jaana hai")
         rep = voice_turn(ws, CW, "haan")
         pcid = (rep.get("pending_confirmation") or {}).get("id")
@@ -281,7 +287,7 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.objec
         cr2 = recv_until(ws, {"confirm_result"})
         check("socket: second Confirm does nothing", cr2["ok"] is False and cr2["ui_actions"] == [])
         FakeTools.queue = [("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(12), "days": 3, "adults": 2,
-                                                            "children": 0, "budget_inr": 30000}))]
+                                                            "children": 0, "budget_inr": 30000, "origin_city": "Delhi"}))]
         voice_turn(ws, CW, "Goa jaana hai")
         rep = voice_turn(ws, CW, "haan")
         pcid = rep["pending_confirmation"]["id"]
@@ -302,7 +308,7 @@ with mock.patch.object(pipeline, "get_stt", lambda: FakeSTT()), mock.patch.objec
         ws.send_json({"type": "auth", "token": toks["A"][0]})
         recv_until(ws, {"ready"})
         FakeTools.queue = [("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(12), "days": 3, "adults": 2,
-                                                            "children": 0, "budget_inr": 30000}))]
+                                                            "children": 0, "budget_inr": 30000, "origin_city": "Delhi"}))]
         voice_turn(ws, "conv_s4_shared", "Goa jaana hai")
         a_pc = voice_turn(ws, "conv_s4_shared", "haan")["pending_confirmation"]["id"]
         with client.websocket_connect("/ws/voice", headers={"origin": "http://localhost:5173"}) as wsb:

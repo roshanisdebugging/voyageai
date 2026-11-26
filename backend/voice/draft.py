@@ -20,12 +20,15 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from trip_lifecycle import MIN_BUDGET_INR   # the one budget minimum, shared with trip creation
+from trip_lifecycle import clean_place_name  # the one starting-city name rule, shared with trip creation
 
 DRAFT_TTL_SECONDS = 30 * 60
 MAX_DAYS = 30            # trip_lifecycle: at most 30 days
 MAX_TRAVELERS = 20       # trip_lifecycle: at most 20 travelers
 MAX_DAYS_AHEAD = 366
 REQUIRED = ["destination", "start_date", "end_date", "adults", "children", "budget_inr"]  # the order we ask in
+MAX_QUESTIONS = 2        # questions per turn (the date pair counts once); the optional origin only fills a free slot
+MAX_ORIGIN_ASKS = 2      # the origin question plus one retry after a failed lookup: never a third time
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December"]
@@ -60,12 +63,26 @@ class TripDraftState:
     plan_offer_card: Optional[str] = None          # the checked plan (pilgrimage card id) offered for this destination
     plan_offer: Optional[str] = None               # None / "asked" / "accepted" / "declined": asked once per destination
     plan_card_id: Optional[str] = None             # set ONLY by code, after a yes to the offer
+    # The optional starting city. Kept in the draft (Redis) so a retry never asks the same question a third time.
+    origin_asked: int = 0                          # times we asked for it (question or retry), at most MAX_ORIGIN_ASKS
+    origin_pending: bool = False                   # our last question asked for it: the next answer decides
+    origin_failed: int = 0                         # lookups that found nothing
+    origin_skipped: bool = False                   # "pata nahi" / not given when asked / second failed lookup
+    origin_same_ok: bool = False                   # the user said yes to "origin = destination?"
+    last_asked: List[str] = field(default_factory=list)   # fields our last question asked for (for the prompt)
 
     def missing_fields(self) -> List[str]:
         return [f for f in REQUIRED if getattr(self, f) is None and not (f == "end_date" and self.days)]
 
+    def wants_origin(self) -> bool:
+        """Ask for the starting city? Only once, and never after a skip."""
+        return self.origin_city is None and not self.origin_skipped and self.origin_asked == 0
+
+    def origin_is_destination(self) -> bool:
+        return (not self.origin_same_ok) and same_place(self.origin_city, self.destination)
+
     def next_step(self) -> str:
-        if self.missing_fields():
+        if self.missing_fields() or self.wants_origin():
             return "ask"
         if not self.dates_confirmed:
             return "confirm_date"
@@ -148,11 +165,22 @@ def nights_words(n: int, lang: str) -> str:
     return f"{word} raat"
 
 
+def same_place(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    if not a or not b:
+        return False
+    if a.get("id") and a.get("id") == b.get("id"):
+        return True
+    names = lambda p: {str(p.get(k) or "").strip().lower() for k in ("name", "city")} - {""}  # noqa: E731
+    return bool(names(a) & names(b))
+
+
 @dataclass
 class UpdateResult:
     draft: TripDraftState
     problems: List[str] = field(default_factory=list)   # short spoken reasons for refused values
     changed: List[str] = field(default_factory=list)
+    origin_not_found: Optional[str] = None               # a valid name that the place search did not find
+    origin_invalid: bool = False                         # not a place name (digits, too long, ...): not given
 
 
 def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: date, find_place_fn=None) -> UpdateResult:
@@ -183,13 +211,20 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             out.changed.append("destination")
         elif err:
             out.problems.append(err)
-    if args.get("origin_city"):
-        ref, err = place(args["origin_city"])
+    if args.get("origin_city") is not None and args.get("origin_city") != "":
+        name = clean_place_name(args["origin_city"])   # code checks what the model extracted
+        ref = place(name)[0] if name else None
         if ref:
+            if (draft.origin_city or {}).get("id") != ref.get("id"):
+                draft.dates_confirmed = False   # the read-back says the origin, so it must be read back again
+                draft.origin_same_ok = False
             draft.origin_city = ref
+            draft.origin_skipped = False
             out.changed.append("origin_city")
-        elif err:
-            out.problems.append(err)
+        elif name:
+            out.origin_not_found = name
+        else:
+            out.origin_invalid = True
 
     # Dates: start, end, or start + days. Checked together.
     start = parse_date(args.get("start_date")) if args.get("start_date") else (parse_date(draft.start_date) if draft.start_date else None)
@@ -269,13 +304,28 @@ QUESTIONS = {
     "adults": {"hi": "Kitne bade log jaa rahe hain?", "en": "How many adults are going?"},
     "children": {"hi": "Koi bachcha bhi saath hai?", "en": "Any children coming along?"},
     "budget_inr": {"hi": "Kul budget kitna hai?", "en": "What's the total budget?"},
+    "origin_city": {"hi": "Kahan se jaana hai?", "en": "Where are you starting from?"},
 }
+ORIGIN_RETRY = {"hi": "{name} nahi mila, phir se bolenge ya skip karein?",
+                "en": "I couldn't find {name}. Say it again, or say skip?"}
+ORIGIN_GIVE_UP = {"hi": "{name} bhi nahi mila, starting city ke bina aage badhte hain.",
+                  "en": "I couldn't find {name} either, so we'll go on without a starting city."}
+ORIGIN_SAME = {"hi": "{name} se {name} hi jaana hai? Sahi hai?", "en": "Starting from {name} and going to {name}? Is that right?"}
 
 
-def question_for(missing: List[str], lang: str, days_known: bool = False) -> str:
-    """At most 2 missing fields per question; the date pair counts as one."""
+def ask_fields(missing: List[str], ask_origin: bool = False) -> List[str]:
+    """What one question asks for: at most MAX_QUESTIONS missing fields (the date pair counts once), in the
+    fixed order; the optional origin goes after them, only if there is a free slot."""
+    fields = [f for f in missing if not (f == "end_date" and "start_date" in missing)][:MAX_QUESTIONS]
+    if ask_origin and len(fields) < MAX_QUESTIONS:
+        fields.append("origin_city")
+    return fields
+
+
+def question_for(missing: List[str], lang: str, days_known: bool = False, ask_origin: bool = False) -> str:
+    """At most 2 things per question; the date pair counts as one."""
     lang = "en" if lang == "en" else "hi"
-    fields = [f for f in missing if not (f == "end_date" and "start_date" in missing)][:2]
+    fields = ask_fields(missing, ask_origin)
     parts = []
     for f in fields:
         if f == "start_date" and days_known:
@@ -285,9 +335,28 @@ def question_for(missing: List[str], lang: str, days_known: bool = False) -> str
     return " ".join(parts)
 
 
+def people_words(adults: int, children: int, lang: str) -> str:
+    """2, 1 -> "do bade log, ek bachcha" / "2 adults, 1 child"."""
+    if lang == "en":
+        out = f"{adults} adult{'s' if adults != 1 else ''}"
+        return out + (f", {children} child{'ren' if children != 1 else ''}" if children else "")
+    word = lambda n: HINDI_NUMBERS[n] if 0 <= n < len(HINDI_NUMBERS) else str(n)  # noqa: E731
+    out = "ek bada" if adults == 1 else f"{word(adults)} bade log"
+    if children:
+        out += ", ek bachcha" if children == 1 else f", {word(children)} bachche"
+    return out
+
+
 def readback(draft: TripDraftState, lang: str) -> str:
+    """Without an origin: the dates only (unchanged). With one: origin se destination, dates, nights, people."""
     s, e = parse_date(draft.start_date), parse_date(draft.end_date)
     nights = max((e - s).days, 0)
+    if draft.origin_city:
+        frm, to = (draft.origin_city or {}).get("name", ""), (draft.destination or {}).get("name", "")
+        who = people_words(draft.adults or 0, draft.children or 0, "en" if lang == "en" else "hi")
+        if lang == "en":
+            return f"{frm} to {to}, {say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}, {who}. Is that right?"
+        return f"{frm} se {to}, {say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}, {who}. Sahi hai?"
     if lang == "en":
         return f"{say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}. Is that right?"
     return f"{say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}. Sahi hai?"

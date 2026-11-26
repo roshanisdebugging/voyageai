@@ -6,6 +6,7 @@ create_trip_for_user, so validation, limits and queueing behave the same way.
 The voice agent's create_trip tool must call it too.
 """
 import json
+import unicodedata
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional
@@ -23,6 +24,8 @@ MAX_TRIP_DAYS = 30
 MAX_TRAVELERS = 20
 MIN_BUDGET_INR = 1000
 MAX_BUDGET_INR = 10_000_000
+ORIGIN_MAX_CHARS = 60      # a starting city's name: letters, spaces and common punctuation only
+_PLACE_NAME_PUNCT = set(" .,'-()&/")
 
 # Budget level from rupees per person per day. A child counts as half a person.
 # The level is never shown to the user; it only steers the itinerary prompt and cache.
@@ -159,6 +162,35 @@ def _parse_place(raw: Any, label: str) -> Dict[str, Any]:
     return place
 
 
+def clean_place_name(raw: Any, max_chars: int = ORIGIN_MAX_CHARS) -> Optional[str]:
+    """A city name as said or typed -> trimmed name, or None when it isn't a place name: 2..max_chars characters,
+    only letters (any script, with their vowel signs), spaces and . , ' - ( ) & /, at least one letter, no digits."""
+    if raw is None or isinstance(raw, (bool, int, float)):
+        return None
+    name = " ".join(str(raw).split())
+    if not 2 <= len(name) <= max_chars:
+        return None
+    has_letter = False
+    for ch in name:
+        kind = unicodedata.category(ch)[0]
+        if kind == "L":
+            has_letter = True
+        elif kind != "M" and ch not in _PLACE_NAME_PUNCT:
+            return None
+    return name if has_letter else None
+
+
+def _parse_origin(raw: Any) -> Optional[Dict[str, Any]]:
+    """The optional starting city: a checked place whose name passes clean_place_name."""
+    if not raw:
+        return None
+    place = _parse_place(raw, "Starting city")
+    name = clean_place_name(place.get("name"))
+    if name is None:
+        raise TripValidationError(f"Starting city: use a city name of at most {ORIGIN_MAX_CHARS} letters.")
+    return {**place, "name": name}
+
+
 def _parse_budget_amount(raw: Any) -> Optional[int]:
     if raw in (None, ""):
         return None
@@ -237,9 +269,8 @@ def create_trip_for_user(
     destination = _parse_place(trip_data.get("destination"), "Destination")
     dest_name = destination["name"].strip()
 
-    origin_city = None
-    if trip_data.get("origin"):
-        origin_city = get_or_create_city(db, _parse_place(trip_data.get("origin"), "Starting city"))
+    origin = _parse_origin(trip_data.get("origin"))
+    origin_city = get_or_create_city(db, origin) if origin else None
 
     start_date, end_date, total_days = _parse_dates(trip_data)
     adults, children = _parse_travelers(trip_data)
@@ -315,6 +346,7 @@ def create_trip_for_user(
     db.add(trip)
     db.commit()
     print(f"[TRIP CREATED] {trip.id} '{trip.title}' ({total_days} days) for user {auth_user.id}", flush=True)
+    print(f"[TRIP DRAFT] trip={trip.id} origin_set={'true' if origin_city else 'false'} source=create", flush=True)
 
     if plan_card and _build_from_card_now(db, trip, plan_card["id"], total_days):
         return serialize_trip(trip, db)   # no AI needed: built from the card, no itinerary job queued
