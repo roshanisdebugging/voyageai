@@ -73,8 +73,18 @@ GOA = pl("ChIJgoa", "Goa", 15.29, 74.12, "Goa, India")
 PLACES = {"goa": GOA, "गोवा": GOA, "kolkata": KOLKATA, "कोलकाता": KOLKATA, "calcutta": KOLKATA,
           "patna": pl("ChIJpat", "Patna", 25.59, 85.14, "Patna, Bihar, India"),
           "पटना": pl("ChIJpat", "Patna", 25.59, 85.14, "Patna, Bihar, India"),
-          "jaipur": pl("ChIJjpr", "Jaipur", 26.91, 75.79, "Jaipur, Rajasthan, India")}
-fake_search = lambda q: PLACES.get(q.strip().lower(), [])  # noqa: E731
+          "jaipur": pl("ChIJjpr", "Jaipur", 26.91, 75.79, "Jaipur, Rajasthan, India"),
+          "delhi": pl("ChIJdel", "New Delhi", 28.61, 77.21, "New Delhi, Delhi, India"),
+          # what Google did with "पता": the top India result was Patna (now never searched)
+          "पता": pl("ChIJpat", "Patna", 25.59, 85.14, "Patna, Bihar, India"),
+          # a place whose name doesn't match what was said (speech-to-text heard a different town)
+          "rampur": pl("ChIJmor", "Moradabad", 28.84, 78.77, "Moradabad, Uttar Pradesh, India")}
+GOOGLE = []
+
+
+def fake_search(q):
+    GOOGLE.append(q)
+    return PLACES.get(q.strip().lower(), [])
 
 
 class FakeTools:
@@ -347,6 +357,212 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
     lines = [ln for ln in log.getvalue().splitlines() if ln.startswith("[TRIP DRAFT]")]
     check("log: [TRIP DRAFT] origin_set=true ... source=voice", any("origin_set=true" in ln and "source=voice" in ln for ln in lines), lines)
     check("log: never the city or the user's words", not any(w in log.getvalue() for w in ("Kolkata", "Goa", "haan")), log.getvalue()[-300:])
+
+# ---------------------------------------------------------------- "I don't know" fix (real transcripts) + name check
+RB_KOL = f"Kolkata se Goa, {say(20)} se {say(23)}, teen raat, do bade log. Sahi hai?"
+RB_PAT = f"Patna se Goa, {say(20)} se {say(23)}, teen raat, do bade log. Sahi hai?"
+SKIPPED_HI = f"Theek hai, starting city ke bina. {RB_HI}"
+
+
+def asked_origin(c):
+    """A Goa draft with everything but the origin: the app has just asked 'Kahan se jaana hai?'."""
+    r = ra(T_G, c, {"destination": "Goa", **ALL})
+    assert r.reply_text.endswith("Kahan se jaana hai?"), r.reply_text
+
+
+def quiet_turn(text, c, args=None):
+    """(result, no model call, no Google call)"""
+    g, m = len(GOOGLE), FakeTools.calls
+    r = ra(text, c, args)
+    return r, FakeTools.calls == m, len(GOOGLE) == g
+
+
+# unit: which sentences are a skip
+for text, asked, want in [("पता।", True, "short"), ("पता", True, "short"), ("pata", True, "short"), ("pata nahi", True, "short"),
+                          ("mujhe nahi pata", True, "short"), ("पता नहीं", True, "short"), ("chhodo", True, "short"),
+                          ("pata nahi yaar", True, "short"), ("मैंने बोला, पता नहीं कहाँ से जाऊँगा।", False, "short"),
+                          ("mujhe nahi pata kahan se", False, "short"), ("koi starting city nahi hai", False, "short"),
+                          ("pata nahi, Delhi se", True, "long"), ("पता नहीं, दिल्ली से", True, "long"),
+                          ("pata nahi kab jaana hai", False, None), ("pata nahi kab jaana hai", True, None),
+                          ("pata nahi", False, None), ("पता।", False, None), ("Patna", True, None), ("पटना", True, None),
+                          ("Patna se", True, None), ("nahi", True, None), ("haan", True, None), ("pata hai, Kolkata se", True, None)]:
+    got = agent.origin_skip_kind(text, asked)
+    check(f"origin_skip_kind({text!r}, asked={asked}) == {want}", got == want, got)
+for w in ["pata", "पता", "nahi", "नहीं", "nai", "kuch", "koi", "kahin", "pata nahi", "पता नहीं", "nahi pata", "नहीं पता",
+          "maloom", "मालूम", "chhodo", "छोड़ो", "skip", "abhi nahi", "Pata."]:
+    check(f"not a city: {w!r}", D.is_not_a_city(w))
+for w in ["Patna", "पटना", "Kolkata", "कोलकाता", "Pataudi", "Nahan"]:
+    check(f"a possible city: {w!r}", not D.is_not_a_city(w))
+
+with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.object(places, "search_places", fake_search):
+    # ---- the reported conversation, turn by turn
+    c = new_conv()
+    asked_origin(c)
+    r, no_model, no_google = quiet_turn("पता।", c)
+    check("'पता।' alone -> skipped, no origin, no model call, no Google call",
+          no_model and no_google and dr(c).origin_city is None and dr(c).origin_skipped and r.reply_text == SKIPPED_HI, r.reply_text)
+    # if the model is reached and returns "पता" as the city: discarded before Google
+    c = new_conv()
+    ra("Goa jaana hai", c, {"destination": "Goa"})
+    g = len(GOOGLE)
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
+        agent.update_draft(redis_conn, USER, c, {"origin_city": "पता"}, "hi")
+    check("model returns origin 'पता' -> discarded, no Google call", dr(c).origin_city is None and len(GOOGLE) == g, GOOGLE[g:])
+    check("log: origin_discarded_stopword=true", "origin_discarded_stopword=true" in log.getvalue(), log.getvalue())
+    for word in ["pata", "nahi", "kuch nahi", "koi", "पता नहीं", "मालूम नहीं"]:
+        g = len(GOOGLE)
+        agent.update_draft(redis_conn, USER, c, {"origin_city": word}, "hi")
+        check(f"model returns origin {word!r} -> discarded, no Google call", dr(c).origin_city is None and len(GOOGLE) == g)
+
+    # the wrong origin from before the fix is set; then the long sentence clears it
+    c = new_conv()
+    asked_origin(c)
+    r = ra("Patna se", c, {"origin_city": "Patna"})
+    check("setup: Patna set, read back", r.reply_text == RB_PAT, r.reply_text)
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
+        r, no_model, no_google = quiet_turn("मैंने बोला, पता नहीं कहाँ से जाऊँगा।", c)
+    check("'मैंने बोला, पता नहीं कहाँ से जाऊँगा।' with Patna set -> origin cleared, read-back without it",
+          no_model and dr(c).origin_city is None and dr(c).origin_skipped and r.reply_text == SKIPPED_HI, r.reply_text)
+    check("log: origin_cleared_by_skip=true, no words", "origin_cleared_by_skip=true" in log.getvalue()
+          and "Patna" not in log.getvalue() and "पता" not in log.getvalue(), log.getvalue())
+    r = ra("नहीं, मुझे कोलकाता से आना है।", c, {"origin_city": "कोलकाता"})
+    check("'नहीं, मुझे कोलकाता से आना है।' after the skip -> Kolkata taken, read back again", r.reply_text == RB_KOL, r.reply_text)
+    r = ra("haan", c)
+    check("then haan -> ready with Kolkata", r.step == "ready" and r.ui_actions[0]["prefill"]["origin"]["name"] == "Kolkata")
+    # the clear also drops a Confirm card made with the old origin
+    c = new_conv()
+    ra(T_KG, c, {"origin_city": "Kolkata", "destination": "Goa", **ALL})
+    ra("haan", c)
+    r, no_model, _ = quiet_turn("pata nahi kahan se jaunga", c)
+    check("on the Confirm card: 'pata nahi kahan se jaunga' -> card dropped, origin cleared, read back again",
+          no_model and P.get(redis_conn, USER, c) is None and dr(c).origin_city is None and r.reply_text == SKIPPED_HI, r.reply_text)
+
+    # ---- skip words after "Kahan se jaana hai?"
+    for text in ["pata nahi", "mujhe nahi pata", "पता नहीं", "chhodo", "pata nahi yaar", "mujhe nahi pata kahan se", "पता"]:
+        c = new_conv()
+        asked_origin(c)
+        r, no_model, no_google = quiet_turn(text, c)
+        check(f"after 'Kahan se?': {text!r} -> skip (no model, no Google)", no_model and no_google and dr(c).origin_skipped
+              and dr(c).origin_city is None and r.reply_text.endswith(RB[L(text)]), r.reply_text)
+    # a start word in the sentence: a skip any time, even with an origin set and no question asked
+    for text in ["koi starting city nahi hai", "mujhe nahi pata kahan se", "पता नहीं कहाँ से"]:
+        c = new_conv()
+        ra(T_KG, c, {"origin_city": "Kolkata", "destination": "Goa", **ALL})
+        r, no_model, _ = quiet_turn(text, c)
+        check(f"origin set, {text!r} -> cleared, read-back without it", no_model and dr(c).origin_city is None
+              and r.reply_text.endswith(RB[L(text)]), r.reply_text)
+
+    # ---- "pata nahi kab jaana hai" is about the date, not the origin
+    c = new_conv()
+    ra("Kolkata se Goa jaana hai", c, {"origin_city": "Kolkata", "destination": "Goa"})
+    r, no_model, _ = quiet_turn("pata nahi kab jaana hai", c)
+    check("'pata nahi kab jaana hai' -> not a skip: the model handles it, origin kept",
+          not no_model and dr(c).origin_city["name"] == "Kolkata" and not dr(c).origin_skipped, r.reply_text)
+
+    # ---- skip phrase + a real city: the city wins
+    c = new_conv()
+    asked_origin(c)
+    r = ra("pata nahi, Delhi se", c, {"origin_city": "Delhi"})
+    check("'pata nahi, Delhi se' -> Delhi (the city wins)", (dr(c).origin_city or {}).get("name") == "New Delhi"
+          and not dr(c).origin_skipped and r.reply_text.startswith("New Delhi se Goa,"), r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    r = ra("पता नहीं, दिल्ली से", c, {"origin_city": "Delhi"})
+    check("'पता नहीं, दिल्ली से' -> Delhi", (dr(c).origin_city or {}).get("name") == "New Delhi", r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    r = ra("pata nahi yaar, budget 60 hazaar kar do", c, {"budget_inr": 60000})
+    check("skip phrase + other details, no city -> skipped, the other details kept",
+          dr(c).origin_skipped and dr(c).origin_city is None and dr(c).budget_inr == 60000 and "starting city ke bina" in r.reply_text, r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    FakeTools.queue = [("text", "Theek hai.")]
+    r = agent.run_agent("pata nahi kahan se, sochna padega", "hi", user_id=USER, conversation_id=c, screen="/home", trip=None,
+                        redis_conn=redis_conn)
+    check("long skip and the model didn't update the draft -> still skipped, read back", dr(c).origin_skipped
+          and r.reply_text == SKIPPED_HI, r.reply_text)
+
+    # ---- after a skip a city the user volunteers is still taken (never ASKED again)
+    c = new_conv()
+    asked_origin(c)
+    ra("pata nahi", c)
+    r = ra("actually Jaipur se jaayenge", c, {"origin_city": "Jaipur"})
+    check("later voluntary city after a skip -> taken, read back with it", r.reply_text.startswith("Jaipur se Goa,"), r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("pata nahi", c)
+    r = ra("nahi, Patna se", c, {"origin_city": "Patna"})
+    check("correction at the read-back after a skip -> taken", r.reply_text == RB_PAT, r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("pata nahi", c)
+    r = ra("Kolkatta se", c, {"origin_city": "Kolkatta"})
+    check("after a skip a city that isn't found is not asked about again", "phir se bolenge" not in r.reply_text
+          and r.reply_text.endswith(RB_HI), r.reply_text)
+
+    # ---- real cities still work (no check question)
+    for text, city in [("पटना", "पटना"), ("Patna", "Patna"), ("पटना से", "पटना")]:
+        c = new_conv()
+        asked_origin(c)
+        r = ra(text, c, {"origin_city": city})
+        check(f"{text!r} -> Patna, straight to the read-back", r.step == "confirm_date"
+              and r.reply_text.startswith("Patna se Goa," if L(text) == "hi" else "Patna to Goa,"), r.reply_text)
+
+    # ---- the found place doesn't match what was said: asked once
+    c = new_conv()
+    asked_origin(c)
+    log = io.StringIO()
+    with contextlib.redirect_stdout(log):
+        r = ra("Rampur se", c, {"origin_city": "Rampur"})
+    check("name doesn't match -> 'Moradabad se? Sahi hai?'", r.reply_text == "Moradabad se? Sahi hai?" and dr(c).origin_city is None, r.reply_text)
+    check("log: origin_name_mismatch=true, no names", "origin_name_mismatch=true" in log.getvalue() and "Rampur" not in log.getvalue())
+    r, no_model, _ = quiet_turn("haan", c)
+    check("... haan -> Moradabad, read back", no_model and r.reply_text.startswith("Moradabad se Goa,"), r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("Rampur se", c, {"origin_city": "Rampur"})
+    r, no_model, _ = quiet_turn("nahi", c)
+    check("... nahi -> no origin, not asked again, read-back without it", no_model and dr(c).origin_skipped
+          and dr(c).origin_city is None and r.reply_text == f"Theek hai. {RB_HI}", r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("Rampur se", c, {"origin_city": "Rampur"})
+    r = ra("nahi, Kolkata se", c, {"origin_city": "Kolkata"})
+    check("... 'nahi, Kolkata se' -> Kolkata", r.reply_text == RB_KOL, r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("Rampur se", c, {"origin_city": "Rampur"})
+    r = ra("nahi, Rampur se", c, {"origin_city": "Rampur"})
+    check("never a second check question", "Sahi hai?" in r.reply_text and not r.reply_text.startswith("Moradabad se?")
+          and r.step == "confirm_date", r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("Rampur se", c, {"origin_city": "Rampur"})
+    r, no_model, _ = quiet_turn("pata nahi", c)
+    check("... 'pata nahi' -> skipped", no_model and dr(c).origin_skipped and dr(c).origin_candidate is None and r.reply_text == SKIPPED_HI,
+          r.reply_text)
+
+    # ---- the read-back never repeats the destination
+    c = new_conv()
+    r = ra(T_KG, c, {"origin_city": "Kolkata", "destination": "Goa", **ALL})
+    check("all in one with origin -> no 'Goa.' before 'Kolkata se Goa'", r.reply_text == RB_KOL, r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("Patna se", c, {"origin_city": "Patna"})
+    r = ra("Goa hi jaana hai, Patna se", c, {"destination": "Goa", "origin_city": "Patna"})
+    check("destination sent again with an origin -> said once", r.reply_text == RB_PAT and r.reply_text.count("Goa") == 1, r.reply_text)
+    c = new_conv()
+    asked_origin(c)
+    ra("pata nahi", c)
+    r = ra("Goa hi jaana hai", c, {"destination": "Goa"})
+    check("without an origin -> read-back as before, destination said once", r.reply_text == f"Goa. {RB_HI}"
+          and r.reply_text.count("Goa") == 1, r.reply_text)
+    c = new_conv()
+    r = ra("Kolkata se Goa jaana hai, 3 din", c, {"origin_city": "Kolkata", "destination": "Goa", "days": 3})
+    check("a question (not a read-back) keeps the 'Goa, 3 din.' prefix", r.reply_text.startswith("Goa, 3 din. "), r.reply_text)
+    check("the prompt says 'पता' alone is not a city", '"पता" / "pata" alone is NOT a city' in agent.SYSTEM_PROMPT)
 
 # ---------------------------------------------------------------- trip creation (typed form and voice prefill)
 USR = SimpleNamespace(id=f"usr_org_db_{uuid.uuid4().hex[:6]}")
