@@ -524,6 +524,22 @@ def yes_or_no(text: str) -> Optional[str]:
     return None
 
 
+# The checked-plan offer asks "Isse shuru karein?", so people answer "haan, shuru karo" / "हाँ, शुरू करो".
+# For THIS offer only, start words may come with the yes; a yes word is still required ("shuru karo" alone
+# does not accept). yes_or_no() itself is unchanged for every other question.
+_PLAN_START = {canon(w) for w in ("shuru", "suru", "start", "karo", "karein", "karen", "kare", "kariye", "kijiye",
+                                  "kar", "do", "ji", "please", "isse", "ise", "yahi", "plan", "se",
+                                  "शुरू", "करो", "करें", "करे", "करिए", "करिये", "कीजिए", "कीजिये", "कर",
+                                  "इससे", "इसे", "यही", "प्लान", "से", "जी")}
+
+
+def plan_offer_yes(text: str) -> bool:
+    if yes_or_no(text) == "yes":
+        return True
+    words = tu_words(text)
+    return bool(words) and len(words) <= 6 and set(words) <= (_YES | _PLAN_START) and bool(set(words) & _YES_CORE)
+
+
 # ---------------- memory (Redis)
 
 def _mem_key(user_id: str, conversation_id: str) -> str:
@@ -635,6 +651,11 @@ NOTHING_TO_CONFIRM = {"hi": "Abhi confirm karne ke liye kuch nahi hai.", "en": "
 CANCELLED_REPLY = {"hi": "Theek hai, trip nahi banayi. Kuch save nahi hua.", "en": "Okay, no trip was created. Nothing was saved."}
 REPLACED_NOTE = {"hi": "Pichli trip ka draft hata diya.", "en": "I dropped the previous trip draft."}
 DATE_AGAIN = {"hi": "Theek hai, kab se kab tak jaana hai?", "en": "Okay, from which date to which date?"}
+# Checked plans (pilgrimage cards): code decides when to offer; these are the fixed words.
+PLAN_OFFER = {"hi": "{name} ka ek checked plan hai. Isse shuru karein?",
+              "en": "There's a checked plan for {name}. Shall we start with it?"}
+PLAN_ACCEPTED = {"hi": "Theek hai, checked plan se banate hain.", "en": "Okay, we'll start from the checked plan."}
+PLAN_DECLINED = {"hi": "Theek hai.", "en": "Okay."}
 
 
 def _draft_today():
@@ -677,17 +698,62 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
     if had_pending:
         P.clear(redis_conn, user_id, conversation_id)   # details changed: the summary must be confirmed again
     d = d or D.TripDraftState()
+    prev_dest_id = (d.destination or {}).get("id")
     res = D.apply_update(d, {k: v for k, v in args.items() if k != "start_new"}, lang, _draft_today())
     if res.problems:
         D.save(redis_conn, user_id, conversation_id, res.draft)
         r = AgentResult(" ".join(res.problems[:2]), action="trip_draft", step="ask",
                         missing_count=len(res.draft.missing_fields()), error_code="refused_value")
         return r
+    if "destination" in res.changed and (res.draft.destination or {}).get("id") != prev_dest_id:
+        offer = _plan_offer(res.draft, args.get("destination"))
+        if offer is not None:
+            D.save(redis_conn, user_id, conversation_id, res.draft)
+            return AgentResult(f"{prefix} {PLAN_OFFER[lang].format(name=offer.short_name)}".strip(),
+                               action="trip_draft", step="plan_offer", missing_count=len(res.draft.missing_fields()))
     if "destination" in res.changed and not prefix:
         name = (res.draft.destination or {}).get("name", "")
         length = f", {res.draft.days} din" if res.draft.days and lang != "en" else (f", {res.draft.days} days" if res.draft.days else "")
         prefix = f"{name}{length}."
     return draft_next(redis_conn, user_id, conversation_id, res.draft, lang, prefix)
+
+
+def _plan_offer(d, said: Any):
+    """A new destination: forget any earlier offer, then offer a checked plan once if what the user SAID
+    matches a card (plain code, pilgrimage.match_card). Returns the card to offer, or None (old flow)."""
+    import pilgrimage
+    d.plan_offer = d.plan_offer_card = d.plan_card_id = None
+    card = pilgrimage.match_card(str(said or ""))
+    if card is None:
+        return None
+    d.plan_offer, d.plan_offer_card, d.awaiting = "asked", card.id, "card"
+    return card
+
+
+def answer_plan_offer(redis_conn, user_id: str, conversation_id: str, d, said: Optional[str], lang: str) -> Optional[AgentResult]:
+    """The answer to \"... ka ek checked plan hai. Isse shuru karein?\". Only a yes accepts. \"nahi\" declines and
+    continues; anything else declines and returns None so the turn is handled as usual."""
+    import pilgrimage
+    from voice import draft as D
+    from datetime import timedelta
+    d.awaiting = None
+    card = pilgrimage.get_card(d.plan_offer_card) if said == "yes" else None
+    if card is None:
+        d.plan_offer, d.plan_card_id = "declined", None
+        D.save(redis_conn, user_id, conversation_id, d)
+        if said == "no":
+            return draft_next(redis_conn, user_id, conversation_id, d, lang, PLAN_DECLINED[lang])
+        return None
+    d.plan_offer, d.plan_card_id = "accepted", card.id
+    print(f"[PILGRIMAGE] accepted card={card.id} draft={conversation_id}", flush=True)
+    if not d.days and not d.end_date:
+        start = D.parse_date(d.start_date) if d.start_date else None
+        if start:   # dates already given without a length: the card's default length
+            d.end_date = (start + timedelta(days=card.default_days - 1)).isoformat()
+            d.dates_confirmed = False
+        else:
+            d.days = card.default_days
+    return draft_next(redis_conn, user_id, conversation_id, d, lang, PLAN_ACCEPTED[lang])
 
 
 # A pending item was found and used ("smart_failed": it ran and the service failed; nothing changed).
@@ -967,6 +1033,13 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                                  open_trip_id=trip.id if trip is not None and trip.id else None)
     elif pending_conf and said == "no":
         result = cancel_pending(redis_conn, user_id, conversation_id, lang)
+    elif (draft_state is not None and draft_state.awaiting == "card"
+          and not (said == "no" and _starts_cancel(transcript))):
+        # A checked plan was offered: only a yes accepts; anything else declines (and is handled as usual).
+        result = answer_plan_offer(redis_conn, user_id, conversation_id, draft_state,
+                                   "yes" if plan_offer_yes(transcript) else said, lang)
+        if result is None:
+            draft_state = D.load(redis_conn, user_id, conversation_id)
     elif draft_state is not None and draft_state.awaiting == "date" and said == "yes":
         draft_state.dates_confirmed = True     # set only here, by code, after the read-back
         result = draft_next(redis_conn, user_id, conversation_id, draft_state, lang)

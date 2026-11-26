@@ -17,7 +17,7 @@ from models import AuthUser, UserPreferences, UserProfile
 from models_place import CityModel, city_to_dict, get_or_create_city
 from models_trip import TripModel
 from places import validate_destination_payload
-from task_queue import enqueue_itinerary_generation
+from task_queue import enqueue_itinerary_generation, publish_trip_event
 
 MAX_TRIP_DAYS = 30
 MAX_TRAVELERS = 20
@@ -168,6 +168,47 @@ def _parse_budget_amount(raw: Any) -> Optional[int]:
     return amount
 
 
+def _plan_card_meta(card_id, destination) -> Optional[Dict[str, Any]]:
+    """What the trip keeps of a checked plan (no migration: stored in preferences_snapshot_json).
+    None when no card was asked for, it no longer exists, or it does not fit the destination."""
+    if not card_id or not isinstance(card_id, str):
+        return None
+    import pilgrimage
+    card = pilgrimage.get_card(card_id)
+    if card is None or not pilgrimage.card_fits_destination(card, destination):
+        reason = "card_missing" if card is None else "destination_changed"
+        print(f"[PILGRIMAGE] card not used card={str(card_id)[:80]} reason={reason}", flush=True)
+        return None
+    return {
+        "id": card.id,
+        "version": card.version,
+        "status": card.status,
+        "lastVerified": card.last_verified.isoformat() if card.last_verified else None,
+        "nameEn": card.name_en,
+        "nameHi": card.name_hi,
+        "bookingNotes": [{"text": n.text, "officialUrl": n.official_url} for n in card.booking_notes],
+    }
+
+
+def _build_from_card_now(db: Session, trip: TripModel, card_id: str, total_days: int) -> bool:
+    """A checked-plan trip that needs no AI day (same or fewer days than the card): build the itinerary from the
+    card right here (Google look-ups only) and queue no job. False: the worker builds it (card days + AI days),
+    or, if this build fails, the worker retries from the card."""
+    import pilgrimage
+    card = pilgrimage.get_card(card_id)
+    if card is None or pilgrimage.plan_days(card, total_days).extra_days:
+        return False
+    try:
+        from plan_card_itinerary import generate
+        generate(trip, db, card)
+    except Exception as err:
+        db.rollback()
+        print(f"[PILGRIMAGE] build at creation failed trip={trip.id} card={card.id} error={type(err).__name__}; queued", flush=True)
+        return False
+    publish_trip_event(trip.id, "READY")
+    return True
+
+
 def create_trip_for_user(
     db: Session,
     auth_user: AuthUser,
@@ -234,6 +275,11 @@ def create_trip_for_user(
         "budgetLevel": budget_level,
     }
 
+    # A checked plan (pilgrimage card) chosen by voice: kept only if it still names this destination.
+    plan_card = _plan_card_meta(trip_data.get("planCardId"), destination)
+    if plan_card:
+        pref_snapshot["planCard"] = plan_card
+
     budget = {
         "level": budget_level,
         "targetAmount": budget_amount,  # None when the user gave no amount
@@ -270,5 +316,7 @@ def create_trip_for_user(
     db.commit()
     print(f"[TRIP CREATED] {trip.id} '{trip.title}' ({total_days} days) for user {auth_user.id}", flush=True)
 
+    if plan_card and _build_from_card_now(db, trip, plan_card["id"], total_days):
+        return serialize_trip(trip, db)   # no AI needed: built from the card, no itinerary job queued
     enqueue_itinerary_generation(trip.id)
     return serialize_trip(trip, db)

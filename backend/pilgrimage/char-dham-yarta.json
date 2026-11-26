@@ -1,0 +1,119 @@
+{
+    "id": "char-dham-yatra",
+    "version": 1,
+    "status": "draft_unverified",
+    "name_en": "Char Dham Yatra, Uttarakhand",
+    "name_hi": "चार धाम यात्रा, उत्तराखंड",
+    "match_names": [
+        "चार धाम",
+        "चारधाम",
+        "Char Dham",
+        "Chardham",
+        "Char Dham Yatra",
+        "छोटा चार धाम",
+        "Chota Char Dham"
+    ],
+    "region": "Uttarakhand",
+    "kind": "pilgrimage",
+    "duration_days_min": 4,
+    "duration_days_max": 4,
+    "default_days": 4,
+    "best_months": [],
+    "avoid_months": [
+        {
+            "months": [
+                12,
+                1,
+                2,
+                3
+            ],
+            "reason": "The shrines are closed for winter. They reopen around Akshaya Tritiya (April or May) and close around Diwali and Bhai Dooj (October or November). Exact dates are announced each year."
+        }
+    ],
+    "days": [
+        {
+            "day_number": 1,
+            "title": "Yamunotri",
+            "stops": [
+                {
+                    "name": "Yamunotri Temple",
+                    "city": "Uttarkashi",
+                    "visit_minutes": 240,
+                    "priority": "must",
+                    "note": "The last 5 to 6 km from Janki Chatti is a trek. Ponies and palkis are available, but many pilgrims walk."
+                }
+            ]
+        },
+        {
+            "day_number": 2,
+            "title": "Gangotri",
+            "stops": [
+                {
+                    "name": "Gangotri Temple",
+                    "city": "Uttarkashi",
+                    "visit_minutes": 150,
+                    "priority": "must",
+                    "note": "Reached directly by road via Uttarkashi."
+                }
+            ]
+        },
+        {
+            "day_number": 3,
+            "title": "Kedarnath",
+            "stops": [
+                {
+                    "name": "Kedarnath Temple",
+                    "city": "Rudraprayag",
+                    "visit_minutes": 150,
+                    "priority": "must",
+                    "note": "Not reachable by road. From Gaurikund it is a 16 to 18 km uphill trek, or a helicopter booked only through IRCTC. See the separate Kedarnath card for the full rules."
+                }
+            ]
+        },
+        {
+            "day_number": 4,
+            "title": "Badrinath",
+            "stops": [
+                {
+                    "name": "Badrinath Temple",
+                    "city": "Chamoli",
+                    "visit_minutes": 150,
+                    "priority": "must",
+                    "note": "Opening dates are announced each year. Timings and access details could not be confirmed."
+                }
+            ]
+        }
+    ],
+    "booking_notes": [
+        {
+            "text": "Online registration is mandatory and free for all pilgrims. Register on the Uttarakhand portal or the Tourist Care Uttarakhand app. Carry the registration slip and a valid photo ID throughout. Registration opens a few weeks before the season (in 2026 it opened on 6 March).",
+            "official_url": "https://registrationandtouristcare.uk.gov.in/"
+        },
+        {
+            "text": "Helicopter tickets, especially for Kedarnath, can only be booked with valid registration, on the official IRCTC HeliYatra site. The ID used for booking must match the ID shown at boarding.",
+            "official_url": "https://heliyatra.irctc.co.in/"
+        }
+    ],
+    "dress_code": null,
+    "elderly_notes": "Yamunotri involves a 5 to 6 km trek and Kedarnath a 16 to 18 km uphill trek at high altitude; both are hard for older pilgrims. Ponies, palkis and helicopters exist, and a doctor's advice is sensible before going. Medical checkpoints and ambulances are placed along the route.",
+    "transport_notes": null,
+    "last_verified": null,
+    "sources": [
+        "https://registrationandtouristcare.uk.gov.in/",
+        "https://heliyatra.irctc.co.in/",
+        "https://www.thestatesman.com/india/char-dham-yatra-2026-dates-routes-registration-guide-1503584319.html",
+        "https://www.outlooktraveller.com/News/char-dham-yatra-2026-new-rules-registration-and-safety-guidelines-explained",
+        "https://news24online.com/india/char-dham-yatra-2026-online-registration-begins-check-how-to-register-for-kedarnath-badrinath-gangotri-yamunotri-opening-dates-step-by-step-guide-for-devotees/766890/"
+    ],
+    "unverified": [
+        "Days are one per shrine only. Road travel days between the shrines are NOT included. News reports say the full circuit usually takes a week or more by road, so this card is incomplete for a real trip",
+        "Season dates for the coming year (2026 season: Yamunotri and Gangotri opened 19 April, Kedarnath 22 April, Badrinath 23 April, closing about early to mid November; next dates not announced)",
+        "Order of the circuit and how to travel between the shrines",
+        "Badrinath access, timings and any trek",
+        "Daily pilgrim limits for each shrine",
+        "Health rules and entry rules introduced in 2026",
+        "Dress code and transport notes",
+        "visit_minutes values are planning estimates, not sourced",
+        "Most details come from news and third-party guides; the official portals were not readable"
+    ]
+}

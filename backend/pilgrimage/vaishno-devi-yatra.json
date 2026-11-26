@@ -1,0 +1,98 @@
+{
+    "id": "vaishno-devi-katra",
+    "version": 1,
+    "status": "draft_unverified",
+    "name_en": "Vaishno Devi Yatra, Katra",
+    "name_hi": "वैष्णो देवी यात्रा, कटरा",
+    "match_names": [
+        "वैष्णो देवी",
+        "वैष्णोदेवी",
+        "Vaishno Devi",
+        "Vaishnodevi",
+        "Mata Vaishno Devi",
+        "माता वैष्णो देवी",
+        "Katra",
+        "कटरा"
+    ],
+    "region": "Jammu and Kashmir",
+    "kind": "pilgrimage",
+    "duration_days_min": 1,
+    "duration_days_max": 3,
+    "default_days": 2,
+    "best_months": [],
+    "avoid_months": [],
+    "days": [
+        {
+            "day_number": 1,
+            "title": "Reach Katra and collect the Yatra slip",
+            "stops": [
+                {
+                    "name": "Yatra Registration Counter, Katra",
+                    "city": "Katra",
+                    "visit_minutes": 60,
+                    "priority": "must",
+                    "note": "The Yatra slip is free and nobody may pass the Banganga check post without it. Registration is also possible online on the Shrine Board site. The Shrine Board has at times suspended fresh registration because of heavy rush or bad weather, so check before travelling. Leave unneeded luggage, cameras and electronic equipment at Katra."
+                }
+            ]
+        },
+        {
+            "day_number": 2,
+            "title": "Yatra to Bhawan, darshan and Bhairon temple",
+            "stops": [
+                {
+                    "name": "Banganga Check Post",
+                    "city": "Katra",
+                    "visit_minutes": 20,
+                    "priority": "must",
+                    "note": "The Yatra slip is checked here. Carry a photo ID as well."
+                },
+                {
+                    "name": "Adhkwari",
+                    "city": "Katra",
+                    "visit_minutes": 30,
+                    "priority": "optional",
+                    "note": "Ponies, palkis and porters can be hired through contractor offices here, at Bhawan or at Katra. Rates are approved by the government and shown on Shrine Board signboards. Check the operator's registration card before hiring."
+                },
+                {
+                    "name": "Shri Mata Vaishno Devi Bhawan",
+                    "city": "Katra",
+                    "visit_minutes": 180,
+                    "priority": "must",
+                    "note": "A group number is taken at the Yatra slip check post at Bhawan and darshan starts only when your number is announced. Free cloakrooms are available. Only cash and selected offerings may go into the cave; coconuts are deposited against a token."
+                },
+                {
+                    "name": "Bhairon Temple",
+                    "city": "Katra",
+                    "visit_minutes": 90,
+                    "priority": "optional",
+                    "note": "Bhairon darshan is done only after darshan at the Holy Cave."
+                }
+            ]
+        }
+    ],
+    "booking_notes": [
+        {
+            "text": "Yatra registration is free and is done by the Shrine Board only. No other organisation or agent is authorised to issue it. Online slip and room bookings are on the official Shrine Board website. Confirm the current registration rules (including RFID cards) there before travelling.",
+            "official_url": "https://www.maavaishnodevi.org/"
+        }
+    ],
+    "dress_code": "No specific dress code is set by the Shrine Board; modest clothing is advised. Carry warm clothes even on sunny days, as weather on the Trikuta hills changes quickly.",
+    "elderly_notes": "Palkis are available for infirm visitors. People with high blood pressure, heart problems or asthma should get medical clearance first. People with medical conditions are advised against using the stairs.",
+    "transport_notes": null,
+    "last_verified": null,
+    "sources": [
+        "https://maavaishnodevi.org/faq",
+        "https://www.maavaishnodevi.org/blog/yatra-registration",
+        "https://newsonair.gov.in/fresh-registration-for-shri-mata-vaishno-devi-pilgrimage-suspended-amid-adverse-weather/"
+    ],
+    "unverified": [
+        "Distance and walking time from Katra to Bhawan (not stated on the official FAQ)",
+        "RFID card rules for the Yatra slip",
+        "Helicopter service, battery cars and ropeway to Bhairon (not on the official FAQ page)",
+        "Darshan and aarti timings",
+        "Best and avoid months, and how long registration stays suspended during Navratri, New Year and bad weather",
+        "Number of days people usually take",
+        "visit_minutes values are planning estimates, not sourced",
+        "Official photo ID requirement (the FAQ does not name one; a news report says ID is checked at Banganga)"
+    ]
+}

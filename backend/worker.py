@@ -32,6 +32,8 @@ except Exception:
     pass
 
 def start_worker():
+    import pilgrimage
+    pilgrimage.init_cards()   # checked plans, used for trips made from a card
     logger.info(f"VoyageAI Background Task Worker listening on queue: {TASK_QUEUE_KEY}")
     print(f"[WORKER READY] Listening for jobs on '{TASK_QUEUE_KEY}' (Press Ctrl+C to stop)...", flush=True)
 

@@ -35,5 +35,12 @@ check('no valid places -> the action is ignored', U.runUiActions([{ type: 'map_r
   { navigate: () => {}, mapResults: (r) => { got = r; } }) === 0 && got === null);
 check('no title -> ignored', U.runUiActions([{ type: 'map_results', places }], { navigate: () => {}, mapResults: () => {} }) === 0);
 
+// open_review prefill: a checked plan id (pilgrimage card) passes only in its strict shape.
+const dest = { id: 'ChIJvar', name: 'Varanasi', city: 'Varanasi', region: 'Uttar Pradesh', country: 'India', latitude: 25.31, longitude: 83.01, displayName: 'Varanasi' };
+check('prefill keeps a well-formed planCardId', U.sanitizePrefill({ destination: dest, planCardId: 'varanasi-kashi-yatra' })?.planCardId === 'varanasi-kashi-yatra');
+check('prefill drops a bad planCardId', U.sanitizePrefill({ destination: dest, planCardId: '../x' })?.planCardId === undefined
+  && U.sanitizePrefill({ destination: dest, planCardId: 42 })?.planCardId === undefined);
+check('prefill without planCardId has none', U.sanitizePrefill({ destination: dest })?.planCardId === undefined);
+
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

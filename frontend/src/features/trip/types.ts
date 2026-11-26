@@ -39,6 +39,23 @@ export interface TripPreferencesSnapshot {
   activityInterests: ActivityInterest[];
   budgetLevel?: BudgetLevel;
   snapshotVersion?: number;
+  /** Set only for a trip made from a checked plan (backend/pilgrimage card). */
+  planCard?: PlanCardMeta;
+}
+
+/** What a trip keeps of the checked plan it was made from (backend trip_lifecycle + plan_card_itinerary). */
+export interface PlanCardMeta {
+  id: string;
+  version: number;
+  status: string;
+  lastVerified: string | null;
+  nameEn: string;
+  nameHi?: string;
+  bookingNotes?: { text: string; officialUrl?: string | null }[];
+  /** Which trip day came from the card, from the AI, or is a free day. */
+  days?: { dayNumber: number; source: 'card' | 'ai' | 'free'; cardDay?: number | null }[];
+  /** Per activity id: Google place_id, and whether Google could not place it. */
+  stops?: Record<string, { placeId: string | null; unresolved: boolean; source: 'card' | 'ai' }>;
 }
 
 export interface TripProgress {
@@ -126,6 +143,8 @@ export interface TripDraft {
   tripStyle?: TravelStyle[];
   budgetLevel?: BudgetLevel;
   customBudgetAmount?: number;
+  /** A checked plan accepted by voice ("haan"); the server checks it against the destination. */
+  planCardId?: string;
   currentStep?: number;
   updatedAt?: string;
 }
@@ -141,6 +160,7 @@ export interface CreateTripPayload {
   childrenCount: number;
   tripStyle?: TravelStyle[];
   budgetAmount: number;
+  planCardId?: string;
 }
 
 export type PackageItemStatus = 'RECOMMENDED' | 'SELECTED' | 'PENDING' | 'CONFIRMED' | 'CANCELLED';

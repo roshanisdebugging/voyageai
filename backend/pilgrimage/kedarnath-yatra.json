@@ -1,0 +1,97 @@
+{
+    "id": "kedarnath-yatra",
+    "version": 1,
+    "status": "draft_unverified",
+    "name_en": "Kedarnath Yatra",
+    "name_hi": "केदारनाथ यात्रा",
+    "match_names": [
+        "केदारनाथ",
+        "Kedarnath",
+        "Kedar Nath",
+        "Kedarnath Dham",
+        "केदारनाथ धाम"
+    ],
+    "region": "Uttarakhand",
+    "kind": "pilgrimage",
+    "duration_days_min": 2,
+    "duration_days_max": 3,
+    "default_days": 2,
+    "best_months": [],
+    "avoid_months": [
+        {
+            "months": [
+                12,
+                1,
+                2,
+                3
+            ],
+            "reason": "The shrine is closed for winter. It reopens around Akshaya Tritiya (April or May) and closes around Bhai Dooj (October or November). Exact dates are announced each year."
+        }
+    ],
+    "days": [
+        {
+            "day_number": 1,
+            "title": "Sonprayag health check, Gaurikund and the trek up",
+            "stops": [
+                {
+                    "name": "Sonprayag",
+                    "city": "Rudraprayag",
+                    "visit_minutes": 60,
+                    "priority": "must",
+                    "note": "A third-party guide says staff check oxygen level (SpO2) and blood pressure here, and that pilgrims with very low readings may not be allowed to continue. Confirm this on the official channels. Carry the registration e-pass and a government photo ID."
+                },
+                {
+                    "name": "Gaurikund",
+                    "city": "Rudraprayag",
+                    "visit_minutes": 420,
+                    "priority": "must",
+                    "note": "Last motorable point. The trek to the temple is about 16 to 18 km, steep in parts. A travel blog says 6 to 8 hours one way, which is not an official figure. Ponies and palkis are available, and they need registration too. Avoid trekking after dark."
+                }
+            ]
+        },
+        {
+            "day_number": 2,
+            "title": "Kedarnath darshan and return",
+            "stops": [
+                {
+                    "name": "Kedarnath Temple",
+                    "city": "Rudraprayag",
+                    "visit_minutes": 150,
+                    "priority": "must",
+                    "note": "At about 3,583 m the weather is cold even in summer, and it falls to near zero at night. Darshan runs in time slots; the timings could not be confirmed. Modest traditional clothing is expected."
+                }
+            ]
+        }
+    ],
+    "booking_notes": [
+        {
+            "text": "Registration is mandatory and free, and no agent or paid site is needed. Register on the Uttarakhand portal or the Tourist Care Uttarakhand app. Each pilgrim registers separately and keeps the QR e-pass. Entry is denied without it.",
+            "official_url": "https://registrationandtouristcare.uk.gov.in/"
+        },
+        {
+            "text": "Helicopter tickets are booked only on the IRCTC HeliYatra site and need your registration number. The ID used for booking must match the ID shown at boarding. Slots sell out within minutes, so other sites offering tickets should be treated as fake.",
+            "official_url": "https://heliyatra.irctc.co.in/"
+        }
+    ],
+    "dress_code": "Modest traditional clothing for darshan. For the trek: thermal inners, a fleece, a waterproof jacket, grip shoes, a woollen cap and gloves. Sandals and flip-flops are not suitable beyond Gaurikund.",
+    "elderly_notes": "The trek is long and steep and the altitude is high. People with asthma, diabetes, heart problems or high blood pressure should see a doctor first. Helicopter, pony and palki are the options for those who cannot trek. Rest a night at Rishikesh or Haridwar to adjust before going up.",
+    "transport_notes": "Mountain road travel is restricted at night. A third-party guide says between 10 PM and 4 AM. Confirm locally. Outside vehicles may need a Green Card permit.",
+    "last_verified": null,
+    "sources": [
+        "https://registrationandtouristcare.uk.gov.in/",
+        "https://heliyatra.irctc.co.in/",
+        "https://kedarnathtemple.com/kedarnath-yatra-2026-new-rules/",
+        "https://www.outlooktraveller.com/News/char-dham-yatra-2026-new-rules-registration-and-safety-guidelines-explained"
+    ],
+    "unverified": [
+        "Season dates for the coming year (2026 season: opened 22 April, closes about 11 November; next dates not announced)",
+        "Daily pilgrim cap (sources say about 12,000 and about 18,000)",
+        "Trek timing windows and how many hours the trek takes",
+        "Exact SpO2 threshold and the age at which a health certificate is advised",
+        "Darshan timings and VIP darshan rules",
+        "Pony, palki and helicopter fares",
+        "Number of days people usually take",
+        "visit_minutes values are planning estimates, not sourced",
+        "Most details come from third-party guides; the official portals were not readable"
+    ]
+}

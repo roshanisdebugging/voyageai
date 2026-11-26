@@ -11,6 +11,8 @@ import { Trip3DFlyoverButton } from '../map/Trip3DFlyover';
 import { TravelFromHere, TravelOriginBar } from './TravelLeg';
 import { TripBudgetStrip } from './TripBudgetStrip';
 import { MAX_LEGS_PER_DAY } from '../map/mapLogic';
+import { PlanCardInfo, PlanDayLabel, UnresolvedStopNote } from './PlanCardInfo';
+import { planCardOf } from './planCard';
 
 const aiActionClassName =
   'flex min-h-11 items-center gap-1.5 rounded-full border border-[#355F58]/30 bg-[#E8F0EE] px-3 py-1.5 text-xs font-bold text-(--color-primary) press-scale hover:bg-[#D4E4E0] max-sm:px-3.5 dark:border-emerald-800 dark:bg-[#12332B] dark:hover:bg-[#194437]';
@@ -172,6 +174,7 @@ export const ItineraryView: React.FC = () => {
     type === 'FLIGHT' ? <Plane className="w-4 h-4" /> : type === 'BUS' ? <Bus className="w-4 h-4" /> : type === 'TRAIN' ? <TrainFront className="w-4 h-4" /> : <Car className="w-4 h-4" />;
 
   const destName = currentTrip?.destination?.name || 'Trip Destination';
+  const planCard = planCardOf(currentTrip);
 
   const handleDownloadPdfOrPrint = () => {
     setShowExportDropdown(false);
@@ -465,6 +468,9 @@ export const ItineraryView: React.FC = () => {
         </div>
       ) : (
         <>
+          {/* Made from a checked plan: verification and booking notes */}
+          {planCard && <PlanCardInfo meta={planCard} />}
+
           {/* Day Pills Selector */}
           <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
             {days.map(day => (
@@ -491,6 +497,7 @@ export const ItineraryView: React.FC = () => {
                 <div>
                   <h2 className="text-base font-extrabold text-[var(--color-text-primary)]">{selectedDay.title}</h2>
                   <p className="text-xs text-[var(--color-text-secondary)] font-medium mt-0.5">{selectedDay.date || `Day ${selectedDay.dayNumber}`}</p>
+                  {planCard && <div className="mt-1.5"><PlanDayLabel meta={planCard} dayNumber={selectedDay.dayNumber} /></div>}
                 </div>
                 <span className="px-3 py-1 rounded-full bg-[#E8F0EE] dark:bg-[#12332B] text-[var(--color-primary)] font-bold text-xs border border-[#355F58]/30 dark:border-emerald-800">
                   {selectedDay.activities.length} Activities
@@ -529,6 +536,7 @@ export const ItineraryView: React.FC = () => {
                             <MapPin className="w-3.5 h-3.5 text-[var(--color-primary)] shrink-0" />
                             <span className="truncate">{act.locationName || destName}</span>
                           </p>
+                          <UnresolvedStopNote meta={planCard} activityId={act.id} />
                           {/* Travel time from the device's current location (never from the previous activity) */}
                           <TravelFromHere dest={act} routeAllowed={coordRank < MAX_LEGS_PER_DAY} />
                         </div>

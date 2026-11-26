@@ -1,0 +1,80 @@
+{
+  "id": "varanasi-kashi-yatra",
+  "version": 1,
+  "status": "draft_unverified",
+  "name_en": "Kashi Yatra, Varanasi",
+  "name_hi": "काशी यात्रा, वाराणसी",
+  "match_names": ["वाराणसी", "Varanasi", "Banaras", "बनारस", "Kashi", "काशी"],
+  "region": "Uttar Pradesh",
+  "kind": "pilgrimage",
+  "duration_days_min": 2,
+  "duration_days_max": 4,
+  "default_days": 3,
+  "best_months": [10, 11, 12, 1, 2, 3],
+  "avoid_months": [
+    {"months": [4, 5, 6], "reason": "Hot and humid"},
+    {"months": [7, 8, 9], "reason": "Monsoon: the river can rise so high that the Ganga Aarti shifts to a higher platform"}
+  ],
+  "days": [
+    {
+      "day_number": 1,
+      "title": "Arrival and evening Ganga Aarti",
+      "stops": [
+        {
+          "name": "Dashashwamedh Ghat",
+          "city": "Varanasi",
+          "visit_minutes": 90,
+          "priority": "must",
+          "note": "Evening Ganga Aarti lasts about 45 minutes. Watching from the public steps is free. Aarti time follows sunset and sources disagree: roughly 5:45-6:45 PM in winter and 6:45-7:15 PM in summer. Check locally on the day. Arrive early for a good spot."
+        }
+      ]
+    },
+    {
+      "day_number": 2,
+      "title": "Kashi Vishwanath and the old city",
+      "stops": [
+        {
+          "name": "Kashi Vishwanath Temple",
+          "city": "Varanasi",
+          "visit_minutes": 120,
+          "priority": "must",
+          "note": "Official site: general darshan 4 AM to 11 AM, a break for Bhog Aarti, then noon to 7 PM, with the evening Aarti from 7 to 8:30 PM. Mangla Aarti starts between 3 and 4 AM. Entry for children under 12 is free. Ticket must be shown at the entry for aarti slots. Entry is subject to temple administration approval."
+        }
+      ]
+    },
+    {
+      "day_number": 3,
+      "title": "Sarnath and departure",
+      "stops": [
+        {
+          "name": "Sarnath (Dhamek Stupa and Archaeological Museum)",
+          "city": "Varanasi",
+          "visit_minutes": 180,
+          "priority": "optional",
+          "note": "Museum (ASI site): 9 AM to 5 PM, closed every Friday. The Dhamek Stupa and archaeological area stay open on Fridays, roughly 6 AM to 6 PM."
+        }
+      ]
+    }
+  ],
+  "booking_notes": [
+    {
+      "text": "Sugam Darshan and aarti slots are booked only on the temple's official site. Prices vary between third-party sites, so none is stated here.",
+      "official_url": "https://www.shrikashivishwanath.org/"
+    }
+  ],
+  "dress_code": null,
+  "elderly_notes": null,
+  "transport_notes": null,
+  "last_verified": null,
+  "sources": [
+    "https://shrikashivishwanath.org/general/rituals",
+    "https://shrikashivishwanath.org/frontend/home/poojadetail/c1M2MS9DUG1ydzZQVVFqT0w0SVNydz09",
+    "https://www.sarnathmuseumasi.org/planning-a-visit.html"
+  ],
+  "unverified": [
+    "Ganga Aarti exact timing by month",
+    "Dress code",
+    "Transport between stops",
+    "Annapurna Devi Temple and old-city lanes as add-ons"
+  ]
+}

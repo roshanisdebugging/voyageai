@@ -122,6 +122,8 @@ export const TripCreationWizard: React.FC = () => {
   const [children, setChildren] = useState(0);
   const [styles, setStyles] = useState<TravelStyle[]>([]);
   const [budgetAmount, setBudgetAmount] = useState<number>(30000);
+  // A checked plan accepted by voice; sent with the trip, the server keeps it only if it fits the destination.
+  const [planCardId, setPlanCardId] = useState<string | undefined>(undefined);
 
   const [dateError, setDateError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -138,6 +140,7 @@ export const TripCreationWizard: React.FC = () => {
     if (d.childrenCount != null) setChildren(Math.max(0, d.childrenCount));
     if (d.tripStyle) setStyles(d.tripStyle);
     if (d.customBudgetAmount) setBudgetAmount(d.customBudgetAmount);
+    setPlanCardId(d.planCardId);
   };
 
   // First render: a prefill (e.g. from voice) wins, then an unfinished draft, then saved preferences.
@@ -165,6 +168,7 @@ export const TripCreationWizard: React.FC = () => {
     travelersCount: adults + children,
     tripStyle: styles,
     customBudgetAmount: budgetAmount,
+    planCardId,
     currentStep: nextStep,
   });
 
@@ -191,6 +195,7 @@ export const TripCreationWizard: React.FC = () => {
     setChildren(0);
     setStyles(userPreferences?.travelStyles || []);
     setBudgetAmount(30000);
+    setPlanCardId(undefined);
     setStep(1);
     setShowResumePrompt(false);
   };
@@ -250,6 +255,7 @@ export const TripCreationWizard: React.FC = () => {
         childrenCount: children,
         tripStyle: styles,
         budgetAmount,
+        ...(planCardId ? { planCardId } : {}),
       });
       discardDraft();
       announceTripCreated(); // voice: the draft for this trip can go
