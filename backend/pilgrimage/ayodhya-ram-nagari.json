@@ -1,0 +1,81 @@
+{
+  "id": "ayodhya-ram-nagari",
+  "version": 1,
+  "status": "draft_unverified",
+  "name_en": "Ayodhya Darshan",
+  "name_hi": "अयोध्या दर्शन",
+  "match_names": ["अयोध्या", "Ayodhya", "Ram Nagari", "राम नगरी"],
+  "region": "Uttar Pradesh",
+  "kind": "pilgrimage",
+  "duration_days_min": 1,
+  "duration_days_max": 3,
+  "default_days": 2,
+  "best_months": [],
+  "avoid_months": [],
+  "days": [
+    {
+      "day_number": 1,
+      "title": "Ram Mandir, Hanuman Garhi and Saryu Aarti",
+      "stops": [
+        {
+          "name": "Hanuman Garhi",
+          "city": "Ayodhya",
+          "visit_minutes": 60,
+          "priority": "must",
+          "note": "A hilltop temple reached by a steep flight of steps (one source says 76). A step-free route cannot be promised. Sources give different opening hours, so timings are not stated here."
+        },
+        {
+          "name": "Shri Ram Janmabhoomi Mandir",
+          "city": "Ayodhya",
+          "visit_minutes": 150,
+          "priority": "must",
+          "note": "Phones, footwear and bags must be left in lockers at the entry. Darshan timings and which aartis need a pass differ between sources, so they are not stated here. Check the official trust portal."
+        },
+        {
+          "name": "Ram Ki Paidi",
+          "city": "Ayodhya",
+          "visit_minutes": 90,
+          "priority": "must",
+          "note": "Saryu Aarti in the evening. Entry and the aarti are free. Start time changes with the season (about 6 PM in winter and 7 PM in summer according to some sources). Be there at least 30 minutes early."
+        }
+      ]
+    },
+    {
+      "day_number": 2,
+      "title": "More temples of Ayodhya",
+      "stops": [
+        {
+          "name": "Kanak Bhawan",
+          "city": "Ayodhya",
+          "visit_minutes": 60,
+          "priority": "optional",
+          "note": "Timings not verified."
+        }
+      ]
+    }
+  ],
+  "booking_notes": [
+    {
+      "text": "Passes for Ram Mandir are booked only on the trust's official portal, with a mobile number and OTP. Slots open about 15 days ahead and popular ones go within minutes. Sources disagree on whether plain darshan needs a pass, so confirm on the portal.",
+      "official_url": "https://online.srjbtkshetra.org/"
+    }
+  ],
+  "dress_code": null,
+  "elderly_notes": "Hanuman Garhi involves a steep flight of steps and no step-free alternative can be promised.",
+  "transport_notes": null,
+  "last_verified": null,
+  "sources": [
+    "https://ramjanmabhoomi.in/ayodhya/ram-mandir/darshan/",
+    "https://online.srjbtkshetra.org/",
+    "https://discoverayodhya.org/hanuman-garhi/"
+  ],
+  "unverified": [
+    "Ram Mandir darshan windows",
+    "Which aartis need a pass",
+    "Hanuman Garhi opening hours",
+    "Saryu Aarti time by month",
+    "Kanak Bhawan timings",
+    "Best and avoid months",
+    "Dress code and transport"
+  ]
+}

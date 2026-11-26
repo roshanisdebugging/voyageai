@@ -168,6 +168,27 @@ def _parse_budget_amount(raw: Any) -> Optional[int]:
     return amount
 
 
+def _plan_card_meta(card_id, destination) -> Optional[Dict[str, Any]]:
+    """What the trip keeps of a checked plan (no migration: stored in preferences_snapshot_json).
+    None when no card was asked for, it no longer exists, or it does not fit the destination."""
+    if not card_id or not isinstance(card_id, str):
+        return None
+    import pilgrimage
+    card = pilgrimage.get_card(card_id)
+    if card is None or not pilgrimage.card_fits_destination(card, destination):
+        print(f"[PLAN CARD] not used at trip creation card_found={card is not None}", flush=True)
+        return None
+    return {
+        "id": card.id,
+        "version": card.version,
+        "status": card.status,
+        "lastVerified": card.last_verified.isoformat() if card.last_verified else None,
+        "nameEn": card.name_en,
+        "nameHi": card.name_hi,
+        "bookingNotes": [{"text": n.text, "officialUrl": n.official_url} for n in card.booking_notes],
+    }
+
+
 def create_trip_for_user(
     db: Session,
     auth_user: AuthUser,
@@ -233,6 +254,11 @@ def create_trip_for_user(
         "activityInterests": prefs.activityInterests,
         "budgetLevel": budget_level,
     }
+
+    # A checked plan (pilgrimage card) chosen by voice: kept only if it still names this destination.
+    plan_card = _plan_card_meta(trip_data.get("planCardId"), destination)
+    if plan_card:
+        pref_snapshot["planCard"] = plan_card
 
     budget = {
         "level": budget_level,

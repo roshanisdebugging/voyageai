@@ -124,6 +124,7 @@ export function sanitizePrefill(raw: unknown): TripDraft | null {
     adultsCount: isInt(p.adultsCount, 1, 20) ? (p.adultsCount as number) : undefined,
     childrenCount: isInt(p.childrenCount, 0, 19) ? (p.childrenCount as number) : undefined,
     customBudgetAmount: isInt(p.customBudgetAmount, 1000, 100_000_000) ? (p.customBudgetAmount as number) : undefined,
+    planCardId: typeof p.planCardId === 'string' && /^[a-z0-9][a-z0-9-]{0,79}$/.test(p.planCardId) ? p.planCardId : undefined,
   };
 }
 

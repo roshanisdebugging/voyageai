@@ -228,6 +228,16 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
         if not trip:
             return None
 
+        # A trip made from a checked plan (pilgrimage card): built from the card, never from the cache.
+        plan_meta = (trip.preferences_snapshot or {}).get("planCard")
+        if plan_meta:
+            import pilgrimage
+            card = pilgrimage.get_card(plan_meta.get("id"))
+            if card is not None:
+                from plan_card_itinerary import generate as generate_from_card
+                return generate_from_card(trip, db, card)
+            print(f"[PLAN CARD] card missing at generation trip={trip_id}; normal flow", flush=True)
+
         now = datetime.utcnow().isoformat() + "Z"
         origin_city = None
         if trip.origin_city_id:
@@ -243,7 +253,7 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
             "adultsCount": sum(1 for t in travelers if t.get("type") != "CHILD"),
             "childrenCount": sum(1 for t in travelers if t.get("type") == "CHILD"),
             "budget": trip.budget,
-            "preferencesSnapshot": trip.preferences_snapshot
+            "preferencesSnapshot": {k: v for k, v in (trip.preferences_snapshot or {}).items() if k != "planCard"}
         }
 
         dest_dict = trip.destination if isinstance(trip.destination, dict) else {}

@@ -89,6 +89,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"⚠️ [REDIS CLEANUP WARN] {e}", flush=True)
 
+    # Checked plans (pilgrimage cards): one log line per card or rejected file
+    import pilgrimage
+    pilgrimage.init_cards()
+
     # Which Google key is in use (name + fingerprint only) and which of its APIs are paused
     from services.google_maps_service import status_line
     print(await run_in_threadpool(status_line), flush=True)

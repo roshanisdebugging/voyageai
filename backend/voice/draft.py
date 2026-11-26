@@ -55,7 +55,11 @@ class TripDraftState:
     children: Optional[int] = None
     budget_inr: Optional[int] = None
     dates_confirmed: bool = False                  # set ONLY by code, after the read-back got a yes
-    awaiting: Optional[str] = None                 # "date" while the read-back waits for haan / a correction
+    awaiting: Optional[str] = None                 # "date" while the read-back waits for haan / a correction,
+                                                   # "card" while a checked-plan offer waits for haan
+    plan_offer_card: Optional[str] = None          # the checked plan (pilgrimage card id) offered for this destination
+    plan_offer: Optional[str] = None               # None / "asked" / "accepted" / "declined": asked once per destination
+    plan_card_id: Optional[str] = None             # set ONLY by code, after a yes to the offer
 
     def missing_fields(self) -> List[str]:
         return [f for f in REQUIRED if getattr(self, f) is None and not (f == "end_date" and self.days)]
@@ -295,6 +299,10 @@ def summary(draft: TripDraftState, lang: str) -> str:
     dest = (draft.destination or {}).get("name", "")
     who = f"{draft.adults} adult{'s' if draft.adults != 1 else ''}" + (f", {draft.children} child{'ren' if draft.children != 1 else ''}" if draft.children else "")
     origin = f" from {(draft.origin_city or {}).get('name')}" if draft.origin_city else ""
+    if draft.plan_card_id:
+        import pilgrimage
+        card = pilgrimage.get_card(draft.plan_card_id)
+        dest = f"{dest} ({card.short_name}, checked plan)" if card else dest
     if lang == "en":
         return (f"{dest}{origin}, {say_date(s)} to {say_date(e)}, {who}, budget ₹{draft.budget_inr:,}. "
                 "Confirm saves what's on the review page. A trip can't be undone by voice.")
@@ -312,4 +320,5 @@ def prefill(draft: TripDraftState) -> Dict[str, Any]:
         "adultsCount": draft.adults,
         "childrenCount": draft.children,
         "customBudgetAmount": draft.budget_inr,
+        **({"planCardId": draft.plan_card_id} if draft.plan_card_id else {}),
     }
