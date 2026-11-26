@@ -236,7 +236,7 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
             if card is not None:
                 from plan_card_itinerary import generate as generate_from_card
                 return generate_from_card(trip, db, card)
-            print(f"[PLAN CARD] card missing at generation trip={trip_id}; normal flow", flush=True)
+            print(f"[PILGRIMAGE] card not used trip={trip_id} card={str(plan_meta.get('id'))[:80]} reason=card_missing_at_build", flush=True)
 
         now = datetime.utcnow().isoformat() + "Z"
         origin_city = None

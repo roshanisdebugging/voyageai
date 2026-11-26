@@ -86,7 +86,7 @@ def _ask_ai(prompt: str, complete_fn: Callable = None) -> Optional[Dict[str, Any
         data = json.loads(raw) if isinstance(raw, str) else raw
         return data if isinstance(data, dict) and isinstance(data.get("days"), list) else None
     except Exception as err:
-        print(f"[PLAN CARD] ai_extra_days_failed error={type(err).__name__}", flush=True)
+        print(f"[PILGRIMAGE] ai extra days failed error={type(err).__name__}", flush=True)
         return None
 
 
@@ -200,7 +200,9 @@ def generate(trip, db, card: pilgrimage.Card, search_fn: Callable = None, comple
     trip.updated_at = now
     db.commit()
     s = built["stats"]
-    print(f"[PLAN CARD] trip={trip.id} card={card.id} card_days={built['plan_days']} extra_days={built['extra_days']} "
-          f"items={total} google_lookups={s['google_lookups']} unresolved={s['unresolved']} ai_called={s['ai_called']} "
-          f"ai_items={s['ai_items']} ms={int((time.perf_counter() - started) * 1000)}", flush=True)
+    ai_days = sum(1 for d in day_info if d["source"] == "ai")
+    free_days = sum(1 for d in day_info if d["source"] == "free")
+    print(f"[PILGRIMAGE] built trip={trip.id} card={card.id} user_days={trip.total_days} card_days={built['plan_days']} "
+          f"ai_days={ai_days} unresolved_stops={s['unresolved']} free_days={free_days} items={total} "
+          f"google_lookups={s['google_lookups']} ms={int((time.perf_counter() - started) * 1000)}", flush=True)
     return "READY"

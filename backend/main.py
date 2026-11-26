@@ -1232,7 +1232,7 @@ async def process_ws_action(
 
     elif reqname == "trips:create":
         auth_user, user_profile, user_prefs = session
-        return create_trip_for_user(db, auth_user, user_profile, user_prefs, data)
+        return await run_in_threadpool(create_trip_for_user, db, auth_user, user_profile, user_prefs, data)
 
     elif reqname == "trips:delete":
         trip_id = data["trip_id"]

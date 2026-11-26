@@ -17,7 +17,7 @@ from models import AuthUser, UserPreferences, UserProfile
 from models_place import CityModel, city_to_dict, get_or_create_city
 from models_trip import TripModel
 from places import validate_destination_payload
-from task_queue import enqueue_itinerary_generation
+from task_queue import enqueue_itinerary_generation, publish_trip_event
 
 MAX_TRIP_DAYS = 30
 MAX_TRAVELERS = 20
@@ -176,7 +176,8 @@ def _plan_card_meta(card_id, destination) -> Optional[Dict[str, Any]]:
     import pilgrimage
     card = pilgrimage.get_card(card_id)
     if card is None or not pilgrimage.card_fits_destination(card, destination):
-        print(f"[PLAN CARD] not used at trip creation card_found={card is not None}", flush=True)
+        reason = "card_missing" if card is None else "destination_changed"
+        print(f"[PILGRIMAGE] card not used card={str(card_id)[:80]} reason={reason}", flush=True)
         return None
     return {
         "id": card.id,
@@ -187,6 +188,25 @@ def _plan_card_meta(card_id, destination) -> Optional[Dict[str, Any]]:
         "nameHi": card.name_hi,
         "bookingNotes": [{"text": n.text, "officialUrl": n.official_url} for n in card.booking_notes],
     }
+
+
+def _build_from_card_now(db: Session, trip: TripModel, card_id: str, total_days: int) -> bool:
+    """A checked-plan trip that needs no AI day (same or fewer days than the card): build the itinerary from the
+    card right here (Google look-ups only) and queue no job. False: the worker builds it (card days + AI days),
+    or, if this build fails, the worker retries from the card."""
+    import pilgrimage
+    card = pilgrimage.get_card(card_id)
+    if card is None or pilgrimage.plan_days(card, total_days).extra_days:
+        return False
+    try:
+        from plan_card_itinerary import generate
+        generate(trip, db, card)
+    except Exception as err:
+        db.rollback()
+        print(f"[PILGRIMAGE] build at creation failed trip={trip.id} card={card.id} error={type(err).__name__}; queued", flush=True)
+        return False
+    publish_trip_event(trip.id, "READY")
+    return True
 
 
 def create_trip_for_user(
@@ -296,5 +316,7 @@ def create_trip_for_user(
     db.commit()
     print(f"[TRIP CREATED] {trip.id} '{trip.title}' ({total_days} days) for user {auth_user.id}", flush=True)
 
+    if plan_card and _build_from_card_now(db, trip, plan_card["id"], total_days):
+        return serialize_trip(trip, db)   # no AI needed: built from the card, no itinerary job queued
     enqueue_itinerary_generation(trip.id)
     return serialize_trip(trip, db)

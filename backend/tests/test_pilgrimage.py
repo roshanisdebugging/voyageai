@@ -43,7 +43,6 @@ from models import AuthUser  # noqa: E402
 from models_itinerary import ItineraryActivityModel, ItineraryDayModel, ItineraryModel  # noqa: E402
 from models_trip import TripModel  # noqa: E402
 from redis_client import redis_conn  # noqa: E402
-from task_queue import TASK_QUEUE_KEY  # noqa: E402
 
 results = []
 
@@ -291,7 +290,10 @@ made = []
 def create(dest, **extra):
     data = {"destination": dest, "startDate": START, "endDate": (date.fromisoformat(START) + timedelta(days=3)).isoformat(),
             "adultsCount": 2, "childrenCount": 0, "budgetAmount": 40000, "clientRequestId": f"req_{uuid.uuid4().hex[:8]}", **extra}
-    with database.SessionLocal() as db, mock.patch("media_service.media_service.resolve_cover_media", lambda d: {}):
+    # jobs recorded, not pushed: a running worker would take them from the shared Redis queue
+    with database.SessionLocal() as db, mock.patch("media_service.media_service.resolve_cover_media", lambda d: {}), \
+            mock.patch.object(trip_lifecycle, "enqueue_itinerary_generation", lambda tid: True), \
+            mock.patch.object(PCI, "_default_search", fake_search()):
         out = trip_lifecycle.create_trip_for_user(db, user, None, None, data)
     made.append(out["id"])
     return out
@@ -305,9 +307,6 @@ out = create(VAR)
 check("no planCardId: no card (old flow)", "planCard" not in out["preferencesSnapshot"])
 out = create(VAR, planCardId="no-such-card")
 check("unknown card id: ignored", "planCard" not in out["preferencesSnapshot"])
-for raw in redis_conn.lrange(TASK_QUEUE_KEY, 0, -1):
-    if json.loads(raw).get("trip_id") in made:
-        redis_conn.lrem(TASK_QUEUE_KEY, 0, raw)
 
 # ---------------- 9. voice: the offer, haan / nahi / anything else, Goa
 

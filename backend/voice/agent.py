@@ -524,6 +524,22 @@ def yes_or_no(text: str) -> Optional[str]:
     return None
 
 
+# The checked-plan offer asks "Isse shuru karein?", so people answer "haan, shuru karo" / "हाँ, शुरू करो".
+# For THIS offer only, start words may come with the yes; a yes word is still required ("shuru karo" alone
+# does not accept). yes_or_no() itself is unchanged for every other question.
+_PLAN_START = {canon(w) for w in ("shuru", "suru", "start", "karo", "karein", "karen", "kare", "kariye", "kijiye",
+                                  "kar", "do", "ji", "please", "isse", "ise", "yahi", "plan", "se",
+                                  "शुरू", "करो", "करें", "करे", "करिए", "करिये", "कीजिए", "कीजिये", "कर",
+                                  "इससे", "इसे", "यही", "प्लान", "से", "जी")}
+
+
+def plan_offer_yes(text: str) -> bool:
+    if yes_or_no(text) == "yes":
+        return True
+    words = tu_words(text)
+    return bool(words) and len(words) <= 6 and set(words) <= (_YES | _PLAN_START) and bool(set(words) & _YES_CORE)
+
+
 # ---------------- memory (Redis)
 
 def _mem_key(user_id: str, conversation_id: str) -> str:
@@ -729,6 +745,7 @@ def answer_plan_offer(redis_conn, user_id: str, conversation_id: str, d, said: O
             return draft_next(redis_conn, user_id, conversation_id, d, lang, PLAN_DECLINED[lang])
         return None
     d.plan_offer, d.plan_card_id = "accepted", card.id
+    print(f"[PILGRIMAGE] accepted card={card.id} draft={conversation_id}", flush=True)
     if not d.days and not d.end_date:
         start = D.parse_date(d.start_date) if d.start_date else None
         if start:   # dates already given without a length: the card's default length
@@ -1019,7 +1036,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     elif (draft_state is not None and draft_state.awaiting == "card"
           and not (said == "no" and _starts_cancel(transcript))):
         # A checked plan was offered: only a yes accepts; anything else declines (and is handled as usual).
-        result = answer_plan_offer(redis_conn, user_id, conversation_id, draft_state, said, lang)
+        result = answer_plan_offer(redis_conn, user_id, conversation_id, draft_state,
+                                   "yes" if plan_offer_yes(transcript) else said, lang)
         if result is None:
             draft_state = D.load(redis_conn, user_id, conversation_id)
     elif draft_state is not None and draft_state.awaiting == "date" and said == "yes":
