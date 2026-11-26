@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from trip_lifecycle import MIN_BUDGET_INR   # the one budget minimum, shared with trip creation
 from trip_lifecycle import clean_place_name  # the one starting-city name rule, shared with trip creation
+from voice.text_utils import canon, words as tu_words
 
 DRAFT_TTL_SECONDS = 30 * 60
 MAX_DAYS = 30            # trip_lifecycle: at most 30 days
@@ -70,6 +72,10 @@ class TripDraftState:
     origin_skipped: bool = False                   # "pata nahi" / not given when asked / second failed lookup
     origin_same_ok: bool = False                   # the user said yes to "origin = destination?"
     last_asked: List[str] = field(default_factory=list)   # fields our last question asked for (for the prompt)
+    origin_candidate: Optional[Dict[str, Any]] = None  # a looked-up city whose name doesn't match what was said:
+                                                   # "<name> se? Sahi hai?" (asked once) before it becomes the origin
+    origin_checked: bool = False                   # that check was asked once already: never a second time
+    skip_hint: bool = False                        # this turn's words said "don't know where from" (set by code)
 
     def missing_fields(self) -> List[str]:
         return [f for f in REQUIRED if getattr(self, f) is None and not (f == "end_date" and self.days)]
@@ -165,6 +171,64 @@ def nights_words(n: int, lang: str) -> str:
     return f"{word} raat"
 
 
+# ---------------- the starting city: words that are never a city, and "does the found place match what was said?"
+
+# The model sometimes returns these as the origin ("पता।" -> origin "पता" -> Google: Patna). Checked by code before
+# any Google lookup; an origin made only of these words is "not given".
+NOT_A_CITY_WORDS = {canon(w) for w in (
+    "pata", "patah", "nahi", "nahin", "nai", "na", "kuch", "kuchh", "koi", "kahin", "kahi", "kahan", "kahaan", "maloom",
+    "malum", "chhodo", "chodo", "chhod", "chod", "chhodiye", "do", "skip", "abhi", "baad", "mein", "se", "mujhe", "yaar",
+    "hai", "jaana", "jagah", "shahar", "starting", "city", "origin", "i", "don", "t", "dont", "know", "no", "idea", "not",
+    "sure", "none", "nothing", "unknown", "bhi", "भी",
+    "पता", "नहीं", "ना", "कुछ", "कोई", "कहीं", "कहां", "मालूम", "छोड़ो", "छोड़", "छोड़िए", "दो", "स्किप", "अभी", "बाद", "में",
+    "से", "मुझे", "यार", "है", "जाना", "जगह", "शहर")}
+
+
+def is_not_a_city(raw: Any) -> bool:
+    ws = tu_words(str(raw or ""))
+    return bool(ws) and all(w in NOT_A_CITY_WORDS for w in ws)
+
+
+# Name check: compare consonant skeletons, so Devanagari, Latin and spelling variants line up
+# (पटना / Patna -> "ptn", कोलकाता / Kolkata / Calcutta -> "klkt"); vowels, h/v/w/y and doubled letters are ignored.
+_DEV_CONSONANTS = {"क": "k", "ख": "k", "ग": "g", "घ": "g", "ङ": "n", "च": "c", "छ": "c", "ज": "j", "झ": "j", "ञ": "n",
+                   "ट": "t", "ठ": "t", "ड": "d", "ढ": "d", "ण": "n", "त": "t", "थ": "t", "द": "d", "ध": "d", "न": "n",
+                   "प": "p", "फ": "f", "ब": "b", "भ": "b", "म": "m", "य": "y", "र": "r", "ल": "l", "व": "v", "श": "s",
+                   "ष": "s", "स": "s", "ह": "h", "ळ": "l"}
+# Latin spellings -> the same letters (order matters: "chh"/"ch" are kept as c, a lone c is k as in "Calcutta").
+_LATIN_PAIRS = (("chh", "C"), ("ch", "C"), ("sh", "s"), ("th", "t"), ("dh", "d"), ("bh", "b"), ("kh", "k"), ("gh", "g"),
+                ("jh", "j"), ("ph", "f"), ("c", "k"), ("C", "c"), ("q", "k"), ("z", "j"), ("x", "ks"))
+
+
+def _skeleton(text: str) -> str:
+    out = []
+    for w in tu_words(text):
+        if any("\u0900" <= ch <= "\u097f" for ch in w):
+            out.extend(_DEV_CONSONANTS.get(ch, "") for ch in w)
+        else:
+            w = re.sub(r"[^a-z]", "", w)
+            for a, b in _LATIN_PAIRS:
+                w = w.replace(a, b)
+            out.append(w)
+    sk = re.sub(r"[aeiouhvwy]", "", "".join(out))
+    return re.sub(r"(.)\1+", r"\1", sk)
+
+
+def name_matches(said: str, place_ref: Dict[str, Any]) -> bool:
+    """Does the found place plausibly match what was said? Same first consonant and similar skeletons, against the
+    place's name, its city, or one word of the name ("Delhi" -> "New Delhi")."""
+    a = _skeleton(said)
+    if not a:
+        return False
+    names = [str(place_ref.get(k) or "") for k in ("name", "city")]
+    names += [w for n in names for w in n.split() if len(w) >= 3]
+    for n in names:
+        b = _skeleton(n)
+        if b and (a == b or (a[0] == b[0] and SequenceMatcher(None, a, b).ratio() >= 0.65)):
+            return True
+    return False
+
+
 def same_place(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
     if not a or not b:
         return False
@@ -181,6 +245,8 @@ class UpdateResult:
     changed: List[str] = field(default_factory=list)
     origin_not_found: Optional[str] = None               # a valid name that the place search did not find
     origin_invalid: bool = False                         # not a place name (digits, too long, ...): not given
+    origin_stopword: bool = False                        # "pata" / "पता" / "nahi" ...: not a city, no Google call
+    origin_unsure: bool = False                          # found, but the name doesn't match what was said
 
 
 def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: date, find_place_fn=None) -> UpdateResult:
@@ -213,14 +279,23 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             out.problems.append(err)
     if args.get("origin_city") is not None and args.get("origin_city") != "":
         name = clean_place_name(args["origin_city"])   # code checks what the model extracted
+        if name and is_not_a_city(name):
+            name, out.origin_stopword = None, True       # "pata" is not a city: discarded before any Google call
         ref = place(name)[0] if name else None
-        if ref:
+        if ref and not draft.origin_checked and (draft.origin_city or {}).get("id") != ref.get("id") \
+                and not name_matches(name, ref):
+            draft.origin_candidate, draft.origin_checked = ref, True   # "<name> se? Sahi hai?" once
+            draft.origin_skipped = False
+            out.origin_unsure = True
+        elif ref:
             if (draft.origin_city or {}).get("id") != ref.get("id"):
                 draft.dates_confirmed = False   # the read-back says the origin, so it must be read back again
                 draft.origin_same_ok = False
-            draft.origin_city = ref
+                out.changed.append("origin_city")
+            draft.origin_city, draft.origin_candidate = ref, None
             draft.origin_skipped = False
-            out.changed.append("origin_city")
+        elif out.origin_stopword:
+            out.origin_invalid = True
         elif name:
             out.origin_not_found = name
         else:
@@ -310,6 +385,7 @@ ORIGIN_RETRY = {"hi": "{name} nahi mila, phir se bolenge ya skip karein?",
                 "en": "I couldn't find {name}. Say it again, or say skip?"}
 ORIGIN_GIVE_UP = {"hi": "{name} bhi nahi mila, starting city ke bina aage badhte hain.",
                   "en": "I couldn't find {name} either, so we'll go on without a starting city."}
+ORIGIN_CHECK = {"hi": "{name} se? Sahi hai?", "en": "Starting from {name}? Is that right?"}
 ORIGIN_SAME = {"hi": "{name} se {name} hi jaana hai? Sahi hai?", "en": "Starting from {name} and going to {name}? Is that right?"}
 
 
