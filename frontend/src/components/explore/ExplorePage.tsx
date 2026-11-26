@@ -411,9 +411,11 @@ export const ExplorePage: React.FC = () => {
             <span className="flex items-center gap-1.5">
               <Check className="size-4 text-(--color-primary)" /> {spotlightActivities.length} Top Places
             </span>
-            <span className="flex items-center gap-1.5">
-              <Calendar className="size-4 text-(--color-primary)" /> {spotlightEvents.length} Live Events
-            </span>
+            {spotlightEvents.length > 0 && (
+              <span className="flex items-center gap-1.5">
+                <Calendar className="size-4 text-(--color-primary)" /> {spotlightEvents.length} Live Events
+              </span>
+            )}
           </div>
         </div>
       </section>

@@ -6,6 +6,7 @@ Run from backend/: python -m tests.test_place_images
 """
 import json
 import os
+from datetime import date, timedelta
 import sys
 import tempfile
 import time
@@ -32,6 +33,9 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 import database  # noqa: E402
+
+# Events now need real upcoming dates (trips_service.filter_upcoming_events); these samples get one.
+SOON = {"start_date": (date.today() + timedelta(days=10)).isoformat(), "end_date": (date.today() + timedelta(days=11)).isoformat()}
 
 database.engine = create_engine(f"sqlite:///{os.path.join(SCRATCH, 'images.db')}", connect_args={"check_same_thread": False})
 database.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=database.engine)
@@ -224,7 +228,7 @@ def fake_llm(prompt, **kw):
             {"id": "act_2", "title": "Laxmi Mishthan Bhandar", "category": "Food", "coordinates": [26.92, 75.82],
              "photos": ["https://images.unsplash.com/photo-xyz"], "photoCredit": "made up"},
         ],
-        "events": [{"id": "evt_1", "title": "Teej Festival", "category": "Festival",
+        "events": [{"id": "evt_1", "title": "Teej Festival", "category": "Festival", **SOON,
                     "image": "https://images.unsplash.com/photo-1514525253161"}],
     })
 
@@ -379,7 +383,7 @@ NET.delay = 1.5          # each provider call takes 1.5 s: Google + Wikipedia to
 def fake_llm_7(prompt, **kw):
     return json.dumps({"destination": "Udaipur", "overview": "Lakes.",
                        "activities": [{"id": f"a{i}", "title": f"Place {i}", "category": "Sights", "coordinates": [24.58, 73.68]} for i in range(8)],
-                       "events": [{"id": "e1", "title": "Mewar Festival", "category": "Festival"}]})
+                       "events": [{"id": "e1", "title": "Mewar Festival", "category": "Festival", **SOON}]})
 
 
 NET.wiki_summary["Place 0, Udaipur"] = wiki_page("Place 0", 24.58, 73.68)
@@ -642,7 +646,7 @@ def fake_llm_goa(prompt, **kw):
                        "activities": [{"id": f"a{i}", "title": t, "category": c, "coordinates": [15.5, 73.91]} for i, (t, c) in enumerate(
                            [("Basilica of Bom Jesus", "Sights"), ("Fort Aguada", "Sights"), ("Goan fish thali", "Food"),
                             ("Se Cathedral", "Culture"), ("Chapora Fort", "Sights")])],
-                       "events": [{"id": "e1", "title": "Shigmo", "category": "Festival"}, {"id": "e2", "title": "Goa Carnival", "category": "Festival"}]})
+                       "events": [{"id": "e1", "title": "Shigmo", "category": "Festival", **SOON}, {"id": "e2", "title": "Goa Carnival", "category": "Festival", **SOON}]})
 
 
 def goa():

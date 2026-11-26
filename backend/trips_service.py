@@ -1,7 +1,9 @@
 import os
+import re
 import json
 import requests
-from typing import Dict, Any, Optional
+from datetime import date
+from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 from fastapi import HTTPException
 from redis_client import redis_conn
@@ -10,6 +12,63 @@ from redis_client import redis_conn
 load_dotenv(override=True)
 
 SPOTLIGHT_CACHE_TTL = 172800  # 48 hours (172,800 seconds)
+# Events: the CODE decides what is still upcoming (the model is only asked for dates). An event is kept only with
+# a real start_date/end_date (YYYY-MM-DD), end_date >= today (India date), and a start at most this many days ahead.
+EVENT_MAX_DAYS_AHEAD = 180
+_ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _today_ist() -> date:
+    from trip_lifecycle import today_ist
+    return today_ist()
+
+
+def _iso_day(value: Any) -> Optional[date]:
+    """YYYY-MM-DD only (no times, no '14 Nov', no 'February'); None for anything else."""
+    if not isinstance(value, str) or not _ISO_DAY.match(value.strip()):
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+
+
+def filter_upcoming_events(events: Any, today: Optional[date] = None) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """
+    The one rule for events, used after generation and on every cache read:
+    - no readable start_date (or an end_date before it): dropped as undated;
+    - end_date (= start_date when missing) before today: dropped as past (an event already under way is kept);
+    - start_date more than EVENT_MAX_DAYS_AHEAD days ahead: dropped as far;
+    - the rest sorted by start_date; each kept event's display `date` becomes its checked start_date.
+    Returns (kept, counts) with counts raw / kept / dropped_past / dropped_undated / dropped_far.
+    """
+    today = today or _today_ist()
+    items = [e for e in events if isinstance(e, dict)] if isinstance(events, list) else []
+    counts = {"raw": len(items), "kept": 0, "dropped_past": 0, "dropped_undated": 0, "dropped_far": 0}
+    kept = []
+    for ev in items:
+        start = _iso_day(ev.get("start_date", ev.get("startDate")))
+        end_raw = ev.get("end_date", ev.get("endDate"))
+        end = start if end_raw in (None, "") else _iso_day(end_raw)
+        if start is None or end is None or end < start:
+            counts["dropped_undated"] += 1
+        elif end < today:
+            counts["dropped_past"] += 1
+        elif (start - today).days > EVENT_MAX_DAYS_AHEAD:
+            counts["dropped_far"] += 1
+        else:
+            kept.append((start, {**ev, "start_date": start.isoformat(), "end_date": end.isoformat(), "date": start.isoformat()}))
+    kept.sort(key=lambda pair: pair[0])
+    counts["kept"] = len(kept)
+    return [ev for _, ev in kept], counts
+
+
+def _apply_event_filter(data: Dict[str, Any], city: str) -> Dict[str, Any]:
+    """Filters data["events"] in place and logs one line (counts only)."""
+    data["events"], c = filter_upcoming_events(data.get("events"))
+    print(f"[EVENTS] city={city} raw={c['raw']} kept={c['kept']} dropped_past={c['dropped_past']} "
+          f"dropped_undated={c['dropped_undated']} dropped_far={c['dropped_far']}", flush=True)
+    return data
 GENERIC_LOCATION_NAMES = {"local area", "current area", "live gps", "nearby", "current location", "location", "active position", "undefined", "null"}
 
 class HighlightsUnavailable(RuntimeError):
@@ -65,13 +124,15 @@ def generate_live_destination_highlights(
                     cached = cached.decode("utf-8")
                 print(f"[CACHE HIT] Loaded genuine data for {clean_dest} (Key: {cache_key})", flush=True)
                 # The cache holds text only (older entries may still carry model-made URLs: dropped here).
-                return attach_highlight_images(strip_model_images(json.loads(cached)), clean_dest)
+                data = _apply_event_filter(strip_model_images(json.loads(cached)), clean_dest)
+                return attach_highlight_images(data, clean_dest)
         except Exception as e:
             print(f"[REDIS READ ERROR] {e}", flush=True)
 
     print(f"[LLM GEN] Generating live dynamic content for {clean_dest} via the AI provider (Lat: {lat}, Lng: {lng}, Key: {cache_key})...", flush=True)
 
 
+    today_iso = _today_ist().isoformat()
     if use_coords_prompt:
         prompt = f"""
 You are an expert travel guide. 
@@ -102,7 +163,8 @@ Return strictly valid JSON matching this exact schema:
     {{
       "id": "evt_1",
       "title": "Specific regional festival, live show, or cultural gathering",
-      "date": "Upcoming Date / Season",
+      "start_date": "YYYY-MM-DD",
+      "end_date": "YYYY-MM-DD",
       "time": "06:00 PM onwards",
       "price": 250,
       "location": "Exact venue or area, {clean_dest}",
@@ -113,7 +175,10 @@ Return strictly valid JSON matching this exact schema:
     }}
   ]
 }}
-Provide 5 diverse real activities and 2 real events. Replace [{lat}, {lng}] with actual lat/lng coordinates of each place in or near {clean_dest}.
+For events: today is {today_iso} (India). Give "start_date" and "end_date" as YYYY-MM-DD (end_date equals start_date for
+a one-day event), only for events that end today or later and start within the next 6 months. If you do not know an event's real
+date, leave the event out; an empty "events" list is fine. Never repeat a past year's event.
+Provide 5 diverse real activities and up to 2 real events. Replace [{lat}, {lng}] with actual lat/lng coordinates of each place in or near {clean_dest}.
 For events, "coordinates" is the venue's actual [lat, lng]; keep null when the venue is not known.
 """
     else:
@@ -144,7 +209,8 @@ Return strictly valid JSON matching this exact schema:
     {{
       "id": "evt_1",
       "title": "Specific regional festival, live show, or cultural gathering",
-      "date": "Upcoming Date / Season",
+      "start_date": "YYYY-MM-DD",
+      "end_date": "YYYY-MM-DD",
       "time": "06:00 PM onwards",
       "price": 250,
       "location": "Exact venue or area, {clean_dest}",
@@ -155,7 +221,10 @@ Return strictly valid JSON matching this exact schema:
     }}
   ]
 }}
-Provide 5 diverse real activities and 2 real events. Replace [26.9124, 75.7873] with actual lat/lng coordinates of each place in {clean_dest}.
+For events: today is {today_iso} (India). Give "start_date" and "end_date" as YYYY-MM-DD (end_date equals start_date for
+a one-day event), only for events that end today or later and start within the next 6 months. If you do not know an event's real
+date, leave the event out; an empty "events" list is fine. Never repeat a past year's event.
+Provide 5 diverse real activities and up to 2 real events. Replace [26.9124, 75.7873] with actual lat/lng coordinates of each place in {clean_dest}.
 For events, "coordinates" is the venue's actual [lat, lng]; keep null when the venue is not known.
 """
 
@@ -179,6 +248,7 @@ For events, "coordinates" is the venue's actual [lat, lng]; keep null when the v
     parsed_data["activities"] = parsed_data.get("activities", parsed_data.get("famous_activities", []))
     parsed_data["events"] = parsed_data.get("events", parsed_data.get("upcoming_events", []))
     strip_model_images(parsed_data)   # the model is no longer asked for pictures; drop any URL it still returns
+    _apply_event_filter(parsed_data, clean_dest)   # the code, not the model, decides what is still upcoming
 
     # 2. Store genuine result in Redis (48 hours TTL = 172800 seconds)
     if redis_conn:
