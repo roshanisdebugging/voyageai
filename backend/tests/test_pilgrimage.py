@@ -122,11 +122,12 @@ def fake_search(fail=(), unavailable=False, other_city=()):
         calls.append(query)
         if unavailable:
             return SimpleNamespace(results=[], unavailable=True, ambiguous=False)
-        name, city = [x.strip() for x in query.rsplit(",", 1)]
+        name, _, city = query.strip().rpartition(" ")   # the stop search is "<stop name> <city>"
         if any(f in name for f in fail):
             return SimpleNamespace(results=[], unavailable=False, ambiguous=False)
-        where = "Patna, Bihar" if any(o in name for o in other_city) else f"{city}, Uttar Pradesh"
-        lat, lng = CITY.get(city, (25.0, 83.0))
+        far = any(o in name for o in other_city)
+        where = "Patna, Bihar" if far else f"{city}, Uttar Pradesh"
+        lat, lng = (25.5941, 85.1376) if far else CITY.get(city, (25.0, 83.0))
         return SimpleNamespace(unavailable=False, ambiguous=False, results=[{
             "place_id": "ChIJtest" + uuid.uuid5(uuid.NAMESPACE_DNS, name).hex[:12], "name": name,
             "displayName": f"{name}, {where}, India", "latitude": lat + 0.001 * len(calls), "longitude": lng}])
@@ -146,7 +147,8 @@ def make_trip(card, days, dest_name):
     t = TripModel(id=f"trip_t{uuid.uuid4().hex[:8]}", user_id="usr_pilg", title=f"{dest_name} Tour Package",
                   status="PLANNING", itinerary_status="GENERATING", start_date=START,
                   end_date=(date.fromisoformat(START) + timedelta(days=days - 1)).isoformat(), total_days=days,
-                  destination_json=json.dumps({"name": dest_name, "city": dest_name, "region": "Uttar Pradesh"}),
+                  destination_json=json.dumps({"name": dest_name, "city": dest_name, "region": "Uttar Pradesh",
+                                               "latitude": CITY[dest_name][0], "longitude": CITY[dest_name][1]}),
                   travelers_json="[]", preferences_snapshot_json=json.dumps({"travelStyles": [], "planCard": meta}),
                   created_at="t", updated_at="t")
     return t
@@ -192,7 +194,7 @@ check("item keeps the stop note, time 'Flexible', cost unknown", a0.description 
       and a0.time_slot == "Flexible" and a0.estimated_cost_inr is None)
 check("resolved stops have coordinates and a place_id", all(x.latitude is not None for _, acts in days for x in acts)
       and all(v["placeId"] and not v["unresolved"] for v in meta["stops"].values()))
-check("Google looked up with name + city", s.calls[0] == "Dashashwamedh Ghat, Varanasi", s.calls[:1])
+check("Google looked up with name + city", s.calls[0] == "Dashashwamedh Ghat Varanasi", s.calls[:1])
 check("trip keeps card id, version, status, last_verified, booking notes", meta["id"] == V.id and meta["version"] == 1
       and meta["status"] == "draft_unverified" and meta["lastVerified"] is None
       and meta["bookingNotes"][0]["officialUrl"] == "https://www.shrikashivishwanath.org/")

@@ -76,7 +76,7 @@ def find_place(q, search_fn=None):
 
 
 def google(query):
-    name, city = [x.strip() for x in query.rsplit(",", 1)]
+    name, _, city = query.strip().rpartition(" ")   # the stop search is "<stop name> <city>"
     return SimpleNamespace(unavailable=False, ambiguous=False, results=[{
         "place_id": "ChIJ" + uuid.uuid5(uuid.NAMESPACE_DNS, name).hex[:16], "name": name,
         "displayName": f"{name}, {city}, Uttar Pradesh, India", "latitude": 25.3, "longitude": 83.0}])
