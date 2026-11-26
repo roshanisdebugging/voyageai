@@ -91,7 +91,13 @@ Call exactly one tool when it fits:
 - update_trip_draft: the user wants to create a trip by voice and gives details ("Goa jaana hai, 15 se 18
   December, do log", "trip banao Jaipur ke liye"), or answers a question about the trip being planned, or
   corrects a detail ("nahi, budget 50 hazaar kar do"). Pass ONLY values the user said:
-  dates as YYYY-MM-DD from today's date ("15 December" = the next 15 December; "agle Friday"); "3 din ke liye"
+  DATES AS SPOKEN: a date the user says with a day number goes in start_day / start_month / start_year (end_day /
+  end_month / end_year for the last day), ONLY the parts the user actually SPOKE. Never fill in a month or year you
+  assumed: our code picks them. "पच्चीस तारीख से" / "25 tarikh se" / "25th se" -> start_day=25, start_month=null,
+  start_year=null. "25 se 27" / "25 से 27 तक" -> start_day=25, end_day=27 (months null). "5 November" ->
+  start_day=5, start_month=11, start_year=null. "25 November 2025" -> start_day=25, start_month=11, start_year=2025.
+  Then leave start_date / end_date null. Relative dates with no day number ("kal", "parso", "agle Friday", "kal se
+  pehle") go in start_date as YYYY-MM-DD from today's date, with the *_day fields null. "3 din ke liye"
   -> days=3; people as integers ("do log" -> adults=2, "koi bachcha nahi" -> children=0); budget in rupees as a
   number ("50 hazaar" -> 50000, "1.5 lakh" -> 150000). origin_city = where the trip STARTS, only when the user
   says it: "Delhi se", "from Delhi", "कोलकाता से गोवा" / "Kolkata se Goa" -> origin_city=Kolkata, destination=Goa.
@@ -303,8 +309,14 @@ UPDATE_DRAFT_TOOL: Dict[str, Any] = {
             "properties": {
                 "destination": {"type": _nullable("string"), "description": "Where to go, e.g. 'Jaipur'."},
                 "origin_city": {"type": _nullable("string"), "description": "Starting city, e.g. 'Delhi'."},
-                "start_date": {"type": _nullable("string"), "description": "YYYY-MM-DD."},
-                "end_date": {"type": _nullable("string"), "description": "YYYY-MM-DD (last day of the trip)."},
+                "start_date": {"type": _nullable("string"), "description": "YYYY-MM-DD, only for relative dates (kal, agle Friday)."},
+                "end_date": {"type": _nullable("string"), "description": "YYYY-MM-DD (last day of the trip), only for relative dates."},
+                "start_day": {"type": _nullable("integer"), "description": "Day of month AS SPOKEN (1-31)."},
+                "start_month": {"type": _nullable("integer"), "description": "Month 1-12 ONLY if the user said it, else null."},
+                "start_year": {"type": _nullable("integer"), "description": "Year ONLY if the user said it, else null."},
+                "end_day": {"type": _nullable("integer"), "description": "Last day's day of month AS SPOKEN."},
+                "end_month": {"type": _nullable("integer"), "description": "Month 1-12 ONLY if the user said it, else null."},
+                "end_year": {"type": _nullable("integer"), "description": "Year ONLY if the user said it, else null."},
                 "days": {"type": _nullable("integer"), "description": "Trip length in days, if said instead of an end date."},
                 "adults": {"type": _nullable("integer")},
                 "children": {"type": _nullable("integer")},
@@ -791,6 +803,9 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
     was_skipped = d.origin_skipped
     res = D.apply_update(d, {k: v for k, v in args.items() if k != "start_new"}, lang, _draft_today())
     origin_note, origin_retry, cleared = "", "", False
+    if res.date_rolled_forward or res.date_fields_missing:   # flags only, never the words or the date
+        print(f"[TRIP DRAFT] event=dates date_rolled_forward={'true' if res.date_rolled_forward else 'false'} "
+              f"date_fields_missing={'true' if res.date_fields_missing else 'false'} source=voice draft={conversation_id}", flush=True)
     if skip_hint and not res.origin_not_found and not res.origin_unsure and "origin_city" not in res.changed:
         # "pata nahi kahan se ..." and the model found no (new) city: no origin, never asked again
         cleared = d.origin_city is not None

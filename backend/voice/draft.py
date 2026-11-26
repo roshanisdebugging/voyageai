@@ -160,6 +160,58 @@ def parse_date(raw: Any) -> Optional[date]:
         return None
 
 
+# ---------------- dates as spoken ("पच्चीस तारीख" = the NEXT 25th, never a past one the model assumed)
+
+def _months_from(year: int, month: int, count: int):
+    for i in range(count):
+        m = month - 1 + i
+        yield year + m // 12, m % 12 + 1
+
+
+def _try_date(y: int, m: int, d: int) -> Optional[date]:
+    try:
+        return date(y, m, d)
+    except ValueError:
+        return None
+
+
+def resolve_said_date(day: int, month: Optional[int], year: Optional[int], not_before: date) -> Optional[date]:
+    """The date a person means from the parts they SAID, as the first matching date on or after `not_before`:
+    - day only: this month if not passed, else the next month that HAS that day (31 skips short months), next year
+      if needed;
+    - day + month: the next occurrence (next year if passed this year);
+    - with a year: exactly that date (a past one is refused by the caller, as before).
+    None if no such date exists (e.g. day 32, 30 February 2027)."""
+    if not 1 <= day <= 31 or (month is not None and not 1 <= month <= 12):
+        return None
+    if year is not None:
+        if month is not None:
+            return _try_date(year, month, day)
+        start_month = not_before.month if year == not_before.year else 1
+        found = [d for y, m in _months_from(year, start_month, 13 - start_month) if (d := _try_date(y, m, day))]
+        future = [d for d in found if d >= not_before]
+        return (future or found or [None])[0]
+    if month is not None:
+        for y in range(not_before.year, not_before.year + 9):   # 29 February: the next leap year
+            d = _try_date(y, month, day)
+            if d and d >= not_before:
+                return d
+        return None
+    for y, m in _months_from(not_before.year, not_before.month, 14):
+        d = _try_date(y, m, day)
+        if d and d >= not_before:
+            return d
+    return None
+
+
+def _said_parts(args: Dict[str, Any], which: str) -> Optional[Tuple[int, Optional[int], Optional[int]]]:
+    day = parse_int(args.get(f"{which}_day"))
+    if day is None:
+        return None
+    month, year = parse_int(args.get(f"{which}_month")), parse_int(args.get(f"{which}_year"))
+    return day, month, year
+
+
 def say_date(d: date) -> str:
     return f"{d.day} {MONTHS[d.month - 1]}"
 
@@ -246,6 +298,8 @@ class UpdateResult:
     origin_not_found: Optional[str] = None               # a valid name that the place search did not find
     origin_invalid: bool = False                         # not a place name (digits, too long, ...): not given
     origin_stopword: bool = False                        # "pata" / "पता" / "nahi" ...: not a city, no Google call
+    date_rolled_forward: bool = False                    # a day (and month) without a year/month became a future date
+    date_fields_missing: bool = False                    # the model sent only an ISO date (no as-spoken fields)
     origin_unsure: bool = False                          # found, but the name doesn't match what was said
 
 
@@ -300,6 +354,39 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             out.origin_not_found = name
         else:
             out.origin_invalid = True
+
+    # Dates as spoken: the model passes only the parts the user said; CODE picks the month / year (rolling forward).
+    # Without these fields the model's ISO date is used as before (a past one is refused; code never guesses).
+    said_start, said_end = _said_parts(args, "start"), _said_parts(args, "end")
+    if said_start or said_end:
+        args = dict(args)
+        bad = False
+        s_res = None
+        if said_start:
+            day, month, year = said_start
+            s_res = resolve_said_date(day, month, year, today)
+            if s_res is None:
+                bad = True
+            else:
+                args["start_date"] = s_res.isoformat()
+                naive = _try_date(year or today.year, month or today.month, day)
+                out.date_rolled_forward = year is None and naive != s_res
+        if said_end and not bad:
+            day, month, year = said_end
+            if said_start and month is None and said_start[1] is not None and year is None:
+                month = said_start[1]      # "25 December se 27" -> 27 December
+            base = s_res or parse_date(draft.start_date) or today
+            e_res = resolve_said_date(day, month, year, base) if year is None else _try_date(year, month or base.month, day)
+            if e_res is None:
+                bad = True
+            else:
+                args["end_date"] = e_res.isoformat()
+        if bad:
+            out.problems.append("Tareekh samajh nahi aayi." if hi else "I didn't get the date.")
+            args.pop("start_date", None)
+            args.pop("end_date", None)
+    elif args.get("start_date") or args.get("end_date"):
+        out.date_fields_missing = True
 
     # Dates: start, end, or start + days. Checked together.
     start = parse_date(args.get("start_date")) if args.get("start_date") else (parse_date(draft.start_date) if draft.start_date else None)
