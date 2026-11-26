@@ -8,6 +8,7 @@ import { PreferenceOption } from '../../../components/preferences/PreferenceOpti
 import { PreferenceProgress } from '../../../components/preferences/PreferenceProgress';
 import { PreferenceFooter } from '../../../components/preferences/PreferenceFooter';
 import { PlaceSearchField, placeSubtitle } from '../components/PlaceSearchField';
+import { cleanOriginName, ORIGIN_MAX_CHARS } from '../originName';
 import { MapPin, Calendar, Sparkles, ArrowLeft, RefreshCw, AlertCircle, Wallet, Baby, User, Pencil } from 'lucide-react';
 import { announceTripCreated, setReviewShowing, VOICE_SUBMIT_REVIEW } from '../../../voice/reviewState';
 
@@ -232,6 +233,7 @@ export const TripCreationWizard: React.FC = () => {
     if (adults < 1) return 'At least one adult must travel.';
     if (totalTravelers > MAX_TRAVELERS) return `A trip can have at most ${MAX_TRAVELERS} travelers.`;
     if (!budgetAmount || budgetAmount < MIN_BUDGET) return `Enter a budget of at least ${formatInr(MIN_BUDGET)}.`;
+    if (origin && !cleanOriginName(origin.name)) return `Kahan se: choose a city name (letters only, at most ${ORIGIN_MAX_CHARS} characters), or clear it.`;
     return null;
   };
 
@@ -516,7 +518,7 @@ export const TripCreationWizard: React.FC = () => {
 
               <PlaceSearchField
                 id="trip-origin"
-                label="Starting from"
+                label="Kahan se"
                 placeholder="Your starting city (e.g. Delhi)"
                 value={origin}
                 onChange={setOrigin}
@@ -617,7 +619,7 @@ export const TripCreationWizard: React.FC = () => {
                   />
                   <PlaceSearchField
                     id="review-origin"
-                    label="Starting from"
+                    label="Kahan se"
                     placeholder="Your starting city"
                     value={origin}
                     onChange={setOrigin}

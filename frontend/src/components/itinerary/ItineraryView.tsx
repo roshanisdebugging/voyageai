@@ -405,11 +405,12 @@ export const ItineraryView: React.FC = () => {
 
       {/* Main Trip Banner */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-3xl p-5 space-y-2 shadow-xs">
-        <div className="flex items-center justify-between">
-          <span className="px-3 py-1 rounded-full bg-[#E8F0EE] dark:bg-[#12332B] text-[var(--color-primary)] font-extrabold text-xs border border-[#355F58]/30 dark:border-emerald-800">
-            {destName}
+        <div className="flex items-center justify-between gap-2">
+          <span className="min-w-0 truncate px-3 py-1 rounded-full bg-[#E8F0EE] dark:bg-[#12332B] text-[var(--color-primary)] font-extrabold text-xs border border-[#355F58]/30 dark:border-emerald-800">
+            {/* The starting city only when the trip has one (booking step 1) */}
+            {currentTrip?.origin?.name ? `${currentTrip.origin.name} → ${destName}` : destName}
           </span>
-          <span className="text-xs text-[var(--color-text-secondary)] font-bold flex items-center gap-1">
+          <span className="shrink-0 text-xs text-[var(--color-text-secondary)] font-bold flex items-center gap-1">
             <Calendar className="w-3.5 h-3.5 text-[var(--color-primary)]" />
             {currentTrip?.startDate} to {currentTrip?.endDate}
           </span>
