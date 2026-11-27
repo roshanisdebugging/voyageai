@@ -191,6 +191,10 @@ def init_db():
 
                 ALTER TABLE itinerary_activities ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT FALSE;
 
+                ALTER TABLE itinerary_activities ADD COLUMN IF NOT EXISTS place_id VARCHAR;
+
+                ALTER TABLE itinerary_activities ADD COLUMN IF NOT EXISTS verify_status VARCHAR;
+
                 CREATE TABLE IF NOT EXISTS saved_places (
                     id VARCHAR PRIMARY KEY,
                     user_id VARCHAR NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,

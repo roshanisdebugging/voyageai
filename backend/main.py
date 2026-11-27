@@ -1285,7 +1285,9 @@ async def process_ws_action(
                         "activityType": a.activity_type,
                         "bookingRequired": getattr(a, "booking_required", False),
                         "isConfirmed": getattr(a, "is_confirmed", False),
-                        "isDone": bool(getattr(a, "is_done", False))
+                        "isDone": bool(getattr(a, "is_done", False)),
+                        "placeId": getattr(a, "place_id", None),
+                        "verifyStatus": getattr(a, "verify_status", None)
                     }
                     for a in acts
                 ]
@@ -2777,7 +2779,9 @@ def get_trip_by_id(
                             "longitude": a.longitude,
                             "estimatedCostInr": a.estimated_cost_inr,
                             "isConfirmed": a.is_confirmed,
-                            "isDone": bool(a.is_done)
+                            "isDone": bool(a.is_done),
+                            "placeId": getattr(a, "place_id", None),
+                            "verifyStatus": getattr(a, "verify_status", None)
                         }
                         for a in db.query(ItineraryActivityModel).filter(ItineraryActivityModel.day_id == d.id).all()
                     ]
@@ -2908,6 +2912,8 @@ def build_trip_export_payload(trip_id: str, db: Session) -> dict:
                     "estimatedCostInr": cost,
                     "isConfirmed": a.is_confirmed,
                     "isDone": bool(a.is_done),
+                    "placeId": getattr(a, "place_id", None),
+                    "verifyStatus": getattr(a, "verify_status", None),
                     "bookingRequired": a.booking_required,
                     "bookingReferenceId": a.booking_reference_id
                 })
@@ -3296,7 +3302,9 @@ def get_itinerary(
                     "estimatedCostInr": a.estimated_cost_inr,
                     "bookingRequired": a.booking_required,
                     "isConfirmed": a.is_confirmed,
-                    "isDone": bool(a.is_done)
+                    "isDone": bool(a.is_done),
+                    "placeId": getattr(a, "place_id", None),
+                    "verifyStatus": getattr(a, "verify_status", None)
                 })
 
             days_data.append({

@@ -331,6 +331,14 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
         # Copy-on-Write: Clone this baseline plan into PostgreSQL under the user's trip_id
 
 
+        # Check the venues on Google (never fails the trip; the cached plan above is not changed).
+        try:
+            import place_verify
+            verified = place_verify.verify_itinerary(parsed_schema, trip) if place_verify.should_verify(answered_by) else {}
+        except Exception as verify_err:
+            print(f"[PLACE VERIFY] trip={trip_id} skipped error={type(verify_err).__name__}", flush=True)
+            verified = {}
+
         # 4. Save to Database
         provider_name = answered_by  # OPENAI | GROQ (who answered), CACHED (a cache hit) or MOCK
 
@@ -357,7 +365,7 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
         db.flush()
 
         total_activities = 0
-        for day_data in parsed_schema.days:
+        for day_index, day_data in enumerate(parsed_schema.days):
             day_id = f"day_{uuid.uuid4().hex[:10]}"
             day_record = ItineraryDayModel(
                 id=day_id,
@@ -370,8 +378,10 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
             db.add(day_record)
             db.flush()
 
-            for act_data in day_data.activities:
+            for act_index, act_data in enumerate(day_data.activities):
                 total_activities += 1
+                check = verified.get((day_index, act_index)) or {}
+                google_coords = check.get("latitude") is not None and check.get("longitude") is not None
                 act_record = ItineraryActivityModel(
                     id=f"act_{uuid.uuid4().hex[:10]}",
                     day_id=day_id,
@@ -380,11 +390,14 @@ def process_async_itinerary_generation(trip_id: str, db_session_factory):
                     description=act_data.description,
                     activity_type=act_data.activityType,
                     location_name=act_data.locationName,
-                    latitude=act_data.latitude,
-                    longitude=act_data.longitude,
+                    # found on Google: Google's coordinates (plan_card_itinerary's policy: place_id + coordinates only)
+                    latitude=check["latitude"] if google_coords else act_data.latitude,
+                    longitude=check["longitude"] if google_coords else act_data.longitude,
                     estimated_cost_inr=act_data.estimatedCostInr,
                     booking_required=act_data.bookingRequired,
-                    is_confirmed=False
+                    is_confirmed=False,
+                    place_id=check.get("place_id"),
+                    verify_status=check.get("status"),
                 )
                 db.add(act_record)
 
