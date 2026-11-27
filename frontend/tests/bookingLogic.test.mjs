@@ -20,6 +20,10 @@ check('age field: digits only, at most 3', B.cleanAgeInput('3a4x') === '34' && B
 check('name: Roman and Devanagari names', B.looksLikeName('Rahul Sharma') && B.looksLikeName('राहुल शर्मा'));
 check('name: digits / symbols / one letter / too long refused',
   !B.looksLikeName('Rahul123') && !B.looksLikeName('R@hul') && !B.looksLikeName('R') && !B.looksLikeName('A'.repeat(61)));
+check('name: Ol Chiki / Bengali / Tamil -> "script"', ['ᱩᱢᱟᱱᱟᱛᱷ', 'রাহুল', 'ராகுல்'].every((x) => B.nameProblem(x) === 'script'));
+check("name: . - ' and accents allowed", ["R. K. Singh", "D'Souza", 'Anne-Marie', 'José', 'श्री राम'].every((x) => B.nameProblem(x) === null));
+check('name: Devanagari digits refused', B.nameProblem('राम२') === 'invalid');
+check('name messages', B.NAME_MESSAGES.script === 'Naam English ya Hindi mein likhiye.');
 check('services: toggle keeps the fixed order', B.toggleService(['hotel'], 'flight').join() === 'flight,hotel'
   && B.toggleService(['flight', 'hotel'], 'flight').join() === 'hotel' && B.toggleService([], 'cab').length === 0);
 

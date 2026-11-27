@@ -21,13 +21,26 @@ export function cleanAgeInput(raw: string): string {
   return (raw || '').replace(/\D/g, '').slice(0, 3);
 }
 
-/** Same rule as the server: letters (any script, with vowel marks) and spaces, 2 to 60 characters. */
-export function looksLikeName(raw: string): boolean {
+/**
+ * Same rule as the server (booking_flow.name_problem): Latin or Devanagari letters, spaces and . - ' only,
+ * 2 to 60 characters, at least 2 letters. 'script' = letters of another script (Bengali, Tamil, Ol Chiki...).
+ */
+export function nameProblem(raw: string, max: number = NAME_MAX): 'script' | 'invalid' | null {
   const text = (raw || '').trim().replace(/\s+/g, ' ');
-  if (text.length < 2 || text.length > NAME_MAX) return false;
-  if (!/^[\p{L}\p{M} ]+$/u.test(text)) return false;
-  return (text.match(/\p{L}/gu) || []).length >= 2;
+  if (/[\p{L}\p{M}]/u.test(text.replace(/[\p{Script=Latin}\p{Script=Devanagari}̀-ͯ]/gu, ''))) return 'script';
+  if (text.length < 2 || text.length > max) return 'invalid';
+  if (!/^[\p{L}\p{M} .\-']+$/u.test(text)) return 'invalid';
+  return (text.match(/\p{L}/gu) || []).length >= 2 ? null : 'invalid';
 }
+
+export function looksLikeName(raw: string): boolean {
+  return nameProblem(raw) === null;
+}
+
+export const NAME_MESSAGES = {
+  script: 'Naam English ya Hindi mein likhiye.',
+  invalid: 'Naam mein sirf akshar ho sakte hain, 2 se 60 tak.',
+} as const;
 
 /** Multi-select of the services step: tapping one adds or removes it, in a fixed order. */
 const ORDER = ['flight', 'train', 'hotel'];

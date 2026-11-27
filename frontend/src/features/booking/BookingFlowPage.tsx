@@ -4,7 +4,7 @@ import { ArrowLeft, Check, RefreshCw } from 'lucide-react';
 import { useTrip } from '../trip/TripContext';
 import { BOOKING_CHANGED } from '../../voice/uiActions';
 import { bookingApi, type BookingView } from './bookingApi';
-import { cleanAgeInput, cleanPhoneInput, looksLikeName, toggleService, NAME_MAX } from './bookingLogic';
+import { cleanAgeInput, cleanPhoneInput, nameProblem, toggleService, NAME_MAX, NAME_MESSAGES } from './bookingLogic';
 
 /**
  * Booking stage 2: one question at a time (the server decides which), large tap choices, typed names / ages / phone,
@@ -86,8 +86,9 @@ export const BookingFlowPage: React.FC = () => {
   };
   const submitText = () => {
     const value = text.trim();
-    if (view?.kind === 'name' && !looksLikeName(value)) {
-      setLocalError('Naam mein sirf akshar ho sakte hain, 2 se 60 tak.');
+    const problem = view?.kind === 'name' ? nameProblem(value) : null;
+    if (problem) {
+      setLocalError(NAME_MESSAGES[problem]);
       return;
     }
     if (!value) return;
@@ -177,7 +178,11 @@ export const BookingFlowPage: React.FC = () => {
           )}
 
           {view.question === 'flight_airline' && (
-            <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (text.trim()) answer(text.trim()); }}>
+            <form className="flex gap-2" onSubmit={(e) => {
+              e.preventDefault();
+              if (nameProblem(text, 40) === 'script') { setLocalError('Airline ka naam English ya Hindi mein likhiye.'); return; }
+              if (text.trim()) answer(text.trim());
+            }}>
               <input aria-label="Koi khaas airline" placeholder="Koi khaas airline" maxLength={40} value={text}
                 onChange={(e) => setText(e.target.value)} className={inputCls} />
               <button type="submit" disabled={!text.trim() || busy} className={`${primaryCls} w-auto shrink-0 px-5`}>OK</button>
