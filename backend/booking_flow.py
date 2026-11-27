@@ -28,7 +28,7 @@ SERVICES = ["flight", "train", "hotel"]
 SERVICE_QUESTIONS = {
     "flight": ["flight_time", "flight_airline"],
     "train": ["train_class", "train_time", "train_tatkal"],
-    "hotel": ["hotel_type", "hotel_rooms", "hotel_elderly"],
+    "hotel": ["hotel_type", "hotel_rooms"],
 }
 TIMES = ["morning", "afternoon", "evening", "night"]
 TRAIN_CLASSES = ["SL", "3A", "2A", "1A"]
@@ -36,7 +36,7 @@ HOTEL_TYPES = ["budget", "3star", "4plus"]
 YES_NO = ["yes", "no"]
 CHOICES: Dict[str, List[str]] = {          # the allowed values of each tap question ("any" always allowed)
     "flight_time": TIMES, "train_time": TIMES, "train_class": TRAIN_CLASSES, "hotel_type": HOTEL_TYPES,
-    "train_tatkal": YES_NO, "hotel_elderly": YES_NO, "flight_airline": ["cheapest"],
+    "train_tatkal": YES_NO, "flight_airline": ["cheapest"],
 }
 MAX_ROOMS = 9
 NAME_MIN, NAME_MAX = 2, 60
@@ -81,10 +81,9 @@ PROMPTS = {
         "train_tatkal": "Tatkal chalega?",
         "hotel_type": "Hotel kaisa chahiye? Budget, 3-star ya 4-star se upar?",
         "hotel_rooms": "Kitne kamre chahiye? 1 se 9.",
-        "hotel_elderly": "Koi bujurg saath hain?",
         "name_adult": "Yatri {n} ka naam?",
         "name_child": "Bachche {n} ka naam?",
-        "name_offer": "Pehle yatri {name} hain? Haan boliye, ya naam boliye.",
+        "travellers_intro": "Ab yatriyon ke naam aur umar.",
         "age": "{name} ki umar?",
         "age_child_check": "{name} ki umar {age}? Ye bachche ki jagah hai. Sahi hai?",
         "age_adult_check": "{name} ki umar {age}? Ye bade yatri ki jagah hai. Sahi hai?",
@@ -103,10 +102,9 @@ PROMPTS = {
         "train_tatkal": "Is Tatkal okay?",
         "hotel_type": "What kind of hotel? Budget, 3-star or 4-star and above?",
         "hotel_rooms": "How many rooms? 1 to 9.",
-        "hotel_elderly": "Any elderly guests?",
         "name_adult": "Traveller {n}'s name?",
         "name_child": "Child {n}'s name?",
-        "name_offer": "Is the first traveller {name}? Say yes, or say the name.",
+        "travellers_intro": "Now the travellers' names and ages.",
         "age": "How old is {name}?",
         "age_child_check": "{name} is {age}? This is a child's place. Is that right?",
         "age_adult_check": "{name} is {age}? This is an adult's place. Is that right?",
@@ -174,7 +172,6 @@ class BookingState:
     phone_ok: bool = False                                      # set ONLY after the digit-by-digit read-back got a yes
     age_check: Optional[int] = None                             # an age waiting for "sahi hai?" (adult < 18 / child 18+)
     account_name: Optional[str] = None                          # offered for the first traveller (yes / no)
-    account_declined: bool = False
     choosing_change: bool = False                               # "nahi" at the review: which part to change?
     finished: bool = False
     editing_services: bool = False                              # Back / "change services": the choice is shown again
@@ -368,8 +365,19 @@ def current_question(s: BookingState) -> str:
     return qid
 
 
-def offers_account_name(s: BookingState, qid: str) -> bool:
-    return qid == "t0_name" and bool(s.account_name) and not s.account_declined and s.adults > 0
+ELDERLY_AGE = 60                                # a traveller this old or older: the partner gets a room note
+
+
+def older_travellers(s: BookingState) -> int:
+    return sum(1 for t in s.travellers if isinstance(t.get("age"), int) and t["age"] >= ELDERLY_AGE)
+
+
+def partner_notes(s: BookingState) -> List[str]:
+    """Notes for the booking partner, derived by CODE from the ages (never asked as a separate question)."""
+    n = older_travellers(s)
+    if not n:
+        return []
+    return [f"{n} yatri {ELDERLY_AGE} saal ya usse upar hain; lift ya ground floor wala kamra dekhein."]
 
 
 def _is_child(s: BookingState, i: int) -> bool:
@@ -402,7 +410,6 @@ def _drop_service_answers(s: BookingState, svc: str) -> None:
 def _reset_travellers(s: BookingState) -> None:
     s.travellers = [{"name": None, "age": None} for _ in range(s.traveller_count())]
     s.age_check = None
-    s.account_declined = False
 
 
 def change_part(s: BookingState, part: str) -> bool:
@@ -414,8 +421,6 @@ def change_part(s: BookingState, part: str) -> bool:
         s.choosing_change = False
         s.travellers[i] = {"name": None, "age": None}
         s.age_check = None
-        if i == 0:
-            s.account_declined = True           # editing: ask for the name, don't offer the same one again
         return True
     if part not in CHANGE_PARTS:
         return False
@@ -483,12 +488,6 @@ def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
         i = t[0]
         if value == ANY:
             return Outcome(False, "decide_not_allowed")
-        if offers_account_name(s, qid) and value in ("yes", "no"):
-            if value == "yes":
-                s.travellers[i]["name"] = s.account_name
-            else:
-                s.account_declined = True
-            return Outcome(True)
         problem = name_problem(value)
         if problem:
             return Outcome(False, "name_script" if problem == "script" else "name_invalid")    # never stored
@@ -578,8 +577,6 @@ def go_back(s: BookingState) -> bool:
         s.editing_services = True               # the earlier choice stays selected on the screen
     elif t:
         s.travellers[t[0]][t[1]] = None
-        if t == (0, "name"):
-            s.account_declined = False
     elif prev == "phone":
         s.phone, s.phone_ok = None, False
     elif prev == "phone_ok":
@@ -613,10 +610,13 @@ def summary_lines(s: BookingState, lang: str) -> List[Dict[str, str]]:
             f"{'Time' if not hi else 'Samay'}: {_value_label(a.get('train_time'), lang)}",
             f"Tatkal: {_value_label(a.get('train_tatkal'), lang)}"])})
     if "hotel" in s.services:
-        lines.append({"part": "hotel", "label": L["hotel"], "text": ", ".join([
+        hotel = {"part": "hotel", "label": L["hotel"], "text": ", ".join([
             f"{'Type' if not hi else 'Prakaar'}: {_value_label(a.get('hotel_type'), lang)}",
-            f"{'Rooms' if not hi else 'Kamre'}: {_value_label(a.get('hotel_rooms'), lang)}",
-            f"{'Elderly' if not hi else 'Bujurg'}: {_value_label(a.get('hotel_elderly'), lang)}"])})
+            f"{'Rooms' if not hi else 'Kamre'}: {_value_label(a.get('hotel_rooms'), lang)}"])}
+        notes = partner_notes(s)
+        if notes:
+            hotel["note"] = " ".join(notes)     # under the hotel summary only
+        lines.append(hotel)
     for i, t in enumerate(s.travellers):         # one line per traveller, each with its own edit
         label = (f"Bachcha {i - s.adults + 1}" if hi else f"Child {i - s.adults + 1}") if _is_child(s, i) \
             else (f"Yatri {i + 1}" if hi else f"Traveller {i + 1}")
@@ -684,8 +684,6 @@ def prompt_for(s: BookingState, qid: str, lang: str, spoken: bool = False) -> st
     t = _traveller(qid)
     if t and t[1] == "name":
         i = t[0]
-        if offers_account_name(s, qid):
-            return P["name_offer"].format(name=s.account_name)
         if _is_child(s, i):
             return P["name_child"].format(n=i - s.adults + 1)
         return P["name_adult"].format(n=i + 1)
@@ -716,8 +714,6 @@ def _choices(s: BookingState, qid: str, lang: str) -> List[Dict[str, str]]:
         return [{"value": str(n), "label": str(n)} for n in range(1, MAX_ROOMS + 1)] + [{"value": ANY, "label": L[ANY]}]
     if qid.endswith("_age_confirm") or qid == "phone_ok":
         return [{"value": "yes", "label": L["yes"]}, {"value": "no", "label": L["no"]}]
-    if offers_account_name(s, qid):
-        return [{"value": "yes", "label": (f"Haan, {s.account_name}" if lang == "hi" else f"Yes, {s.account_name}")}]
     if qid == "change":
         return [{"value": f"change:{p}", "label": L[p]} for p in CHANGE_PARTS]
     return []
@@ -773,9 +769,12 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
     }
     if t:
         out["traveller"] = {"index": t[0] + 1, "isChild": _is_child(s, t[0]), "total": s.traveller_count()}
+    if qid == "t0_name" and s.account_name and s.adults > 0:
+        out["accountName"] = s.account_name     # the screen's optional "Mera naam" button (filled only on tap)
     if qid in ("review", "change"):
         out["summary"] = summary_lines(s, lang)
         out["consent"] = CONSENT[lang]
+        out["partnerNotes"] = partner_notes(s)
     return out
 
 
@@ -823,7 +822,7 @@ def start(redis_conn, db, user_id: str, trip, services: Optional[List[str]] = No
     if chosen:
         s.services = chosen
     save(redis_conn, user_id, s)
-    log_event("start", s, services_given=bool(chosen), name_offered=bool(s.account_name))
+    log_event("start", s, services_given=bool(chosen), account_name_known=bool(s.account_name))
     return s
 
 
@@ -837,7 +836,7 @@ def answer(redis_conn, user_id: str, trip_id: str, question: str, value: Any) ->
               skipped=bool(out.ok and value == ANY), error=out.error or "none")
     if out.finished:
         delete(redis_conn, user_id, trip_id)
-        log_event("finish", s, sent=False)
+        log_event("finish", s, sent=False, older_travellers=older_travellers(s))   # a count only
     else:
         save(redis_conn, user_id, s)
     return s, out

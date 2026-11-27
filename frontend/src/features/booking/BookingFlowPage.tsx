@@ -194,6 +194,12 @@ export const BookingFlowPage: React.FC = () => {
               {(view.choices || []).map((c) => (
                 <button key={c.value} type="button" disabled={busy} className={choiceCls} onClick={() => answer(c.value)}>{c.label}</button>
               ))}
+              {view.kind === 'name' && view.accountName && (
+                <button type="button" disabled={busy} className={choiceCls}
+                  onClick={() => { setLocalError(null); setText(view.accountName || ''); }}>
+                  Mera naam
+                </button>
+              )}
               <input
                 aria-label={view.kind === 'name' ? 'Naam' : view.kind === 'age' ? 'Umar' : 'Mobile number'}
                 placeholder={view.kind === 'name' ? 'Naam' : view.kind === 'age' ? 'Umar (saal)' : '10 digit mobile number'}
@@ -220,6 +226,7 @@ export const BookingFlowPage: React.FC = () => {
                     <div className="min-w-0">
                       <p className="text-xs font-extrabold text-[var(--color-text-secondary)]">{line.label}</p>
                       <p className="wrap-anywhere text-sm font-bold text-[var(--color-text-primary)]">{line.text}</p>
+                      {line.note && <p className="wrap-anywhere mt-1 text-xs font-medium text-[var(--color-text-secondary)]">{line.note}</p>}
                     </div>
                     <button type="button" disabled={busy} onClick={() => answer(`change:${line.part}`)}
                       className="min-h-11 shrink-0 px-2 text-xs font-bold text-[var(--color-primary)] hover:underline">Badlein</button>

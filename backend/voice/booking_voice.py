@@ -326,7 +326,7 @@ def parse_choice(qid: str, text: str) -> Any:
         if len(nums) == 1:
             return nums[0]
         return BF.ANY if is_decide(toks) else None
-    if qid in ("train_tatkal", "hotel_elderly"):
+    if qid == "train_tatkal":
         said = yes_no(text)
         if said:
             return said
@@ -425,10 +425,8 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
         return (f"change:{part}" if part else None), None, False
     t = BF._traveller(qid)
     if t and t[1] == "name":
-        if BF.offers_account_name(s, qid):
-            said = yes_no(text)
-            if said:
-                return said, None, False
+        if yes_no(text):                          # a bare "haan" / "nahi" is not a name
+            return None, None, False
         if is_decide(toks):
             return BF.ANY, None, False
         if other_script(text):
@@ -543,7 +541,7 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
             lang = s.voice_lang if s.voice_lang in BF.PROMPTS else lang
         qid = BF.current_question(s)
         _mark_asked(redis_conn, user_id, s, conversation_id)
-        text = BF.prompt_for(s, qid, lang, spoken=True)
+        text = _with_intro(BF.prompt_for(s, qid, lang, spoken=True), qid, None, lang)
         return _result(f"{RESUMED[lang]} {text}" if resumed else text, qid)
 
     lang = s.voice_lang if s.voice_lang in BF.PROMPTS else lang   # a bare "Rahul" / "34" doesn't switch language
@@ -600,11 +598,19 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
     if not out.ok:
         if s.miss_question != nxt:
             s.misses, s.miss_question, s.decide_offer = 0, nxt, None
-        reply = _miss_reply(s, nxt, f"{BF.ERRORS[lang][out.error]} {prompt}", lang,
-                            name_unclear=out.error == "name_script")
+        err = BF.ERRORS[lang][out.error]
+        base = err if out.error == "phone_invalid" else f"{err} {prompt}"   # the 10-digit rule said once
+        reply = _miss_reply(s, nxt, base, lang, name_unclear=out.error == "name_script")
         _mark_asked(redis_conn, user_id, s, conversation_id)
         return _result(reply, nxt)
-    return _result(prompt, nxt)
+    return _result(_with_intro(prompt, nxt, qid, lang), nxt)
+
+
+def _with_intro(prompt: str, nxt: str, previous: Optional[str], lang: str) -> str:
+    """One short line when the traveller step starts: "Ab yatriyon ke naam aur umar. Yatri 1 ka naam?"."""
+    if nxt == "t0_name" and previous != "t0_name":
+        return f"{BF.PROMPTS[lang]['travellers_intro']} {prompt}"
+    return prompt
 
 
 def safe_handle(transcript: str, lang: str, **kw):

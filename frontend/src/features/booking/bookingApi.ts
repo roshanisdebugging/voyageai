@@ -6,7 +6,7 @@ import { wsClient } from '../../services/wsClient';
 import { fetchWithAuth, getApiBaseUrl } from '../../config/apiConfig';
 
 export interface BookingChoice { value: string; label: string }
-export interface BookingSummaryLine { part: string; label: string; text: string }
+export interface BookingSummaryLine { part: string; label: string; text: string; note?: string }
 export type BookingKind = 'services' | 'choice' | 'name' | 'age' | 'phone' | 'yesno' | 'review' | 'change';
 
 export interface BookingView {
@@ -26,6 +26,9 @@ export interface BookingView {
   traveller?: { index: number; isChild: boolean; total: number };
   summary?: BookingSummaryLine[];
   consent?: string;
+  /** Traveller 1 only: the account's name for the optional "Mera naam" button (never filled in by itself). */
+  accountName?: string;
+  partnerNotes?: string[];
   finished?: boolean;
   cancelled?: boolean;
   expired?: boolean;

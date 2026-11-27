@@ -192,7 +192,7 @@ check("choices: hotel type", [C("hotel_type", x) for x in ("budget", "3 star", "
 check("choices: rooms", [C("hotel_rooms", x) for x in ("do kamre", "3", "एक कमरा", "aap decide karo")] == [2, 3, 1, "any"])
 check("choices: yes / no / decide", [C("train_tatkal", x) for x in ("haan chalega", "nahi", "नहीं चाहिए", "aap decide karo")]
       == ["yes", "no", "no", "any"])
-check("choices: elderly 'koi bhi nahi' is a no, not 'any'", C("hotel_elderly", "koi bhi nahi") == "no")
+check("choices: 'koi bhi nahi' is a no, not 'any'", C("train_tatkal", "koi bhi nahi") == "no")
 check("choices: airline", [C("flight_airline", x) for x in ("jo sasta mile", "IndiGo", "koi khaas airline", "you decide")]
       == ["cheapest", "Indigo", "__ask_airline__", "any"])
 
@@ -208,15 +208,15 @@ for combo in combos:
         v = ans(T1, "any")
     want = [q for s_ in BF.SERVICES if s_ in combo for q in BF.SERVICE_QUESTIONS[s_]]
     ok = ok and asked == want
-    ok = ok and v["question"] == "t0_name" and v["choices"] and v["choices"][0]["value"] == "yes"   # account name offered
-    v = ans(T1, "yes")
+    ok = ok and v["question"] == "t0_name" and not v["choices"] and v.get("accountName") == "Asha Ak"   # nothing prefilled
+    v = ans(T1, "Asha Ak")          # what tapping "Mera naam" then "Aage" sends
     v = ans(T1, "34")
     v = ans(T1, "+91 98765 43210")
     ok = ok and v["question"] == "phone_ok" and "9 8 7 6 5, 4 3 2 1 0" in v["prompt"]
     v = ans(T1, "yes")
     ok = ok and v["question"] == "review" and v["consent"] == "Ye details hamare booking partner ko bheji jayengi."
     ok = ok and any(line["part"] == "traveller:0" and line["text"] == "Asha Ak (34)" for line in v["summary"])
-    ok = ok and all(("bujurg" not in line["text"].lower() or "Aap decide karo" in line["text"]) for line in v["summary"])
+    ok = ok and not any("bujurg" in line["text"].lower() or "elderly" in line["text"].lower() for line in v["summary"])
     v = ans(T1, "yes")
     ok = ok and v.get("finished") and v["message"] == "Abhi ye test hai. Kuch bheja nahi gaya." and not redis_conn.exists(key(uid_a, T1))
     check(f"screen: {'+'.join(combo)} -> only its questions, 'any' accepted, review, test message, state deleted", ok, asked)
@@ -231,9 +231,8 @@ v = ans(T2, "3star")
 v = ans(T2, "12")
 check("screen: rooms 12 refused (1 to 9)", v["errorCode"] == "rooms_invalid")
 v = ans(T2, "2")
-v = ans(T2, "no")
-v = ans(T2, "no")          # not the account holder's name
-check("screen: 'no' to the offered name asks for the name", v["question"] == "t0_name" and not v["choices"])
+check("screen: hotel asks only type and rooms, then traveller 1 with nothing prefilled ('Mera naam' only on tap)",
+      v["question"] == "t0_name" and not v["choices"] and v.get("accountName") == "Asha Ak" and not v.get("error"))
 for bad in ("Rahul123", "R", "Rahul_S", "A" * 61):
     v = ans(T2, bad)
     check(f"screen: name {bad[:12]!r} refused", v["errorCode"] == "name_invalid" and v["question"] == "t0_name")
@@ -269,7 +268,7 @@ check("screen: review lists the 3 travellers, one editable line each", v["questi
       and next(l["text"] for l in v["summary"] if l["part"] == "traveller:2") == "Aryan (25)")
 v = ans(T2, "change:hotel")
 check("screen: change hotel -> only the hotel questions again", v["question"] == "hotel_type")
-v = ans(T2, "4plus"); v = ans(T2, "1"); v = ans(T2, "yes")
+v = ans(T2, "4plus"); v = ans(T2, "1")
 check("screen: ...then straight back to the review (travellers and phone kept)", v["question"] == "review"
       and next(l["text"] for l in v["summary"] if l["part"] == "traveller:0") == "Rahul Sharma (40)" and next(l["text"] for l in v["summary"] if l["part"] == "phone") == "76543 21098")
 v = ans(T2, "no")
@@ -301,7 +300,7 @@ wsd("booking:cancel", T2)
 steps_seen = []
 for stop_at in range(0, 12):
     wsd("booking:start", T2)
-    vals = [["train", "hotel"], "any", "any", "yes", "budget", "2", "no", "no", "Rahul", "40", "Priya", "38"]
+    vals = [["train", "hotel"], "any", "any", "yes", "budget", "2", "Rahul", "40", "Priya", "38", "Aryan", "8"]
     for val in vals[:stop_at]:
         ans(T2, val)
     steps_seen.append(wsd("booking:get", T2)["question"])
@@ -388,14 +387,17 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     r = turn("aap decide karo")
     check("voice hi: 'aap decide karo' -> next question", r.reply_text.startswith("Kitne kamre"))
     r = turn("do kamre")
-    r = turn("nahi")
-    check("voice hi: account name offered for traveller 1", "Pehle yatri Asha Ak hain?" in r.reply_text)
+    check("voice hi: no elderly question; the traveller step opens with one line; no name offered",
+          r.reply_text == "Ab yatriyon ke naam aur umar. Yatri 1 ka naam?", r.reply_text)
     r = turn("haan")
-    check("voice hi: 'haan' takes the account name, asks the age", r.reply_text == "Asha Ak ki umar?")
+    check("voice hi: a bare 'haan' is never taken as the account holder (or as a name)",
+          r.reply_text == "Samajh nahi aaya. Yatri 1 ka naam?" and BF.load(redis_conn, uid_a, T2).travellers[0]["name"] is None, r.reply_text)
+    r = turn("Ramesh")
+    check("voice hi: the name said is used", r.reply_text == "Ramesh ki umar?")
     r = turn("10 saal")
     check("voice hi: adult aged 10 -> confirm once", "bade yatri ki jagah" in r.reply_text)
     r = turn("nahi")
-    check("voice hi: 'nahi' asks the age again", r.reply_text == "Asha Ak ki umar?")
+    check("voice hi: 'nahi' asks the age again", r.reply_text == "Ramesh ki umar?")
     r = turn("34 saal")
     r = turn("Priya, 30 saal")
     check("voice hi: name + age in one sentence fill both", r.reply_text == "Bachche 1 ka naam?", r.reply_text)
@@ -408,7 +410,9 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     r = turn("haan")
     check("voice hi: phone asked", r.reply_text.startswith("Ek mobile number"))
     r = turn("paanch aath saat chhe paanch chaar teen do ek shunya")
-    check("voice hi: number starting with 5 refused", r.reply_text.startswith("Ye number sahi nahi lagta"))
+    check("voice hi: number starting with 5 refused, the 10-digit rule said once",
+          r.reply_text == "Ye number sahi nahi lagta. 10 digit ka mobile number boliye, jo 6, 7, 8 ya 9 se shuru ho."
+          and r.reply_text.count("10 digit") == 1, r.reply_text)
     r = turn("nau aath saat chhe paanch chaar teen do ek")
     check("voice hi: 9 digits refused", r.reply_text.startswith("Ye number sahi nahi lagta"))
     r = turn("nau aath saat chhe paanch chaar teen do ek shunya")
@@ -421,7 +425,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
           r.reply_text)
     r = turn("nahi, hotel badalna hai")
     check("voice hi: a change at the review goes back to that part only", r.reply_text.startswith("Hotel kaisa chahiye"))
-    r = turn("3 star"); r = turn("ek kamra"); r = turn("haan")
+    r = turn("3 star"); r = turn("ek kamra")
     check("voice hi: then the review again", r.reply_text.startswith("Hotel 3-star, ek kamra. Teen yatri."), r.reply_text)
     r = turn("haan")
     check("voice hi: finish -> 'Abhi ye test hai. Kuch bheja nahi gaya.' and the state is deleted",
@@ -434,7 +438,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     # Devanagari, train, 1 adult
     CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
     seq = [("मुझे ट्रेन बुक करनी है", "Train mein kaunsi class"), ("थर्ड एसी", "Train kis time"), ("शाम", "Tatkal chalega?"),
-           ("नहीं", "Pehle yatri"), ("नहीं", "Yatri 1 ka naam?"), ("राहुल शर्मा", "राहुल शर्मा ki umar?"),
+           ("नहीं", "Ab yatriyon ke naam aur umar. Yatri 1 ka naam?"), ("राहुल शर्मा", "राहुल शर्मा ki umar?"),
            ("चौंतीस साल", "Ek mobile number"), ("नौ आठ सात छह पांच चार तीन दो एक शून्य", "Number: 9 8 7 6 5, 4 3 2 1 0"),
            ("हां", "Train 3AC, shaam, Tatkal nahi. Ek yatri."), ("हां", "Abhi ye test hai")]
     bad = [(t, r.reply_text) for t, want in seq for r in [say(t, CV, trip=TRIP1)] if not r.reply_text.startswith(want)]
@@ -444,14 +448,15 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
     seq = [("I want to book a flight and a train", "What time for the flight"), ("morning", "Any particular airline"),
            ("IndiGo", "Which train class"), ("sleeper", "What time for the train"), ("you decide", "Is Tatkal okay"),
-           ("yes", "Is the first traveller Asha Ak"), ("yes", "How old is Asha Ak"), ("thirty four", "Please give one mobile"),
+           ("yes", "Now the travellers' names and ages. Traveller 1's name?"), ("Asha", "How old is Asha"),
+           ("thirty four", "Please give one mobile"),
            ("nine eight seven six five four three two one zero", "Number: 9 8 7 6 5, 4 3 2 1 0. Is that right?"),
            ("yes", "Flight morning, Indigo. Train sleeper, any, Tatkal okay. 1 traveller."), ("yes", "This is a test for now. Nothing was sent.")]
     bad = [(t, r.reply_text) for t, want in seq for r in [say(t, CV, trip=TRIP1, stt="en")] if not r.reply_text.startswith(want)]
     check("voice English: flight + train end to end", not bad and not redis_conn.exists(key(uid_a, T1)), bad)
 
     # "abhi nahi" at every step by voice
-    answers = ["teeno", "subah", "jo sasta mile", "3AC", "raat", "haan", "budget", "do", "nahi", "haan", "34",
+    answers = ["teeno", "subah", "jo sasta mile", "3AC", "raat", "haan", "budget", "do", "Ramesh", "34",
                "9876543210", "haan"]
     seen = []
     for stop in range(len(answers) + 1):
@@ -489,7 +494,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
 
     # model only extracts, its output checked by code
     say("hotel", "conv_other", trip=TRIP1)
-    for a in ("budget", "1", "nahi", "nahi"):
+    for a in ("budget", "1"):
         say(a, "conv_other", trip=TRIP1)
     FakeTools.queue = [("booking_answer", {"name": "Rahul", "age": None, "phone_digits": None})]
     FakeTools.calls = []
@@ -528,7 +533,7 @@ check("name: Ol Chiki / Bengali / Tamil refused as another script", [BF.name_pro
 check("name: Latin and Devanagari with . - ' accepted", all(BF.clean_name(x) for x in ("R. K. Singh", "D'Souza", "Anne-Marie", "José", "श्री राम")))
 check("airline: another script refused", BF.name_problem("ইন্ডিগো", BF.AIRLINE_MAX) == "script")
 v = wsd("booking:start", T1, services=["hotel"])
-for val in ("any", "1", "no", "no"):
+for val in ("any", "1"):
     v = ans(T1, val)
 v = ans(T1, "রাহুল")
 check("screen: a Bengali name -> 'Naam English ya Hindi mein likhiye.', not stored", v["errorCode"] == "name_script"
@@ -537,8 +542,8 @@ v = ans(T1, "ராகுல்")
 check("screen: a Tamil name -> the same message", v["errorCode"] == "name_script")
 v = ans(T1, "Rahul Kumar")
 check("screen: a Latin name accepted", v["question"] == "t0_age")
-v = wsd("booking:back", T1); v = wsd("booking:back", T1)
-v = ans(T1, "no"); v = ans(T1, "राहुल कुमार")
+v = wsd("booking:back", T1)
+v = ans(T1, "राहुल कुमार")
 check("screen: a Devanagari name accepted", v["question"] == "t0_age" and v.get("prompt") == "राहुल कुमार ki umar?")
 for val in ("34", "9876543210", "yes"):
     v = ans(T1, val)
@@ -566,13 +571,13 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     r = say("को.", CV, trip=TRIP1)
     check("misses: the count starts again on a new question", r.reply_text == "Samajh nahi aaya. Tatkal chalega?", r.reply_text)
     r = say("nahi", CV, trip=TRIP1)
-    say("haan", CV, trip=TRIP1)   # account name offered -> yes
+    say("Ramesh", CV, trip=TRIP1)
     say("34", CV, trip=TRIP1)
     BF.cancel(redis_conn, uid_a, T1)
 
     CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
     say("hotel book karo", CV, trip=TRIP1)
-    for a in ("budget", "ek", "nahi", "nahi"):
+    for a in ("budget", "ek"):
         say(a, CV, trip=TRIP1)
     FakeTools.calls = []
     r1 = say("ᱩᱢᱟᱱᱟᱛᱷ", CV, trip=TRIP1).reply_text
@@ -593,7 +598,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     # the exact review of the real test: under 25 words, no "key: value", no names
     st = BF.BookingState(trip_id="x", adults=2, children=0, services=["train", "hotel"],
                          answers={"train_class": "2A", "train_time": "morning", "train_tatkal": "any",
-                                  "hotel_type": "3star", "hotel_rooms": 2, "hotel_elderly": "yes"},
+                                  "hotel_type": "3star", "hotel_rooms": 2},
                          travellers=[{"name": "Umanath", "age": 40}, {"name": "Sita", "age": 38}], phone="7439389068", phone_ok=True)
     spoken = BF.prompt_for(st, "review", "hi", spoken=True)
     check("spoken review: the real case", spoken == "Train 2AC, subah. Hotel 3-star, do kamre. Do yatri. Phone 74393 89068. "
@@ -619,6 +624,49 @@ with mock.patch.object(openai_client, "chat_tools", fake):
           and [V.parse_choice("hotel_type", x) for x in ("थ्री स्टार", "फाइव स्टार", "बजट")] == ["3star", "4plus", "budget"]
           and [V.parse_choice("train_tatkal", x) for x in ("ओके", "ठीक है", "bilkul", "नहीं चाहिए")] == ["yes", "yes", "yes", "no"])
     check("words: the junk transcripts stay unanswered", [V.parse_choice("train_time", x) for x in ("को.", "कुछ चाहिए।", "बैको.")] == [None] * 3)
+
+
+# ---------------- no prefill, no elderly question: the elderly note comes from the ages (code)
+NOTE1 = "1 yatri 60 saal ya usse upar hain; lift ya ground floor wala kamra dekhein."
+check("hotel: only type and rooms", BF.SERVICE_QUESTIONS["hotel"] == ["hotel_type", "hotel_rooms"] and "hotel_elderly" not in BF.CHOICES
+      and "hotel_elderly" not in BF.PROMPTS["hi"])
+check("elderly age is one named constant (60)", BF.ELDERLY_AGE == 60)
+
+
+def st_with(ages, services=("hotel",)):
+    return BF.BookingState(trip_id="x", adults=len(ages), children=0, services=list(services),
+                           answers={"hotel_type": "3star", "hotel_rooms": 1, "train_class": "SL", "train_time": "any", "train_tatkal": "no"},
+                           travellers=[{"name": f"P{i}", "age": a} for i, a in enumerate(ages)], phone="9876543210", phone_ok=True)
+
+
+def hotel_note(st):
+    return next((l.get("note") for l in BF.summary_lines(st, "hi") if l["part"] == "hotel"), None)
+
+
+check("ages 75 and 40 -> the note with n=1", BF.partner_notes(st_with([75, 40])) == [NOTE1] and hotel_note(st_with([75, 40])) == NOTE1)
+check("ages 30 and 8 -> no note", BF.partner_notes(st_with([30, 8])) == [] and hotel_note(st_with([30, 8])) is None)
+check("exactly 60 counts", BF.partner_notes(st_with([60, 59])) == [NOTE1])
+check("two travellers 60+ -> n=2", BF.partner_notes(st_with([60, 82])) == [NOTE1.replace("1 yatri", "2 yatri")])
+no_hotel = st_with([75, 40], services=("train",))
+check("no hotel -> the review shows no note", not any(l.get("note") for l in BF.summary_lines(no_hotel, "hi")))
+check("spoken review: no elderly / bujurg and no ages", not any(w in BF.prompt_for(st_with([75, 40]), "review", "hi", spoken=True)
+                                                              for w in ("bujurg", "Bujurg", "75", "lift")))
+log_buf.truncate(0); log_buf.seek(0)
+v = wsd("booking:start", T1, services=["hotel"])
+for val in ("any", "1", "Dadaji Sharma", "75", "9876543210", "yes"):
+    v = ans(T1, val)
+hl = next(l for l in v["summary"] if l["part"] == "hotel")
+check("screen review: the note under the hotel summary, also in the partner notes", hl.get("note") == NOTE1
+      and v.get("partnerNotes") == [NOTE1] and "Bujurg" not in hl["text"])
+v = ans(T1, "yes")
+flog = log_buf.getvalue()
+check("logs: the note, names and ages are not logged (a count only)", "older_travellers=1" in flog
+      and not any(w in flog for w in ("lift ya ground", "Dadaji", "75", "9876543210")), flog[-300:])
+v = wsd("booking:start", T1, services=["hotel"])
+v = ans(T1, "any"); v = ans(T1, "1")
+check("screen: 'Mera naam' value only on traveller 1, nothing filled in", v.get("accountName") == "Asha Ak" and not v["choices"]
+      and BF.load(redis_conn, uid_a, T1).travellers[0]["name"] is None)
+wsd("booking:cancel", T1)
 
 logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
