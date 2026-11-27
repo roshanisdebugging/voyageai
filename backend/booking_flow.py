@@ -123,7 +123,9 @@ ERRORS = {
         "services_empty": "Kam se kam ek chuniye: flight, train ya hotel.",
         "choice_invalid": "Samajh nahi aaya.",
         "name_invalid": "Naam mein sirf akshar ho sakte hain, 2 se 60 tak.",
+        "name_script": "Naam English ya Hindi mein likhiye.",
         "airline_invalid": "Airline ka naam sirf aksharon mein boliye.",
+        "airline_script": "Airline ka naam English ya Hindi mein likhiye.",
         "airline_name_needed": "Kaunsi airline?",
         "age_invalid": "Umar 0 se 110 ke beech ek poora number boliye.",
         "rooms_invalid": "Kamre 1 se 9 tak ho sakte hain.",
@@ -137,7 +139,9 @@ ERRORS = {
         "services_empty": "Pick at least one: flight, train or hotel.",
         "choice_invalid": "I didn't get that.",
         "name_invalid": "A name can only have letters, 2 to 60 of them.",
+        "name_script": "Please write the name in English or Hindi.",
         "airline_invalid": "Please say the airline's name in letters only.",
+        "airline_script": "Please write the airline's name in English or Hindi.",
         "airline_name_needed": "Which airline?",
         "age_invalid": "Please give an age as a whole number from 0 to 110.",
         "rooms_invalid": "Rooms can be 1 to 9.",
@@ -175,6 +179,9 @@ class BookingState:
     finished: bool = False
     editing_services: bool = False                              # Back / "change services": the choice is shown again
     voice_lang: str = "hi"                                      # the language of the sentence that started the voice flow
+    misses: int = 0                                             # voice: answers not understood for miss_question
+    miss_question: Optional[str] = None
+    decide_offer: Optional[str] = None                          # voice: "Kya main 'aap decide karo' maan loon?" asked
     voice_conversation: Optional[str] = None                    # the voice conversation whose last reply asked a question
     voice_asked_at: float = 0.0
 
@@ -221,20 +228,44 @@ def log_event(event: str, state: Optional[BookingState] = None, **flags: Any) ->
 
 # ---------------- validation (shared by screen and voice)
 
-def _letters_only(text: str) -> bool:
-    return all(unicodedata.category(ch)[0] in "LM" or ch == " " for ch in text)
+NAME_PUNCTUATION = " .-'"
+
+
+def _is_letter(ch: str) -> bool:
+    return unicodedata.category(ch)[0] in "LM"
+
+
+def _allowed_letter(ch: str) -> bool:
+    """Latin (with accents) or Devanagari letters and vowel marks only. Any other script (Ol Chiki, Bengali, Tamil...)
+    is refused: speech-to-text sometimes writes a Hindi name in a script the app can't read back."""
+    if "\u0900" <= ch <= "\u097f":
+        return _is_letter(ch)
+    if "\u0300" <= ch <= "\u036f":                 # combining accents (Latin)
+        return True
+    return _is_letter(ch) and unicodedata.name(ch, "").startswith("LATIN")
+
+
+def name_problem(raw: Any, max_chars: int = NAME_MAX) -> Optional[str]:
+    """None when the name is fine; "script" for letters outside Latin / Devanagari; "invalid" otherwise."""
+    if not isinstance(raw, str):
+        return "invalid"
+    text = " ".join(unicodedata.normalize("NFC", raw).split())
+    if any(_is_letter(ch) and not _allowed_letter(ch) for ch in text):
+        return "script"
+    if not (NAME_MIN <= len(text) <= max_chars):
+        return "invalid"
+    if any(not (_is_letter(ch) or ch in NAME_PUNCTUATION) for ch in text):
+        return "invalid"
+    if sum(1 for ch in text if unicodedata.category(ch)[0] == "L") < 2:
+        return "invalid"
+    return None
 
 
 def clean_name(raw: Any, max_chars: int = NAME_MAX) -> Optional[str]:
-    """Letters (any script, with their vowel marks) and spaces only, 2..max_chars characters."""
-    if not isinstance(raw, str):
+    """Latin or Devanagari letters, spaces and . - ' only, 2..max_chars characters, at least 2 letters."""
+    if name_problem(raw, max_chars) is not None:
         return None
-    text = " ".join(unicodedata.normalize("NFC", raw).split())
-    if not (NAME_MIN <= len(text) <= max_chars) or not _letters_only(text):
-        return None
-    if sum(1 for ch in text if unicodedata.category(ch)[0] == "L") < 2:
-        return None
-    return text
+    return " ".join(unicodedata.normalize("NFC", raw).split())
 
 
 def _ascii_digits(text: str) -> str:
@@ -375,7 +406,17 @@ def _reset_travellers(s: BookingState) -> None:
 
 
 def change_part(s: BookingState, part: str) -> bool:
-    """Review: clear one part only; the flow asks it again and comes back to the review by itself."""
+    """Review: clear one part only; the flow asks it again and comes back to the review by itself.
+    "traveller:N" clears one traveller's name and age (the review screen's per-traveller edit)."""
+    one = re.fullmatch(r"traveller:(\d+)", part or "")
+    if one and int(one.group(1)) < len(s.travellers):
+        i = int(one.group(1))
+        s.choosing_change = False
+        s.travellers[i] = {"name": None, "age": None}
+        s.age_check = None
+        if i == 0:
+            s.account_declined = True           # editing: ask for the name, don't offer the same one again
+        return True
     if part not in CHANGE_PARTS:
         return False
     s.choosing_change = False
@@ -415,9 +456,10 @@ def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
         if value in ("cheapest", ANY):
             s.answers[qid] = value
             return Outcome(True)
+        problem = name_problem(value, AIRLINE_MAX)
+        if problem:
+            return Outcome(False, "airline_script" if problem == "script" else "airline_invalid")
         name = clean_name(value, AIRLINE_MAX)
-        if not name:
-            return Outcome(False, "airline_invalid")
         s.answers[qid] = name
         return Outcome(True)
 
@@ -447,10 +489,10 @@ def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
             else:
                 s.account_declined = True
             return Outcome(True)
-        name = clean_name(value)
-        if not name:
-            return Outcome(False, "name_invalid")
-        s.travellers[i]["name"] = name
+        problem = name_problem(value)
+        if problem:
+            return Outcome(False, "name_script" if problem == "script" else "name_invalid")    # never stored
+        s.travellers[i]["name"] = clean_name(value)
         return Outcome(True)
 
     if t and t[1] == "age":
@@ -575,23 +617,65 @@ def summary_lines(s: BookingState, lang: str) -> List[Dict[str, str]]:
             f"{'Type' if not hi else 'Prakaar'}: {_value_label(a.get('hotel_type'), lang)}",
             f"{'Rooms' if not hi else 'Kamre'}: {_value_label(a.get('hotel_rooms'), lang)}",
             f"{'Elderly' if not hi else 'Bujurg'}: {_value_label(a.get('hotel_elderly'), lang)}"])})
-    people = [f"{t.get('name')} ({t.get('age')})" for t in s.travellers]
-    lines.append({"part": "travellers", "label": L["travellers"], "text": ", ".join(people)})
+    for i, t in enumerate(s.travellers):         # one line per traveller, each with its own edit
+        label = (f"Bachcha {i - s.adults + 1}" if hi else f"Child {i - s.adults + 1}") if _is_child(s, i) \
+            else (f"Yatri {i + 1}" if hi else f"Traveller {i + 1}")
+        lines.append({"part": f"traveller:{i}", "label": label, "text": f"{t.get('name')} ({t.get('age')})"})
     lines.append({"part": "phone", "label": L["phone"], "text": f"{s.phone[:5]} {s.phone[5:]}" if s.phone else "—"})
     return lines
 
 
+_SPOKEN = {
+    "hi": {"morning": "subah", "afternoon": "dopahar", "evening": "shaam", "night": "raat", ANY: "jo mile",
+           "SL": "sleeper", "3A": "3AC", "2A": "2AC", "1A": "1AC", "budget": "budget", "3star": "3-star",
+           "4plus": "4-star ya upar", "cheapest": "sasti", "tatkal_yes": "Tatkal chalega", "tatkal_no": "Tatkal nahi",
+           "room": "kamra", "rooms": "kamre", "traveller": "yatri", "travellers": "yatri",
+           "consent": "Details booking partner ko bheji jayengi."},
+    "en": {"morning": "morning", "afternoon": "afternoon", "evening": "evening", "night": "night", ANY: "any",
+           "SL": "sleeper", "3A": "3AC", "2A": "2AC", "1A": "1AC", "budget": "budget", "3star": "3-star",
+           "4plus": "4-star or above", "cheapest": "cheapest", "tatkal_yes": "Tatkal okay", "tatkal_no": "no Tatkal",
+           "room": "room", "rooms": "rooms", "traveller": "traveller", "travellers": "travellers",
+           "consent": "Details go to our booking partner."},
+}
+_HI_COUNT = ["", "ek", "do", "teen", "chaar", "paanch", "chhe", "saat", "aath", "nau", "das"]
+
+
+def _count_words(n: int, lang: str) -> str:
+    return _HI_COUNT[n] if lang == "hi" and 0 < n < len(_HI_COUNT) else str(n)
+
+
 def spoken_review(s: BookingState, lang: str) -> str:
-    """Short, for voice: services + choices, number of travellers, the phone in two groups."""
-    hi = lang == "hi"
-    parts = []
-    for line in summary_lines(s, lang):
-        if line["part"] in SERVICES:
-            parts.append(f"{line['label']}: {line['text']}.")
+    """Natural and short (about 25 words) for voice: no "key: value", no names; "aap decide karo" is "jo mile".
+    The screen shows the full review with names."""
+    W = _SPOKEN[lang]
+    a = s.answers
+    say = lambda v: W.get(v, str(v))  # noqa: E731
+
+    def joined(*vals: Any) -> str:
+        words = [say(v) for v in vals if v is not None]
+        uniq = [w for k, w in enumerate(words) if w not in words[:k]]   # "jo mile, jo mile" -> "jo mile"
+        return ", ".join(uniq)
+
+    parts: List[str] = []
+    if "flight" in s.services:
+        airline = a.get("flight_airline")
+        named = airline not in (None, ANY, "cheapest")
+        head = "Sasti flight" if airline == "cheapest" and lang == "hi" else \
+            ("Cheapest flight" if airline == "cheapest" else "Flight")
+        parts.append(f"{head} {joined(a.get('flight_time'))}" + (f", {airline}." if named else "."))
+    if "train" in s.services:
+        tatkal = {"yes": W["tatkal_yes"], "no": W["tatkal_no"]}.get(a.get("train_tatkal"))
+        parts.append(f"Train {joined(a.get('train_class'), a.get('train_time'))}" + (f", {tatkal}." if tatkal else "."))
+    if "hotel" in s.services:
+        rooms = a.get("hotel_rooms")
+        room_text = f", {_count_words(rooms, lang)} {W['room'] if rooms == 1 else W['rooms']}" if isinstance(rooms, int) else ""
+        parts.append(f"Hotel {joined(a.get('hotel_type'))}{room_text}.")
     n = s.traveller_count()
-    parts.append(f"{n} yatri." if hi else f"{n} traveller{'s' if n != 1 else ''}.")
+    who = f"{_count_words(n, lang)} {W['traveller'] if n == 1 else W['travellers']}."
+    parts.append(who[0].upper() + who[1:])
     if s.phone:
         parts.append(f"Phone {s.phone[:5]} {s.phone[5:]}.")
+    parts.append(W["consent"])
     return " ".join(parts)
 
 
@@ -616,7 +700,7 @@ def prompt_for(s: BookingState, qid: str, lang: str, spoken: bool = False) -> st
     if qid == "review":
         if not spoken:
             return P["review_screen"]             # the screen shows the summary and the consent line under it
-        return f"{spoken_review(s, lang)} {CONSENT[lang]} {P['review']}"
+        return f"{spoken_review(s, lang)} {P['review']}"
     return P[qid]
 
 

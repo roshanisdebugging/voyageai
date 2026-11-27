@@ -124,7 +124,9 @@ def is_decide(toks: List[str]) -> bool:
     return bool(set(toks) & _DECIDE_WORDS) or any(_has_phrase(toks, p) for p in _DECIDE_PHRASES)
 
 
-_YES_EXTRA = _set("chalega", "chalegi", "chalenge", "चलेगा", "चलेगी", "hain", "हैं", "ha", "ji", "जी", "haan", "हां")
+_YES_EXTRA = _set("chalega", "chalegi", "chalenge", "चलेगा", "चलेगी", "hain", "हैं", "ha", "ji", "जी", "haan", "हां",
+                  "haanji", "हांजी", "yes", "ok", "okay", "ओके", "sure", "bilkul", "बिल्कुल", "zaroor", "जरूर", "theek",
+                  "thik", "ठीक", "sahi", "सही", "yeah", "yep")
 _NO_WORDS = _set("nahi", "nahin", "nai", "na", "no", "nope", "नहीं", "ना", "नो", "mat", "मत", "galat", "गलत", "wrong")
 
 
@@ -260,15 +262,17 @@ def name_and_age(text: str) -> Tuple[Optional[str], Optional[int], bool]:
 
 # ---------------- choices
 
-_TIMES = {"morning": _set("subah", "subha", "suba", "morning", "savere", "sawere", "सुबह", "सवेरे"),
-          "afternoon": _set("dopahar", "dopehar", "dupahar", "afternoon", "noon", "दोपहर"),
-          "evening": _set("shaam", "sham", "evening", "शाम"),
-          "night": _set("raat", "rat", "night", "रात")}
-_SLEEPER = _set("sleeper", "sleepar", "sl", "स्लीपर")
-_AC = _set("ac", "a", "tier", "एसी", "टियर", "class", "क्लास")
-_CLASS_NUM = {**{w: "1A" for w in _set("1", "first", "ek", "pehla", "pehli", "फर्स्ट", "एक", "one")},
-              **{w: "2A" for w in _set("2", "second", "do", "doosra", "dusra", "सेकंड", "सेकेंड", "दो", "two")},
-              **{w: "3A" for w in _set("3", "third", "teen", "tisra", "teesra", "थर्ड", "तीन", "three")}}
+_TIMES = {"morning": _set("subah", "subha", "suba", "subeh", "morning", "savere", "sawere", "savera", "सुबह", "सवेरे",
+                          "सवेरा", "सुबे"),
+          "afternoon": _set("dopahar", "dopehar", "dupahar", "dopaher", "afternoon", "noon", "din", "दोपहर", "दुपहर",
+                            "दिन"),
+          "evening": _set("shaam", "sham", "evening", "sandhya", "शाम", "संध्या"),
+          "night": _set("raat", "rat", "night", "रात", "रात्रि")}
+_SLEEPER = _set("sleeper", "sleepar", "slipar", "sliper", "sl", "स्लीपर", "स्लिपर")
+_AC = _set("ac", "a", "tier", "एसी", "ए", "टियर", "टायर", "class", "क्लास")
+_CLASS_NUM = {**{w: "1A" for w in _set("1", "first", "ek", "pehla", "pehli", "फर्स्ट", "एक", "one", "वन", "पहला")},
+              **{w: "2A" for w in _set("2", "second", "do", "doosra", "dusra", "सेकंड", "सेकेंड", "दो", "two", "टू", "दूसरा")},
+              **{w: "3A" for w in _set("3", "third", "teen", "tisra", "teesra", "थर्ड", "तीन", "three", "थ्री", "तीसरा")}}
 _BUDGET = _set("budget", "sasta", "sasti", "saste", "cheap", "cheapest", "economy", "बजट", "सस्ता", "सस्ती")
 _STAR = _set("star", "stars", "sitara", "sitare", "स्टार", "सितारा")
 _LUXURY = _set("luxury", "premium", "lakjari", "लक्जरी", "लग्जरी")
@@ -335,6 +339,8 @@ def parse_choice(qid: str, text: str) -> Any:
         if is_decide(toks):
             return BF.ANY
         rest = [t for t in toks if t not in _AIRLINE_FILLER]
+        if any(other_script(t) for t in rest):
+            return None                           # not understood: never stored
         if not rest:
             return "__ask_airline__"            # "koi khaas airline" without a name
         return " ".join(w.capitalize() if w.isascii() else w for w in rest)
@@ -345,6 +351,11 @@ _CLASS_NUM_STAR = {w: n for w, n in (("three", 3), ("teen", 3), ("थ्री",
                                      ("chaar", 4), ("फोर", 4), ("चार", 4), ("five", 5), ("paanch", 5), ("panch", 5),
                                      ("फाइव", 5), ("पांच", 5), ("seven", 7), ("सात", 7))}
 _CLASS_NUM_STAR = {canon(k): v for k, v in _CLASS_NUM_STAR.items()}
+
+
+def other_script(text: str) -> bool:
+    """Letters outside Latin / Devanagari (e.g. Ol Chiki "ᱩᱢᱟᱱᱟᱛᱷ" from speech-to-text): not understood."""
+    return any(BF._is_letter(ch) and not BF._allowed_letter(ch) for ch in text or "")
 
 
 def parse_part(text: str) -> Optional[str]:
@@ -420,6 +431,8 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
                 return said, None, False
         if is_decide(toks):
             return BF.ANY, None, False
+        if other_script(text):
+            return "__name_unclear__", None, False
         name, age, unsure = name_and_age(text)
         if name and not unsure and BF.clean_name(name):
             return name, age, False
@@ -456,6 +469,38 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
 def _result(text: str, qid: str, **kw):
     from voice.agent import AgentResult
     return AgentResult(text, ui_actions=[dict(REFRESH)], action="booking", step=re.sub(r"^t\d+_", "traveller_", qid), **kw)
+
+
+SCREEN_HINT = {"hi": "Aap screen par button bhi dabaa sakte hain.", "en": "You can also tap a button on the screen."}
+TYPE_HINT = {"hi": "Aap screen par type bhi kar sakte hain.", "en": "You can also type it on the screen."}
+TYPE_ONLY = {"hi": "Screen par type kar dijiye.", "en": "Please type it on the screen."}
+NAME_UNCLEAR = {"hi": "Naam samajh nahi aaya. Dobara boliye, ya screen par type kar dijiye.",
+                "en": "I didn't get the name. Please say it again, or type it on the screen."}
+DECIDE_OFFER = {"hi": "Kya main 'aap decide karo' maan loon?", "en": "Shall I take it as 'you decide'?"}
+
+
+def _allows_decide(qid: str) -> bool:
+    return qid in BF.CHOICES or qid in ("flight_airline", "hotel_rooms")
+
+
+def _miss_reply(s: BF.BookingState, qid: str, base: str, lang: str, name_unclear: bool = False) -> str:
+    """Misses are counted per question (reset when the question changes): never the same reply three times.
+    1st: the usual reply. 2nd: + a screen hint. 3rd: "aap decide karo?" where allowed, else type on the screen."""
+    s.misses += 1
+    n = s.misses
+    t = BF._traveller(qid)
+    if t and t[1] == "name":
+        if n >= 2:
+            return TYPE_ONLY[lang]
+        return NAME_UNCLEAR[lang] if name_unclear else base
+    if (t and t[1] == "age") or qid == "phone":
+        return base if n == 1 else (f"{base} {TYPE_HINT[lang]}" if n == 2 else TYPE_ONLY[lang])
+    if n == 1:
+        return base
+    if n >= 3 and _allows_decide(qid):
+        s.decide_offer = qid
+        return DECIDE_OFFER[lang]
+    return f"{base} {SCREEN_HINT[lang]}"
 
 
 def _mark_asked(redis_conn, user_id: str, s: BF.BookingState, conversation_id: str) -> None:
@@ -507,6 +552,18 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
         return _result(BF.CANCELLED[lang], "cancel")
 
     qid = BF.current_question(s)
+    if s.miss_question != qid:                  # a new question: the miss count starts again
+        s.misses, s.miss_question, s.decide_offer = 0, qid, None
+    if s.decide_offer == qid:                   # we asked "Kya main 'aap decide karo' maan loon?"
+        said = yes_no(transcript)
+        s.decide_offer = None
+        if said == "no":
+            s.misses = 0
+            _mark_asked(redis_conn, user_id, s, conversation_id)
+            return _result(BF.prompt_for(s, qid, lang, spoken=True), qid)
+        if said == "yes":
+            BF.save(redis_conn, user_id, s)
+            transcript = "aap decide karo"
     value, age_too, model_used = _value_for(s, qid, transcript, extract)
     if value == "__new_age__":
         BF.answer(redis_conn, user_id, trip_id, qid, "no")
@@ -517,10 +574,13 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
     elif value == "__ask_airline__":
         _mark_asked(redis_conn, user_id, s, conversation_id)
         return _result(BF.ERRORS[lang]["airline_name_needed"], qid)
-    elif value is None:
-        BF.log_event("voice_answer", s, step=re.sub(r"^t\d+_", "traveller_", qid), understood=False, model_used=model_used)
+    elif value is None or value == "__name_unclear__":
+        reply = _miss_reply(s, qid, f"{UNCLEAR[lang]} {BF.prompt_for(s, qid, lang, spoken=True)}", lang,
+                            name_unclear=value == "__name_unclear__")
+        BF.log_event("voice_answer", s, step=re.sub(r"^t\d+_", "traveller_", qid), understood=False,
+                     model_used=model_used, misses=s.misses)
         _mark_asked(redis_conn, user_id, s, conversation_id)
-        return _result(f"{UNCLEAR[lang]} {BF.prompt_for(s, qid, lang, spoken=True)}", qid)
+        return _result(reply, qid)
     else:
         if value == "__bad_phone__":
             value = "x"
@@ -538,7 +598,12 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
     _mark_asked(redis_conn, user_id, s, conversation_id)
     prompt = BF.prompt_for(s, nxt, lang, spoken=True)
     if not out.ok:
-        return _result(f"{BF.ERRORS[lang][out.error]} {prompt}", nxt)
+        if s.miss_question != nxt:
+            s.misses, s.miss_question, s.decide_offer = 0, nxt, None
+        reply = _miss_reply(s, nxt, f"{BF.ERRORS[lang][out.error]} {prompt}", lang,
+                            name_unclear=out.error == "name_script")
+        _mark_asked(redis_conn, user_id, s, conversation_id)
+        return _result(reply, nxt)
     return _result(prompt, nxt)
 
 

@@ -215,7 +215,7 @@ for combo in combos:
     ok = ok and v["question"] == "phone_ok" and "9 8 7 6 5, 4 3 2 1 0" in v["prompt"]
     v = ans(T1, "yes")
     ok = ok and v["question"] == "review" and v["consent"] == "Ye details hamare booking partner ko bheji jayengi."
-    ok = ok and any(line["part"] == "travellers" and "Asha Ak (34)" in line["text"] for line in v["summary"])
+    ok = ok and any(line["part"] == "traveller:0" and line["text"] == "Asha Ak (34)" for line in v["summary"])
     ok = ok and all(("bujurg" not in line["text"].lower() or "Aap decide karo" in line["text"]) for line in v["summary"])
     v = ans(T1, "yes")
     ok = ok and v.get("finished") and v["message"] == "Abhi ye test hai. Kuch bheja nahi gaya." and not redis_conn.exists(key(uid_a, T1))
@@ -264,12 +264,14 @@ check("screen: read-back 'no' asks the phone again", v["question"] == "phone")
 v = ans(T2, "07654321098")
 check("screen: new number read back", v["question"] == "phone_ok" and "7 6 5 4 3, 2 1 0 9 8" in v["prompt"])
 v = ans(T2, "yes")
-check("screen: review lists the 3 travellers", v["question"] == "review" and "Aryan (25)" in v["summary"][1]["text"])
+check("screen: review lists the 3 travellers, one editable line each", v["question"] == "review"
+      and [l["part"] for l in v["summary"] if l["part"].startswith("traveller:")] == ["traveller:0", "traveller:1", "traveller:2"]
+      and next(l["text"] for l in v["summary"] if l["part"] == "traveller:2") == "Aryan (25)")
 v = ans(T2, "change:hotel")
 check("screen: change hotel -> only the hotel questions again", v["question"] == "hotel_type")
 v = ans(T2, "4plus"); v = ans(T2, "1"); v = ans(T2, "yes")
 check("screen: ...then straight back to the review (travellers and phone kept)", v["question"] == "review"
-      and "Rahul Sharma (40)" in v["summary"][1]["text"] and "76543 21098" in v["summary"][2]["text"])
+      and next(l["text"] for l in v["summary"] if l["part"] == "traveller:0") == "Rahul Sharma (40)" and next(l["text"] for l in v["summary"] if l["part"] == "phone") == "76543 21098")
 v = ans(T2, "no")
 check("screen: 'no' at the review asks what to change", v["question"] == "change" and len(v["choices"]) == 6)
 v = ans(T2, "change:flight")
@@ -414,13 +416,13 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     r = turn("nahi, 9 1 2 3 4 5 6 7 8 9")
     check("voice hi: 'nahi' + a new number -> the new number read back", r.reply_text == "Number: 9 1 2 3 4, 5 6 7 8 9. Sahi hai?")
     r = turn("haan")
-    check("voice hi: review read out short + consent", r.reply_text.startswith("Hotel:") and "3 yatri." in r.reply_text
-          and "Ye details hamare booking partner ko bheji jayengi. Sahi hai?" in r.reply_text
-          and "Priya" not in r.reply_text, r.reply_text)
+    check("voice hi: review read out short, natural, no names",
+          r.reply_text == "Hotel jo mile, do kamre. Teen yatri. Phone 91234 56789. Details booking partner ko bheji jayengi. Sahi hai?",
+          r.reply_text)
     r = turn("nahi, hotel badalna hai")
     check("voice hi: a change at the review goes back to that part only", r.reply_text.startswith("Hotel kaisa chahiye"))
     r = turn("3 star"); r = turn("ek kamra"); r = turn("haan")
-    check("voice hi: then the review again", "Sahi hai?" in r.reply_text and "Rooms" not in r.reply_text and "Kamre: 1" in r.reply_text, r.reply_text)
+    check("voice hi: then the review again", r.reply_text.startswith("Hotel 3-star, ek kamra. Teen yatri."), r.reply_text)
     r = turn("haan")
     check("voice hi: finish -> 'Abhi ye test hai. Kuch bheja nahi gaya.' and the state is deleted",
           r.reply_text == "Abhi ye test hai. Kuch bheja nahi gaya." and not redis_conn.exists(key(uid_a, T2)))
@@ -434,7 +436,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     seq = [("मुझे ट्रेन बुक करनी है", "Train mein kaunsi class"), ("थर्ड एसी", "Train kis time"), ("शाम", "Tatkal chalega?"),
            ("नहीं", "Pehle yatri"), ("नहीं", "Yatri 1 ka naam?"), ("राहुल शर्मा", "राहुल शर्मा ki umar?"),
            ("चौंतीस साल", "Ek mobile number"), ("नौ आठ सात छह पांच चार तीन दो एक शून्य", "Number: 9 8 7 6 5, 4 3 2 1 0"),
-           ("हां", "Train: Class: 3AC"), ("हां", "Abhi ye test hai")]
+           ("हां", "Train 3AC, shaam, Tatkal nahi. Ek yatri."), ("हां", "Abhi ye test hai")]
     bad = [(t, r.reply_text) for t, want in seq for r in [say(t, CV, trip=TRIP1)] if not r.reply_text.startswith(want)]
     check("voice Devanagari: train flow end to end", not bad and not redis_conn.exists(key(uid_a, T1)), bad)
 
@@ -444,7 +446,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
            ("IndiGo", "Which train class"), ("sleeper", "What time for the train"), ("you decide", "Is Tatkal okay"),
            ("yes", "Is the first traveller Asha Ak"), ("yes", "How old is Asha Ak"), ("thirty four", "Please give one mobile"),
            ("nine eight seven six five four three two one zero", "Number: 9 8 7 6 5, 4 3 2 1 0. Is that right?"),
-           ("yes", "Flight:"), ("yes", "This is a test for now. Nothing was sent.")]
+           ("yes", "Flight morning, Indigo. Train sleeper, any, Tatkal okay. 1 traveller."), ("yes", "This is a test for now. Nothing was sent.")]
     bad = [(t, r.reply_text) for t, want in seq for r in [say(t, CV, trip=TRIP1, stt="en")] if not r.reply_text.startswith(want)]
     check("voice English: flight + train end to end", not bad and not redis_conn.exists(key(uid_a, T1)), bad)
 
@@ -519,6 +521,104 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     say("train book karo", CV, trip=TRIP1)
     check("voice: starting a booking drops a waiting Confirm card", P.get(redis_conn, uid_a, CV) is None)
     BF.cancel(redis_conn, uid_a, T1)
+
+
+# ---------------- real voice test fixes: other scripts, repeated misses, natural spoken review
+check("name: Ol Chiki / Bengali / Tamil refused as another script", [BF.name_problem(x) for x in ("ᱩᱢᱟᱱᱟᱛᱷ", "রাহুল", "ராகுல்")] == ["script"] * 3)
+check("name: Latin and Devanagari with . - ' accepted", all(BF.clean_name(x) for x in ("R. K. Singh", "D'Souza", "Anne-Marie", "José", "श्री राम")))
+check("airline: another script refused", BF.name_problem("ইন্ডিগো", BF.AIRLINE_MAX) == "script")
+v = wsd("booking:start", T1, services=["hotel"])
+for val in ("any", "1", "no", "no"):
+    v = ans(T1, val)
+v = ans(T1, "রাহুল")
+check("screen: a Bengali name -> 'Naam English ya Hindi mein likhiye.', not stored", v["errorCode"] == "name_script"
+      and v["error"] == "Naam English ya Hindi mein likhiye." and v["question"] == "t0_name")
+v = ans(T1, "ராகுல்")
+check("screen: a Tamil name -> the same message", v["errorCode"] == "name_script")
+v = ans(T1, "Rahul Kumar")
+check("screen: a Latin name accepted", v["question"] == "t0_age")
+v = wsd("booking:back", T1); v = wsd("booking:back", T1)
+v = ans(T1, "no"); v = ans(T1, "राहुल कुमार")
+check("screen: a Devanagari name accepted", v["question"] == "t0_age" and v.get("prompt") == "राहुल कुमार ki umar?")
+for val in ("34", "9876543210", "yes"):
+    v = ans(T1, val)
+v = ans(T1, "change:traveller:0")
+check("screen review: one traveller's edit asks that name again (no account-name offer)", v["question"] == "t0_name" and not v["choices"])
+v = ans(T1, "Rahul Verma"); v = ans(T1, "35")
+check("screen review: ...then straight back to the review with the new name", v["question"] == "review"
+      and next(l["text"] for l in v["summary"] if l["part"] == "traveller:0") == "Rahul Verma (35)")
+wsd("booking:cancel", T1)
+
+with mock.patch.object(openai_client, "chat_tools", fake):
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    FakeTools.calls = []
+    say("train book karna hai", CV, trip=TRIP1)
+    say("2AC", CV, trip=TRIP1)
+    r1, r2, r3 = (say(t, CV, trip=TRIP1).reply_text for t in ("को.", "कुछ चाहिए।", "बैको."))
+    check("misses 1: the usual reply", r1 == "Samajh nahi aaya. Train kis time chahiye? Subah, dopahar, shaam ya raat?", r1)
+    check("misses 2: + the screen hint", r2 == r1 + " Aap screen par button bhi dabaa sakte hain.", r2)
+    check("misses 3: offers 'aap decide karo'", r3 == "Kya main 'aap decide karo' maan loon?", r3)
+    check("misses: the junk words were not accepted, no model call", BF.load(redis_conn, uid_a, T1).answers.get("train_time") is None
+          and not FakeTools.calls)
+    r = say("haan", CV, trip=TRIP1)
+    check("misses: 'haan' to the offer stores 'any' and moves on", r.reply_text == "Tatkal chalega?"
+          and BF.load(redis_conn, uid_a, T1).answers.get("train_time") == "any")
+    r = say("को.", CV, trip=TRIP1)
+    check("misses: the count starts again on a new question", r.reply_text == "Samajh nahi aaya. Tatkal chalega?", r.reply_text)
+    r = say("nahi", CV, trip=TRIP1)
+    say("haan", CV, trip=TRIP1)   # account name offered -> yes
+    say("34", CV, trip=TRIP1)
+    BF.cancel(redis_conn, uid_a, T1)
+
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    say("hotel book karo", CV, trip=TRIP1)
+    for a in ("budget", "ek", "nahi", "nahi"):
+        say(a, CV, trip=TRIP1)
+    FakeTools.calls = []
+    r1 = say("ᱩᱢᱟᱱᱟᱛᱷ", CV, trip=TRIP1).reply_text
+    r2 = say("ᱩᱢᱟᱱᱟᱛᱷ", CV, trip=TRIP1).reply_text
+    st = BF.load(redis_conn, uid_a, T1)
+    check("Ol Chiki name 1st: 'Naam samajh nahi aaya. Dobara boliye, ya screen par type kar dijiye.'",
+          r1 == "Naam samajh nahi aaya. Dobara boliye, ya screen par type kar dijiye.", r1)
+    check("Ol Chiki name 2nd: only 'Screen par type kar dijiye.'", r2 == "Screen par type kar dijiye.", r2)
+    check("Ol Chiki name: never stored, no model call", st.travellers[0]["name"] is None and not FakeTools.calls
+          and "ᱩ" not in repr(st.__dict__))
+    r = say("Umanath", CV, trip=TRIP1)
+    check("after the misses a real name is still accepted", r.reply_text == "Umanath ki umar?")
+    for a in ("abc xyz", "kuch nahi pata", "pata nahi"):
+        r = say(a, CV, trip=TRIP1)
+    check("age: 3rd miss -> 'Screen par type kar dijiye.' (no 'aap decide karo' for an age)", r.reply_text == "Screen par type kar dijiye.", r.reply_text)
+    BF.cancel(redis_conn, uid_a, T1)
+
+    # the exact review of the real test: under 25 words, no "key: value", no names
+    st = BF.BookingState(trip_id="x", adults=2, children=0, services=["train", "hotel"],
+                         answers={"train_class": "2A", "train_time": "morning", "train_tatkal": "any",
+                                  "hotel_type": "3star", "hotel_rooms": 2, "hotel_elderly": "yes"},
+                         travellers=[{"name": "Umanath", "age": 40}, {"name": "Sita", "age": 38}], phone="7439389068", phone_ok=True)
+    spoken = BF.prompt_for(st, "review", "hi", spoken=True)
+    check("spoken review: the real case", spoken == "Train 2AC, subah. Hotel 3-star, do kamre. Do yatri. Phone 74393 89068. "
+          "Details booking partner ko bheji jayengi. Sahi hai?", spoken)
+    worst = []
+    for combo in combos:
+        for lang_ in ("hi", "en"):
+            st.services = combo
+            st.answers.update({"flight_time": "any", "flight_airline": "Air India Express", "train_tatkal": "no"})
+            text_ = BF.prompt_for(st, "review", lang_, spoken=True)
+            worst.append((len(text_.split()), len(combo), text_))
+    worst.sort()
+    two = max(w for w, n, _ in worst if n <= 2)
+    check("spoken review: at most 25 words with one or two services (long airline name, Tatkal said)", two <= 25, two)
+    check("spoken review: at most 28 words with all three services", worst[-1][0] <= 28, worst[-1])
+    worst = [(w, t) for w, _, t in worst]
+    check("spoken review: no 'key: value' and no names", not any(":" in t or "Umanath" in t or "Sita" in t for _, t in worst))
+    check("spoken review: 'aap decide karo' is said as 'jo mile'", "Flight jo mile, Air India Express." in worst[-1][1] or
+          any("jo mile" in t for _, t in worst))
+    check("words: real variants of time / class / hotel / yes-no", [V.parse_choice("flight_time", x) for x in ("सवेरे", "morning", "दिन में", "evening", "night", "रात्रि")]
+          == ["morning", "morning", "afternoon", "evening", "night", "night"]
+          and [V.parse_choice("train_class", x) for x in ("स्लीपर", "थ्री एसी", "3A", "टू एसी", "स्लिपर")] == ["SL", "3A", "3A", "2A", "SL"]
+          and [V.parse_choice("hotel_type", x) for x in ("थ्री स्टार", "फाइव स्टार", "बजट")] == ["3star", "4plus", "budget"]
+          and [V.parse_choice("train_tatkal", x) for x in ("ओके", "ठीक है", "bilkul", "नहीं चाहिए")] == ["yes", "yes", "yes", "no"])
+    check("words: the junk transcripts stay unanswered", [V.parse_choice("train_time", x) for x in ("को.", "कुछ चाहिए।", "बैको.")] == [None] * 3)
 
 logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
