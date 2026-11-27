@@ -23,6 +23,48 @@ DEFAULT_STT_MODEL = "gpt-transcribe"
 # Nudges the model towards romanized Hinglish spellings for travel talk. Not a translation instruction.
 DEFAULT_HINGLISH_PROMPT = "Namaste. Mujhe Delhi se Jaipur jaana hai, 3 din ke liye, budget 20 hazaar. Itinerary dikhao."
 
+def active_prompts() -> List[str]:
+    """Every spelling hint sent to speech-to-text (today one: VOICE_STT_PROMPT or the built-in Hinglish hint)."""
+    prompt = os.getenv("VOICE_STT_PROMPT", DEFAULT_HINGLISH_PROMPT)
+    return [prompt] if prompt and prompt.strip() else []
+
+
+# A short or silent clip can come back as the hint text itself ("Namaste. Mujhe Delhi se Jaipur jaana hai, 3 din ke
+# liye..."). Such a transcript is treated as nothing heard. "Mostly the hint": a run of at least ECHO_MIN_RUN_SHARE of
+# the hint's words, in order, that is also at least ECHO_MIN_TEXT_SHARE of what was transcribed.
+ECHO_MIN_RUN_SHARE = 0.75
+ECHO_MIN_TEXT_SHARE = 0.6
+
+
+def _longest_common_run(a: List[str], b: List[str]) -> int:
+    best = 0
+    prev = [0] * (len(b) + 1)
+    for x in a:
+        cur = [0] * (len(b) + 1)
+        for j, y in enumerate(b, 1):
+            if x == y:
+                cur[j] = prev[j - 1] + 1
+                best = max(best, cur[j])
+        prev = cur
+    return best
+
+
+def is_prompt_echo(text: str, prompts: Optional[List[str]] = None) -> bool:
+    """True when the transcript is the STT hint, contains the whole hint, or is mostly made of it."""
+    from voice.text_utils import words
+    said = words(text)
+    if not said:
+        return False
+    for prompt in (active_prompts() if prompts is None else prompts):
+        hint = words(prompt)
+        if not hint:
+            continue
+        run = _longest_common_run(said, hint)
+        if run == len(hint) or (run >= ECHO_MIN_RUN_SHARE * len(hint) and run >= ECHO_MIN_TEXT_SHARE * len(said)):
+            return True
+    return False
+
+
 # A response that reports the language as a name ("hindi", Whisper-style verbose_json) gets a short code too.
 LANGUAGE_CODES = {"english": "en", "hindi": "hi", "urdu": "ur", "marathi": "mr", "bengali": "bn",
                   "tamil": "ta", "telugu": "te", "gujarati": "gu", "punjabi": "pa", "kannada": "kn",
@@ -85,7 +127,7 @@ class OpenAITranscribeSTT:
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         if not api_key:
             raise STTError("OPENAI_API_KEY is not set")
-        prompt = os.getenv("VOICE_STT_PROMPT", DEFAULT_HINGLISH_PROMPT)
+        prompt = (active_prompts() or [""])[0]
         # A list of tuples so `languages[]` can repeat. gpt-transcribe takes `languages[]`, never `language`.
         data = [("model", self.model)]
         if prompt:

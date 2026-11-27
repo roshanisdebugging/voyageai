@@ -248,15 +248,65 @@ _NAME_FILLER = _set(
     "का", "की", "के", "जी", "मैं", "पहले", "पहला", "यात्री", "बच्चे", "बच्चा", "बच्ची", "बेटा", "बेटी")
 
 
+# "Yatri 1 ka naam Roshan", "रात्रि एक का नाम रौशन" (STT for "यात्री एक"), "नाम है रोशन, सिर्फ रोशन", "भाई, नाम है रोशन":
+#  - a leading "yatri <number> (ka)" (and its mishearings) is never a name or an age;
+#  - after a naam marker the name is the words that follow it, up to "hai / है / uska" (words before are dropped);
+#  - address / filler words are dropped and a word is never repeated.
+_NAME_MARKERS = _set("naam", "name", "नाम")
+_NAME_STOP = _set("hai", "hain", "है", "हैं", "tha", "था", "uska", "uski", "unka", "unki", "उसका", "उसकी", "उनका", "उनकी")
+_YATRI_LIKE = _set("yatri", "yaatri", "yatree", "raatri", "ratri", "traveller", "traveler", "passenger",
+                   "यात्री", "यात्रि", "रात्री", "रात्रि")
+_LEAD_LINK = _set("ka", "ki", "ke", "ko", "का", "की", "के", "को")
+_NAME_EXTRA_FILLER = _set("bhai", "bhaiya", "sirf", "bas", "ji", "uska", "uski", "wala", "wali", "only", "just",
+                          "भाई", "भैया", "सिर्फ", "बस", "जी", "उसका", "उसकी", "वाला", "वाली")
+
+
+def _strip_lead_in(toks: List[str]) -> List[str]:
+    """Drops a leading "yatri 1 (ka)" / "रात्रि एक का" so its number is never taken as an age."""
+    for i, t in enumerate(toks[:3]):
+        if t in _YATRI_LIKE and i + 1 < len(toks) and (toks[i + 1].isdigit() or toks[i + 1] in NUMBER_WORDS
+                                                       or toks[i + 1] in _EN_UNITS):
+            j = i + 2
+            if j < len(toks) and toks[j] in _LEAD_LINK:
+                j += 1
+            return toks[:i] + toks[j:]
+    return toks
+
+
+def _name_word(t: str) -> bool:
+    return not (t.isdigit() or t in NUMBER_WORDS or t in _EN_UNITS or t in _EN_TENS or t in _NAME_FILLER
+                or t in _AGE_UNITS or t in _NAME_EXTRA_FILLER)
+
+
+def name_parts(toks: List[str]) -> Tuple[List[str], List[int], List[str]]:
+    """(name words, numbers said for the age, the tokens the age was read from)."""
+    toks = _strip_lead_in(toks)
+    name_seg, age_seg = toks, toks
+    marker = next((i for i, t in enumerate(toks) if t in _NAME_MARKERS), None)
+    if marker is not None:
+        after = toks[marker + 1:]
+        k = 0
+        while k < len(after) and not _name_word(after[k]) and not after[k].isdigit() and after[k] not in NUMBER_WORDS:
+            k += 1                                        # "naam HAI Roshan", "name IS Roshan"
+        rest = after[k:]
+        cut = next((i for i, t in enumerate(rest) if t in _NAME_STOP), len(rest))
+        if any(_name_word(t) for t in rest[:cut]):
+            name_seg, age_seg = rest[:cut], after
+        else:                                              # "रोशन नाम है उसका": the name is before the marker
+            name_seg = toks[:marker]
+    words: List[str] = []
+    for t in name_seg:
+        if _name_word(t) and t not in words:
+            words.append(t)
+    return words, numbers_in(age_seg), age_seg
+
+
 def name_and_age(text: str) -> Tuple[Optional[str], Optional[int], bool]:
     """(name, age, unsure). Code only: filler words and numbers are taken out; `unsure` = a word next to "saal"
     that we can't read as a number (it would end up inside the name)."""
-    toks = tokens(text)
-    ages = numbers_in(toks)
-    name_words = [t for t in toks if not t.isdigit() and t not in NUMBER_WORDS and t not in _EN_UNITS
-                  and t not in _EN_TENS and t not in _NAME_FILLER and t not in _AGE_UNITS]
-    unsure = bool(set(toks) & _AGE_UNITS) and not ages
-    name = " ".join(w.capitalize() if w.isascii() else w for w in name_words) or None
+    words, ages, age_seg = name_parts(tokens(text))
+    unsure = bool(set(age_seg) & _AGE_UNITS) and not ages
+    name = " ".join(w.capitalize() if w.isascii() else w for w in words) or None
     return name, (ages[0] if len(ages) == 1 else None), unsure or len(ages) > 1
 
 
@@ -264,8 +314,7 @@ def name_and_age(text: str) -> Tuple[Optional[str], Optional[int], bool]:
 
 _TIMES = {"morning": _set("subah", "subha", "suba", "subeh", "morning", "savere", "sawere", "savera", "सुबह", "सवेरे",
                           "सवेरा", "सुबे"),
-          "afternoon": _set("dopahar", "dopehar", "dupahar", "dopaher", "afternoon", "noon", "din", "दोपहर", "दुपहर",
-                            "दिन"),
+          "afternoon": _set("dopahar", "dopehar", "dupahar", "dopaher", "afternoon", "noon", "दोपहर", "दुपहर"),
           "evening": _set("shaam", "sham", "evening", "sandhya", "शाम", "संध्या"),
           "night": _set("raat", "rat", "night", "रात", "रात्रि")}
 _SLEEPER = _set("sleeper", "sleepar", "slipar", "sliper", "sl", "स्लीपर", "स्लिपर")
@@ -300,8 +349,12 @@ def parse_choice(qid: str, text: str) -> Any:
         found = services_in(toks)
         return found or None
     if qid in ("flight_time", "train_time"):
-        found = _one([k for k, ws in _TIMES.items() if sset & ws])
-        return found or (BF.ANY if is_decide(toks) else None)
+        # Only a short answer with exactly one time word and no digits ("dopahar", "subah ki flight"); a time word
+        # inside a long sentence ("...3 din ke liye...") is never taken as the answer.
+        hits = [t for t in toks if any(t in ws for ws in _TIMES.values())]
+        if len(toks) <= 6 and len(hits) == 1 and not any(t.isdigit() for t in toks):
+            return next(k for k, ws in _TIMES.items() if hits[0] in ws)
+        return BF.ANY if is_decide(toks) else None
     if qid == "train_class":
         if sset & _SLEEPER:
             return "SL"
@@ -473,9 +526,8 @@ def name_fix(text: str, mode: str) -> Optional[Dict[str, Any]]:
     if mode == "later" and not has_naam:
         return None
     seg = toks[neg[-1] + 1:] if neg else toks
-    nums = numbers_in(seg)
-    words = [t for t in seg if not t.isdigit() and t not in NUMBER_WORDS and t not in _EN_UNITS and t not in _EN_TENS
-             and t not in _NAME_FILLER and t not in _AGE_UNITS and t not in _FIX_NEG and t not in _FIX_FILLER]
+    parsed, nums, _ = name_parts(seg)
+    words = [t for t in parsed if t not in _FIX_NEG and t not in _FIX_FILLER]
     if not words:
         if nums or mode == "confirm":
             return None                          # "nahi, 25" is an age; at "sahi hai?" a bare "nahi" is the answer

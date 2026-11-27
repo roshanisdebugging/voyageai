@@ -631,7 +631,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     check("spoken review: no 'key: value' and no names", not any(":" in t or "Umanath" in t or "Sita" in t for _, t in worst))
     check("spoken review: 'aap decide karo' is said as 'jo mile'", "Flight jo mile, Air India Express." in worst[-1][1] or
           any("jo mile" in t for _, t in worst))
-    check("words: real variants of time / class / hotel / yes-no", [V.parse_choice("flight_time", x) for x in ("सवेरे", "morning", "दिन में", "evening", "night", "रात्रि")]
+    check("words: real variants of time / class / hotel / yes-no", [V.parse_choice("flight_time", x) for x in ("सवेरे", "morning", "दोपहर में", "evening", "night", "रात्रि")]
           == ["morning", "morning", "afternoon", "evening", "night", "night"]
           and [V.parse_choice("train_class", x) for x in ("स्लीपर", "थ्री एसी", "3A", "टू एसी", "स्लिपर")] == ["SL", "3A", "3A", "2A", "SL"]
           and [V.parse_choice("hotel_type", x) for x in ("थ्री स्टार", "फाइव स्टार", "बजट")] == ["3star", "4plus", "budget"]
@@ -837,9 +837,76 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     check("screen: a typed unknown airline is kept as typed (no extra question on the screen)", state(T1).answers.get("flight_airline") == "Vistara")
     BF.cancel(redis_conn, uid_a, T1)
 
+# ---------------- real test BR-1004: the STT hint heard as an answer; names with lead-ins and repeats
+from types import SimpleNamespace  # noqa: E402
+from voice import pipeline, stt  # noqa: E402
+
+HINT = "Namaste. Mujhe Delhi se Jaipur jaana hai, 3 din ke liye, budget 20 hazaar. Itinerary dikhao."
+with mock.patch.object(openai_client, "chat_tools", fake):
+    redis_conn.delete(key(uid_a, T1))
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    say("flight book karwana hai", CV, trip=TRIP1)
+    close_requests()
+    tr = SimpleNamespace(text=HINT, language="hi")
+    n = len(FakeTools.calls)
+    pipeline.decide_reply(SimpleNamespace(user_id=uid_a, conversation_id=CV, session_id=CV, screen="/trip/booking", trip=TRIP1,
+                                          location=None, screen_place=None, turn_id="t_echo"), tr)
+    st = BF.load(redis_conn, uid_a, T1)
+    check("evidence A: the STT hint text at 'Flight kis time' -> 'nothing heard', no time set, no model call",
+          tr.reply_text == pipeline.EMPTY_TRANSCRIPT_REPLY and tr.action == "unclear" and "flight_time" not in st.answers
+          and BF.current_question(st) == "flight_time" and len(FakeTools.calls) == n, (tr.reply_text, st.answers))
+    check("hint check: the hint, the hint inside a longer clip, most of the hint -> echo; normal answers are not",
+          stt.is_prompt_echo(HINT) and stt.is_prompt_echo(HINT + " dopahar") and stt.is_prompt_echo("mujhe delhi se jaipur jaana hai 3 din ke liye budget 20 hazaar")
+          and not any(stt.is_prompt_echo(t) for t in ("dopahar", "Mujhe Delhi se Jaipur jaana hai", "mujhe delhi se jaipur jaana hai 3 din ke liye", "")))
+    with mock.patch.dict(os.environ, {"VOICE_STT_PROMPT": "Goa trip, Panaji, Calangute beach, do raat"}):
+        check("hint check follows VOICE_STT_PROMPT (whatever hint is in use)", stt.is_prompt_echo("Goa trip, Panaji, Calangute beach, do raat")
+              and not stt.is_prompt_echo(HINT))
+    with mock.patch.dict(os.environ, {"VOICE_STT_PROMPT": ""}):
+        check("no hint configured -> nothing is an echo", not stt.is_prompt_echo(HINT))
+    r = say("3 din ke liye", CV, trip=TRIP1)
+    check("'3 din ke liye' is not a flight time ('din' removed; digits)", "flight_time" not in BF.load(redis_conn, uid_a, T1).answers, r.reply_text)
+    for said, want in (("dopahar", "afternoon"), ("दोपहर", "afternoon"), ("subah", "morning"), ("afternoon", "afternoon")):
+        check(f"time: {said!r} -> {want}", V.parse_choice("flight_time", said) == want and V.parse_choice("train_time", said) == want)
+    check("time: a long sentence / two time words / digits -> not taken", [V.parse_choice("flight_time", t) for t in (
+        HINT, "mujhe lagta hai ki subah wali flight theek rahegi shayad", "subah ya shaam", "raat 9 baje", "din mein")] == [None] * 5)
+    r = say("dopahar", CV, trip=TRIP1)
+    check("... and 'dopahar' then answers it", BF.load(redis_conn, uid_a, T1).answers.get("flight_time") == "afternoon", r.reply_text)
+    BF.cancel(redis_conn, uid_a, T1)
+
+    # names (the exact BR-1004 transcripts), at the name step, at the age step and at the age "sahi hai?" step
+    redis_conn.delete(key(uid_a, T1))
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    say("hotel book karwana hai", CV, trip=TRIP1); say("budget", CV, trip=TRIP1)
+    r = say("ek kamra", CV, trip=TRIP1)
+    check("names: at 'Yatri 1 ka naam?'", r.reply_text.endswith("Yatri 1 ka naam?"), r.reply_text)
+    r = say("रात्रि एक का नाम रौशन", CV, trip=TRIP1)
+    t0 = BF.load(redis_conn, uid_a, T1).travellers[0]
+    check("B1: 'रात्रि एक का नाम रौशन' -> name रौशन, 'एक' is not an age", t0 == {"name": "रौशन", "age": None} and r.reply_text == "रौशन ki umar?",
+          (t0, r.reply_text))
+    for said in ("रात्री का नाम रोशन है, रात्रि रोशन है, रोशन है", "नाम है रोशन, सिर्फ रोशन", "भाई, नाम है रोशन", "रोशन नाम है उसका"):
+        r = say(said, CV, trip=TRIP1)
+        t0 = BF.load(redis_conn, uid_a, T1).travellers[0]
+        check(f"B at the age question: {said!r} -> name रोशन, age still asked", t0 == {"name": "रोशन", "age": None}
+              and r.reply_text == "रोशन ki umar?", (t0, r.reply_text))
+    r = say("पच्चीस hours", CV, trip=TRIP1)
+    check("the age question still reads 'पच्चीस hours' as 25", BF.load(redis_conn, uid_a, T1).travellers[0] == {"name": "रोशन", "age": 25},
+          r.reply_text)
+    BF.cancel(redis_conn, uid_a, T1)
+    for said, want in (("रात्रि एक का नाम रौशन", "रौशन"), ("रात्री का नाम रोशन है, रात्रि रोशन है, रोशन है", "रोशन"),
+                       ("नाम है रोशन, सिर्फ रोशन", "रोशन"), ("भाई, नाम है रोशन", "रोशन"), ("रोशन नाम है उसका", "रोशन"),
+                       ("Roshan Jha", "Roshan Jha"), ("रोशन झा", "रोशन झा"), ("Mera naam Rahul Sharma hai", "Rahul Sharma"),
+                       ("my name is Asha", "Asha"), ("Yatri 2 ka naam Priya hai, umar 30", "Priya")):
+        name, age, _ = V.name_and_age(said)
+        check(f"name step: {said!r} -> {want!r}", name == want and age in (None, 30) and (age == 30) == said.endswith("30"), (name, age))
+    check("name step: 'Rahul, 34 saal' keeps its age", V.name_and_age("Rahul, 34 saal")[:2] == ("Rahul", 34))
+    check("age 'sahi hai?' step: 'रात्रि एक का नाम रौशन' is a correction to रौशन (no age 1)",
+          V.name_fix("रात्रि एक का नाम रौशन", "confirm") == {"name": "रौशन", "age": None, "who": None, "ask": None})
+    check("nothing usable left -> 'Sahi naam boliye.' path", V.name_fix("naam hai", "age") == {"name": None, "age": None, "who": None, "ask": "name"}
+          and V.name_and_age("bhai sirf")[0] is None)
+
 logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
-leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "Roshan", "रोशन", "संज", "Mahesh", "Rohan", "Vistara", "हिंदी", "राहुल", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
+leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "Roshan", "रोशन", "रौशन", "Jaipur", "hazaar", "संज", "Mahesh", "Rohan", "Vistara", "हिंदी", "राहुल", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
 check("logs: no names, numbers or words", not leaks, leaks)
 check("database: nothing but booking_requests changed by the whole booking flow", db_snapshot() == BEFORE)
 check("redis: no booking keys left for these users", not list(redis_conn.scan_iter(f"booking:flow:{uid_a}:*"))
