@@ -1219,6 +1219,14 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     pending = pop_pending(redis_conn, user_id, conversation_id)
     answer_to_pending = said if pending else None
     result: Optional[AgentResult] = None
+    trip_confirm_step = ((pending_conf is not None and pending_conf.get("tool") == "create_trip")
+                         or (draft_state is not None and draft_state.awaiting == "date"))
+    if said is None and trip_confirm_step:
+        from voice.confirm_words import is_positive_confirmation
+        if is_positive_confirmation(transcript):
+            # "बना दो" / "हाँ, बना दो" / "ok chalo" at the read-back or the review page: the same as "haan" (no model call)
+            said = "yes"
+            print(f"[TRIP DRAFT] event=natural_yes source=voice draft={conversation_id}", flush=True)
 
     if pending_conf and said == "yes":
         # "haan" to the Confirm card: same action as the Confirm button.
