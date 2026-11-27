@@ -133,6 +133,7 @@ def voice_trip(days, answer):
         r1 = AG.update_draft(redis_conn, UID, cid, {"destination": "वाराणसी", "days": days}, "hi")
         r2 = turn(answer, cid)
         AG.update_draft(redis_conn, UID, cid, {"start_date": START.isoformat(), "adults": 2, "children": 0, "budget_inr": 45000}, "hi")
+        turn("pata nahi", cid)   # "Kahan se jaana hai?" (optional origin, booking step 1) -> skipped
         r3 = turn("सही है।", cid)
     d = D.load(redis_conn, UID, cid)
     prefill = D.prefill(d) if d else {}

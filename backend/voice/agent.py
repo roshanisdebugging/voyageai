@@ -91,9 +91,21 @@ Call exactly one tool when it fits:
 - update_trip_draft: the user wants to create a trip by voice and gives details ("Goa jaana hai, 15 se 18
   December, do log", "trip banao Jaipur ke liye"), or answers a question about the trip being planned, or
   corrects a detail ("nahi, budget 50 hazaar kar do"). Pass ONLY values the user said:
-  dates as YYYY-MM-DD from today's date ("15 December" = the next 15 December; "agle Friday"); "3 din ke liye"
+  DATES AS SPOKEN: a date the user says with a day number goes in start_day / start_month / start_year (end_day /
+  end_month / end_year for the last day), ONLY the parts the user actually SPOKE. Never fill in a month or year you
+  assumed: our code picks them. "पच्चीस तारीख से" / "25 tarikh se" / "25th se" -> start_day=25, start_month=null,
+  start_year=null. "25 se 27" / "25 से 27 तक" -> start_day=25, end_day=27 (months null). "5 November" ->
+  start_day=5, start_month=11, start_year=null. "25 November 2025" -> start_day=25, start_month=11, start_year=2025.
+  Then leave start_date / end_date null. Relative dates with no day number ("kal", "parso", "agle Friday", "kal se
+  pehle") go in start_date as YYYY-MM-DD from today's date, with the *_day fields null. "3 din ke liye"
   -> days=3; people as integers ("do log" -> adults=2, "koi bachcha nahi" -> children=0); budget in rupees as a
-  number ("50 hazaar" -> 50000, "1.5 lakh" -> 150000); origin_city for "Delhi se". start_new=true only when the
+  number ("50 hazaar" -> 50000, "1.5 lakh" -> 150000). origin_city = where the trip STARTS, only when the user
+  says it: "Delhi se", "from Delhi", "कोलकाता से गोवा" / "Kolkata se Goa" -> origin_city=Kolkata, destination=Goa.
+  "Goa jaana hai" alone -> destination=Goa, NO origin_city. If our last question asked for origin_city, a bare city
+  name is the origin_city. A correction at the read-back like "nahi, Patna se" -> origin_city=Patna only.
+  "पता" / "pata" alone is NOT a city: it means the user does not know (no origin_city). Never pass "pata",
+  "nahi", "kuch", "koi" or "kahin" as origin_city. "pata nahi, Delhi se" -> origin_city=Delhi.
+  start_new=true only when the
   user starts a different new trip while one is being planned. Never ask for details yourself: our code asks.
   A destination alone counts as a detail ("plan a trip to Manali" -> update_trip_draft).
   "Nayi trip banani hai" / "plan a new trip" with NO details at all -> navigate to plan_trip.
@@ -297,8 +309,14 @@ UPDATE_DRAFT_TOOL: Dict[str, Any] = {
             "properties": {
                 "destination": {"type": _nullable("string"), "description": "Where to go, e.g. 'Jaipur'."},
                 "origin_city": {"type": _nullable("string"), "description": "Starting city, e.g. 'Delhi'."},
-                "start_date": {"type": _nullable("string"), "description": "YYYY-MM-DD."},
-                "end_date": {"type": _nullable("string"), "description": "YYYY-MM-DD (last day of the trip)."},
+                "start_date": {"type": _nullable("string"), "description": "YYYY-MM-DD, only for relative dates (kal, agle Friday)."},
+                "end_date": {"type": _nullable("string"), "description": "YYYY-MM-DD (last day of the trip), only for relative dates."},
+                "start_day": {"type": _nullable("integer"), "description": "Day of month AS SPOKEN (1-31)."},
+                "start_month": {"type": _nullable("integer"), "description": "Month 1-12 ONLY if the user said it, else null."},
+                "start_year": {"type": _nullable("integer"), "description": "Year ONLY if the user said it, else null."},
+                "end_day": {"type": _nullable("integer"), "description": "Last day's day of month AS SPOKEN."},
+                "end_month": {"type": _nullable("integer"), "description": "Month 1-12 ONLY if the user said it, else null."},
+                "end_year": {"type": _nullable("integer"), "description": "Year ONLY if the user said it, else null."},
                 "days": {"type": _nullable("integer"), "description": "Trip length in days, if said instead of an end date."},
                 "adults": {"type": _nullable("integer")},
                 "children": {"type": _nullable("integer")},
@@ -465,7 +483,8 @@ def _draft_line(d) -> str:
         "destination": (d.destination or {}).get("name"), "origin_city": (d.origin_city or {}).get("name"),
         "start_date": d.start_date, "end_date": d.end_date, "days": d.days, "adults": d.adults,
         "children": d.children, "budget_inr": d.budget_inr}.items() if v is not None}
-    return f"have {json.dumps(have)}; still missing {d.missing_fields()} (our code asks for them)"
+    asked = f"; our last question asked for {d.last_asked}" if getattr(d, "last_asked", None) else ""
+    return f"have {json.dumps(have)}; still missing {d.missing_fields()} (our code asks for them){asked}"
 
 
 def trim_sentences(text: str, limit: int = 2) -> str:
@@ -538,6 +557,61 @@ def plan_offer_yes(text: str) -> bool:
         return True
     words = tu_words(text)
     return bool(words) and len(words) <= 6 and set(words) <= (_YES | _PLAN_START) and bool(set(words) & _YES_CORE)
+
+
+# "I don't know where from" -> go on without a starting city. Two kinds, decided by CODE:
+#  "short": only skip words + fillers ("पता।", "pata nahi yaar", "मैंने बोला, पता नहीं कहाँ से जाऊँगा।") -> no model call.
+#  "long":  a skip phrase plus other words ("pata nahi, Delhi se") -> the model runs; a real city it extracts wins,
+#           otherwise the origin is skipped (and cleared if one was set).
+# Only when our last question asked for the origin, or the sentence itself talks about the start (kahan se /
+# starting / शुरू). A "when" word without a start word ("pata nahi kab jaana hai") is never a skip.
+_ORIGIN_SKIP_PHRASES = [tuple(tu_words(p)) for p in (
+    "pata nahi", "pata nahin", "pata nai", "nahi pata", "nahin pata", "nai pata", "maloom nahi", "malum nahi",
+    "nahi maloom", "chhodo", "chodo", "chhod do", "chod do", "chhodiye", "chodiye", "skip", "abhi nahi", "abhi nahin",
+    "baad mein", "don't know", "dont know", "do not know", "no idea", "not sure", "पता नहीं", "नहीं पता", "मालूम नहीं",
+    "नहीं मालूम", "छोड़ो", "छोड़ दो", "छोड़िए", "छोड़िये", "अभी नहीं", "बाद में", "स्किप")]
+_ORIGIN_PATA = {canon("pata"), canon("पता")}                 # "पता।" alone: speech-to-text cut "पता नहीं" short
+_ORIGIN_KOI = {canon("koi"), canon("कोई")}                   # "koi starting city nahi hai"
+_ORIGIN_NAHI = {canon("nahi"), canon("nahin"), canon("नहीं")}
+_ORIGIN_START = {canon(w) for w in ("kahan", "kahaan", "kaha", "starting", "start", "shuru", "suru", "origin", "from",
+                                    "कहां", "कहा", "शुरू", "शुरु", "स्टार्टिंग")}
+_ORIGIN_WHEN = {canon(w) for w in ("kab", "when", "date", "tareekh", "tarikh", "कब", "तारीख")}
+_ORIGIN_SKIP_FILLER = {canon(w) for w in (
+    "mujhe", "muje", "abhi", "karo", "kar", "karein", "do", "dijiye", "ji", "i", "it", "please", "yaar", "toh", "to",
+    "bhi", "hai", "ye", "yeh", "isko", "city", "sorry", "maine", "main", "mai", "bola", "boli", "kaha", "se", "jaunga",
+    "jaaunga", "jaungi", "jaaungi", "jaana", "jaayenge", "jayenge", "hoga", "koi", "kuch", "nahi", "nahin", "where",
+    "we", "will", "the", "a", "shahar", "jagah", "ka", "ki", "ke", "pata",
+    "मुझे", "करो", "कर", "करें", "दो", "दीजिए", "जी", "है", "भी", "तो", "यह", "इसे", "मैंने", "मैं", "बोला", "बोली", "कहा",
+    "से", "जाऊंगा", "जाऊंगी", "जाना", "जाएंगे", "जायेंगे", "होगा", "कोई", "कुछ", "नहीं", "शहर", "जगह", "का", "की", "के",
+    "यार", "पता")} | _ORIGIN_START
+
+
+def origin_skip_kind(text: str, origin_asked: bool) -> Optional[str]:
+    """None / "short" / "long" (see above)."""
+    words = tu_words(text)
+    if not words:
+        return None
+    ws = set(words)
+    start = bool(ws & _ORIGIN_START)
+    if not (origin_asked or start) or (ws & _ORIGIN_WHEN and not start):
+        return None
+    found = set()
+    for phrase in _ORIGIN_SKIP_PHRASES:
+        n = len(phrase)
+        for i in range(len(words) - n + 1):
+            if tuple(words[i:i + n]) == phrase:
+                found.update(range(i, i + n))
+    only_fillers = all(i in found or w in _ORIGIN_SKIP_FILLER for i, w in enumerate(words))
+    pata_alone = bool(ws & _ORIGIN_PATA) and only_fillers and len(words) <= 3
+    koi_nahi = bool(ws & _ORIGIN_KOI) and bool(ws & _ORIGIN_NAHI) and start
+    if not (found or pata_alone or koi_nahi):
+        return None
+    return "short" if only_fillers and len(words) <= 10 else "long"
+
+
+def is_origin_skip(text: str) -> bool:
+    """A whole answer to "Kahan se jaana hai?" that only says "don't know" (handled without the model)."""
+    return origin_skip_kind(text, True) == "short"
 
 
 # ---------------- memory (Redis)
@@ -663,23 +737,48 @@ def _draft_today():
     return today_ist()
 
 
+def _log_origin(d, conversation_id: str, event: str, **flags: bool) -> None:
+    """Counts and flags only, never the city."""
+    extra = "".join(f" {k}=true" for k, v in flags.items() if v)
+    print(f"[TRIP DRAFT] event={event} origin_set={'true' if d.origin_city else 'false'} origin_asked={d.origin_asked} "
+          f"origin_failed={d.origin_failed} origin_skipped={'true' if d.origin_skipped else 'false'} "
+          f"same_as_dest_ok={'true' if d.origin_same_ok else 'false'}{extra} source=voice draft={conversation_id}", flush=True)
+
+
 def draft_next(redis_conn, user_id: str, conversation_id: str, d, lang: str, prefix: str = "") -> AgentResult:
-    """What to say next for a draft. CODE decides: ask (<= 2 missing fields) / read the dates back / ready."""
+    """What to say next for a draft. CODE decides: origin = destination? / ask (<= 2 things) / read back / ready."""
     from voice import draft as D, pending as P
+    if d.origin_candidate:
+        d.awaiting, d.last_asked = "origin_check", ["origin_city"]
+        D.save(redis_conn, user_id, conversation_id, d)
+        name = d.origin_candidate.get("name", "")
+        return AgentResult(f"{prefix} {D.ORIGIN_CHECK[lang].format(name=name)}".strip(), action="trip_draft",
+                           step="confirm_origin", missing_count=len(d.missing_fields()))
+    if d.origin_is_destination():
+        d.awaiting, d.last_asked = "origin_same", ["origin_city"]
+        D.save(redis_conn, user_id, conversation_id, d)
+        name = (d.origin_city or {}).get("name", "")
+        return AgentResult(f"{prefix} {D.ORIGIN_SAME[lang].format(name=name)}".strip(), action="trip_draft",
+                           step="confirm_origin", missing_count=len(d.missing_fields()))
     step = d.next_step()
     missing = d.missing_fields()
     if step == "ask":
         d.awaiting = None
+        d.last_asked = D.ask_fields(missing, ask_origin=d.wants_origin())
+        if "origin_city" in d.last_asked:
+            d.origin_asked += 1
+            d.origin_pending = True
         D.save(redis_conn, user_id, conversation_id, d)
-        text = f"{prefix} {D.question_for(missing, lang, days_known=bool(d.days))}".strip()
+        text = f"{prefix} {D.question_for(missing, lang, days_known=bool(d.days), ask_origin='origin_city' in d.last_asked)}".strip()
         return AgentResult(text, action="trip_draft", step="ask", missing_count=len(missing))
     if step == "confirm_date":
-        d.awaiting = "date"
+        d.awaiting, d.last_asked = "date", []
         D.save(redis_conn, user_id, conversation_id, d)
         return AgentResult(f"{prefix} {D.readback(d, lang)}".strip(), action="trip_draft", step="confirm_date", missing_count=0)
     # ready: open the review page with the draft; one pending confirmation (replaces any older one)
-    d.awaiting = None
+    d.awaiting, d.last_asked = None, []
     D.save(redis_conn, user_id, conversation_id, d)
+    _log_origin(d, conversation_id, "ready")
     pc = P.save(redis_conn, user_id, conversation_id, "create_trip", D.summary(d, lang))
     return AgentResult(f"{prefix} {READY_REPLY[lang]}".strip(),
                        ui_actions=[{"type": "open_review", "prefill": D.prefill(d)}],
@@ -699,23 +798,112 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
         P.clear(redis_conn, user_id, conversation_id)   # details changed: the summary must be confirmed again
     d = d or D.TripDraftState()
     prev_dest_id = (d.destination or {}).get("id")
+    origin_was_asked, d.origin_pending = d.origin_pending, False
+    skip_hint, d.skip_hint = d.skip_hint, False
+    was_skipped = d.origin_skipped
     res = D.apply_update(d, {k: v for k, v in args.items() if k != "start_new"}, lang, _draft_today())
+    origin_note, origin_retry, cleared = "", "", False
+    if res.date_rolled_forward or res.date_fields_missing:   # flags only, never the words or the date
+        print(f"[TRIP DRAFT] event=dates date_rolled_forward={'true' if res.date_rolled_forward else 'false'} "
+              f"date_fields_missing={'true' if res.date_fields_missing else 'false'} source=voice draft={conversation_id}", flush=True)
+    if skip_hint and not res.origin_not_found and not res.origin_unsure and "origin_city" not in res.changed:
+        # "pata nahi kahan se ..." and the model found no (new) city: no origin, never asked again
+        cleared = d.origin_city is not None
+        if cleared:
+            d.dates_confirmed = False                 # read back again without it
+        d.origin_city, d.origin_candidate, d.origin_skipped = None, None, True
+        origin_note = ORIGIN_SKIPPED[lang]
+    elif res.origin_not_found:
+        d.origin_failed += 1
+        if d.origin_failed >= 2 or d.origin_asked >= D.MAX_ORIGIN_ASKS or was_skipped:
+            d.origin_skipped = True   # second miss: go on without it, never a third question
+            origin_note = D.ORIGIN_GIVE_UP[lang].format(name=res.origin_not_found)
+        else:
+            d.origin_asked += 1       # one retry: speech-to-text often gets Indian town names wrong
+            d.origin_pending, d.last_asked = True, ["origin_city"]
+            origin_retry = D.ORIGIN_RETRY[lang].format(name=res.origin_not_found)
+    elif origin_was_asked and "origin_city" not in res.changed:
+        d.origin_skipped = True       # asked, not given (or not a place name): never asked again
+    if res.origin_not_found or res.origin_invalid or res.origin_unsure or "origin_city" in res.changed or origin_was_asked \
+            or skip_hint:
+        _log_origin(d, conversation_id, "update", origin_discarded_stopword=res.origin_stopword,
+                    origin_cleared_by_skip=cleared, origin_name_mismatch=res.origin_unsure)
     if res.problems:
         D.save(redis_conn, user_id, conversation_id, res.draft)
-        r = AgentResult(" ".join(res.problems[:2]), action="trip_draft", step="ask",
-                        missing_count=len(res.draft.missing_fields()), error_code="refused_value")
+        r = AgentResult(" ".join(res.problems[:2] + ([origin_retry] if origin_retry else [])), action="trip_draft",
+                        step="ask", missing_count=len(res.draft.missing_fields()), error_code="refused_value")
         return r
+    if origin_retry:
+        D.save(redis_conn, user_id, conversation_id, res.draft)
+        return AgentResult(origin_retry, action="trip_draft", step="ask_origin", missing_count=len(res.draft.missing_fields()))
     if "destination" in res.changed and (res.draft.destination or {}).get("id") != prev_dest_id:
         offer = _plan_offer(res.draft, args.get("destination"))
         if offer is not None:
             D.save(redis_conn, user_id, conversation_id, res.draft)
             return AgentResult(f"{prefix} {PLAN_OFFER[lang].format(name=offer.short_name)}".strip(),
                                action="trip_draft", step="plan_offer", missing_count=len(res.draft.missing_fields()))
-    if "destination" in res.changed and not prefix:
+    dd = res.draft
+    origin_readback_next = (dd.origin_city is not None and not dd.origin_candidate and not dd.origin_is_destination()
+                            and dd.next_step() == "confirm_date")
+    dest_new = "destination" in res.changed and (res.draft.destination or {}).get("id") != prev_dest_id
+    if dest_new and not prefix and not origin_readback_next:
+        # Said only on the turn the destination is first set or changed (the model re-sends it on every update).
+        # (not before "<origin> se <destination>, ...": that already names the destination)
         name = (res.draft.destination or {}).get("name", "")
         length = f", {res.draft.days} din" if res.draft.days and lang != "en" else (f", {res.draft.days} days" if res.draft.days else "")
         prefix = f"{name}{length}."
+    prefix = f"{prefix} {origin_note}".strip()
     return draft_next(redis_conn, user_id, conversation_id, res.draft, lang, prefix)
+
+
+ORIGIN_SKIPPED = {"hi": "Theek hai, starting city ke bina.", "en": "Okay, without a starting city."}
+
+
+def skip_origin(redis_conn, user_id: str, conversation_id: str, d, lang: str) -> AgentResult:
+    """'pata nahi' (to 'Kahan se jaana hai?', or 'pata nahi kahan se' any time): go on without a starting city.
+    An origin already set is cleared. Never asked again in this draft (a city the user says later is still taken)."""
+    from voice import pending as P
+    cleared = d.origin_city is not None or d.origin_candidate is not None
+    if d.origin_city is not None:
+        d.dates_confirmed = False                     # the read-back named that origin: read back again
+        P.clear(redis_conn, user_id, conversation_id)  # and a Confirm card made with it must not be confirmed
+    d.origin_city, d.origin_candidate = None, None
+    d.origin_pending, d.origin_skipped, d.skip_hint = False, True, False
+    if d.awaiting in ("origin_check", "origin_same"):
+        d.awaiting = None
+    _log_origin(d, conversation_id, "skipped", origin_cleared_by_skip=cleared)
+    return draft_next(redis_conn, user_id, conversation_id, d, lang, ORIGIN_SKIPPED[lang])
+
+
+def answer_origin_same(redis_conn, user_id: str, conversation_id: str, d, said: Optional[str], lang: str) -> Optional[AgentResult]:
+    """The answer to "Kolkata se Kolkata hi jaana hai? Sahi hai?" (asked once). Yes keeps it; no drops it.
+    Anything else drops it too and returns None, so the turn goes on as usual ("nahi, Patna se" sets a new one)."""
+    from voice import draft as D
+    kind, d.awaiting = d.awaiting, None
+    if kind == "origin_check":
+        # "Patna se? Sahi hai?" (asked once). Yes -> the origin; no -> none, not asked again; anything else -> none,
+        # and the turn goes on ("nahi, Kolkata se" sets Kolkata).
+        candidate, d.origin_candidate = d.origin_candidate, None
+        if said == "yes" and candidate:
+            d.origin_city, d.origin_skipped, d.dates_confirmed, d.origin_same_ok = candidate, False, False, False
+            _log_origin(d, conversation_id, "name_check_yes")
+            return draft_next(redis_conn, user_id, conversation_id, d, lang)
+        d.origin_skipped, d.origin_pending = True, False
+        _log_origin(d, conversation_id, "name_check_no")
+        if said == "no":
+            return draft_next(redis_conn, user_id, conversation_id, d, lang, PLAN_DECLINED[lang])
+        D.save(redis_conn, user_id, conversation_id, d)
+        return None
+    if said == "yes":
+        d.origin_same_ok = True
+        _log_origin(d, conversation_id, "same_as_dest_yes")
+        return draft_next(redis_conn, user_id, conversation_id, d, lang, PLAN_DECLINED[lang])
+    d.origin_city, d.origin_skipped, d.origin_pending = None, True, False
+    _log_origin(d, conversation_id, "same_as_dest_no")
+    if said == "no":
+        return draft_next(redis_conn, user_id, conversation_id, d, lang, PLAN_DECLINED[lang])
+    D.save(redis_conn, user_id, conversation_id, d)
+    return None
 
 
 def _plan_offer(d, said: Any):
@@ -1004,6 +1192,12 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
                        error_detail=f"answer tool failed: status={ans.get('status')} code={ans.get('fallback_code')}")
 
 
+def _booking_turn(transcript: str, lang: str, user_id: str, conversation_id: str, trip, redis_conn):
+    from voice import booking_voice
+    return booking_voice.safe_handle(transcript, lang, user_id=user_id, conversation_id=conversation_id, trip=trip,
+                                     redis_conn=redis_conn)
+
+
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
               screen: Optional[str], trip: Optional[TripInfo], redis_conn=None,
               screen_place: Optional[Dict[str, Any]] = None,
@@ -1022,10 +1216,19 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     from voice import draft as D, pending as P
     pending_conf = P.get(redis_conn, user_id, conversation_id)
     draft_state = D.load(redis_conn, user_id, conversation_id)
+    skip_kind: Optional[str] = None
     said = yes_or_no(transcript)
     pending = pop_pending(redis_conn, user_id, conversation_id)
     answer_to_pending = said if pending else None
     result: Optional[AgentResult] = None
+    trip_confirm_step = ((pending_conf is not None and pending_conf.get("tool") == "create_trip")
+                         or (draft_state is not None and draft_state.awaiting == "date"))
+    if said is None and trip_confirm_step:
+        from voice.confirm_words import is_positive_confirmation
+        if is_positive_confirmation(transcript):
+            # "बना दो" / "हाँ, बना दो" / "ok chalo" at the read-back or the review page: the same as "haan" (no model call)
+            said = "yes"
+            print(f"[TRIP DRAFT] event=natural_yes source=voice draft={conversation_id}", flush=True)
 
     if pending_conf and said == "yes":
         # "haan" to the Confirm card: same action as the Confirm button.
@@ -1053,6 +1256,15 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                              missing_count=len(draft_state.missing_fields()))
     elif draft_state is not None and said == "no" and _starts_cancel(transcript):
         result = cancel_trip(redis_conn, user_id, conversation_id, lang)
+    elif draft_state is not None and (skip_kind := origin_skip_kind(
+            transcript, draft_state.origin_pending or draft_state.awaiting == "origin_check")) == "short":
+        result = skip_origin(redis_conn, user_id, conversation_id, draft_state, lang)   # no model call
+    elif draft_state is not None and draft_state.awaiting in ("origin_same", "origin_check"):
+        result = answer_origin_same(redis_conn, user_id, conversation_id, draft_state, said, lang)
+        if result is None:
+            draft_state = D.load(redis_conn, user_id, conversation_id)
+    elif (booking_result := _booking_turn(transcript, lang, user_id, conversation_id, trip, redis_conn)) is not None:
+        result = booking_result      # booking stage 2: "book karwana hai" / an answer to the last booking question
 
     if result is not None:
         pass
@@ -1069,6 +1281,11 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         result = delete_refused(lang)   # voice never deletes; no LLM call
     else:
         from voice import context as trip_context
+        if draft_state is not None and skip_kind is None:
+            skip_kind = origin_skip_kind(transcript, draft_state.origin_pending or draft_state.awaiting == "origin_check")
+        if draft_state is not None and skip_kind == "long":
+            draft_state.skip_hint = True           # "pata nahi, Delhi se": a city the model extracts wins
+            D.save(redis_conn, user_id, conversation_id, draft_state)
         trip_ctx = trip_context.load(user_id, trip.id) if trip is not None and trip.id else None
         messages: List[Dict[str, Any]] = [{"role": "system", "content": build_system_prompt(
             screen, trip, draft_line=_draft_line(draft_state), trip_context=trip_context.prompt_text(trip_ctx))}]
@@ -1093,6 +1310,10 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
                              trip_ctx=trip_ctx, screen_place=screen_place, location=location)
             if pending_conf and result.pending_confirmation is None and not result.action.startswith("trip_"):
                 P.clear(redis_conn, user_id, conversation_id)   # a new topic cancels the pending confirmation
+            if skip_kind == "long":
+                after = D.load(redis_conn, user_id, conversation_id)
+                if after is not None and after.skip_hint:   # the model didn't update the draft: the skip still counts
+                    result = skip_origin(redis_conn, user_id, conversation_id, after, lang)
         # LLM errors carry status + provider code only (never the message, which can quote the user).
         except LLMRateLimited as err:
             result = _failed("rate_limited", llm_error_info(err, attempt), TRY_LATER_REPLY[lang])
@@ -1110,7 +1331,7 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
 
     if result.pending_actions:
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
-    if result.action != "error":
+    if result.action not in ("error", "booking"):     # booking answers (names, phone) stay out of the memory
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
     logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s%s", result.action,
                 f" step={result.step}" if result.step else "",

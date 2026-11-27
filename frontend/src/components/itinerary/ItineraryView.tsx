@@ -13,6 +13,7 @@ import { TripBudgetStrip } from './TripBudgetStrip';
 import { MAX_LEGS_PER_DAY } from '../map/mapLogic';
 import { PlanCardInfo, PlanDayLabel, UnresolvedStopNote } from './PlanCardInfo';
 import { planCardOf } from './planCard';
+import { BookingOfferCard } from '../../features/booking/BookingOfferCard';
 
 const aiActionClassName =
   'flex min-h-11 items-center gap-1.5 rounded-full border border-[#355F58]/30 bg-[#E8F0EE] px-3 py-1.5 text-xs font-bold text-(--color-primary) press-scale hover:bg-[#D4E4E0] max-sm:px-3.5 dark:border-emerald-800 dark:bg-[#12332B] dark:hover:bg-[#194437]';
@@ -403,13 +404,17 @@ export const ItineraryView: React.FC = () => {
       {/* Budget · Planned · Spent (voice changes refresh it) */}
       <TripBudgetStrip />
 
+      {/* Booking stage 2: "Train, flight ya hotel book karwana hai?" once the plan is ready (questions only) */}
+      {currentTrip && <BookingOfferCard key={currentTrip.id} trip={currentTrip} />}
+
       {/* Main Trip Banner */}
       <div className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-3xl p-5 space-y-2 shadow-xs">
-        <div className="flex items-center justify-between">
-          <span className="px-3 py-1 rounded-full bg-[#E8F0EE] dark:bg-[#12332B] text-[var(--color-primary)] font-extrabold text-xs border border-[#355F58]/30 dark:border-emerald-800">
-            {destName}
+        <div className="flex items-center justify-between gap-2">
+          <span className="min-w-0 truncate px-3 py-1 rounded-full bg-[#E8F0EE] dark:bg-[#12332B] text-[var(--color-primary)] font-extrabold text-xs border border-[#355F58]/30 dark:border-emerald-800">
+            {/* The starting city only when the trip has one (booking step 1) */}
+            {currentTrip?.origin?.name ? `${currentTrip.origin.name} → ${destName}` : destName}
           </span>
-          <span className="text-xs text-[var(--color-text-secondary)] font-bold flex items-center gap-1">
+          <span className="shrink-0 text-xs text-[var(--color-text-secondary)] font-bold flex items-center gap-1">
             <Calendar className="w-3.5 h-3.5 text-[var(--color-primary)]" />
             {currentTrip?.startDate} to {currentTrip?.endDate}
           </span>

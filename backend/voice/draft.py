@@ -15,17 +15,22 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from trip_lifecycle import MIN_BUDGET_INR   # the one budget minimum, shared with trip creation
+from trip_lifecycle import clean_place_name  # the one starting-city name rule, shared with trip creation
+from voice.text_utils import canon, words as tu_words
 
 DRAFT_TTL_SECONDS = 30 * 60
 MAX_DAYS = 30            # trip_lifecycle: at most 30 days
 MAX_TRAVELERS = 20       # trip_lifecycle: at most 20 travelers
 MAX_DAYS_AHEAD = 366
 REQUIRED = ["destination", "start_date", "end_date", "adults", "children", "budget_inr"]  # the order we ask in
+MAX_QUESTIONS = 2        # questions per turn (the date pair counts once); the optional origin only fills a free slot
+MAX_ORIGIN_ASKS = 2      # the origin question plus one retry after a failed lookup: never a third time
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December"]
@@ -60,12 +65,30 @@ class TripDraftState:
     plan_offer_card: Optional[str] = None          # the checked plan (pilgrimage card id) offered for this destination
     plan_offer: Optional[str] = None               # None / "asked" / "accepted" / "declined": asked once per destination
     plan_card_id: Optional[str] = None             # set ONLY by code, after a yes to the offer
+    # The optional starting city. Kept in the draft (Redis) so a retry never asks the same question a third time.
+    origin_asked: int = 0                          # times we asked for it (question or retry), at most MAX_ORIGIN_ASKS
+    origin_pending: bool = False                   # our last question asked for it: the next answer decides
+    origin_failed: int = 0                         # lookups that found nothing
+    origin_skipped: bool = False                   # "pata nahi" / not given when asked / second failed lookup
+    origin_same_ok: bool = False                   # the user said yes to "origin = destination?"
+    last_asked: List[str] = field(default_factory=list)   # fields our last question asked for (for the prompt)
+    origin_candidate: Optional[Dict[str, Any]] = None  # a looked-up city whose name doesn't match what was said:
+                                                   # "<name> se? Sahi hai?" (asked once) before it becomes the origin
+    origin_checked: bool = False                   # that check was asked once already: never a second time
+    skip_hint: bool = False                        # this turn's words said "don't know where from" (set by code)
 
     def missing_fields(self) -> List[str]:
         return [f for f in REQUIRED if getattr(self, f) is None and not (f == "end_date" and self.days)]
 
+    def wants_origin(self) -> bool:
+        """Ask for the starting city? Only once, and never after a skip."""
+        return self.origin_city is None and not self.origin_skipped and self.origin_asked == 0
+
+    def origin_is_destination(self) -> bool:
+        return (not self.origin_same_ok) and same_place(self.origin_city, self.destination)
+
     def next_step(self) -> str:
-        if self.missing_fields():
+        if self.missing_fields() or self.wants_origin():
             return "ask"
         if not self.dates_confirmed:
             return "confirm_date"
@@ -137,6 +160,58 @@ def parse_date(raw: Any) -> Optional[date]:
         return None
 
 
+# ---------------- dates as spoken ("पच्चीस तारीख" = the NEXT 25th, never a past one the model assumed)
+
+def _months_from(year: int, month: int, count: int):
+    for i in range(count):
+        m = month - 1 + i
+        yield year + m // 12, m % 12 + 1
+
+
+def _try_date(y: int, m: int, d: int) -> Optional[date]:
+    try:
+        return date(y, m, d)
+    except ValueError:
+        return None
+
+
+def resolve_said_date(day: int, month: Optional[int], year: Optional[int], not_before: date) -> Optional[date]:
+    """The date a person means from the parts they SAID, as the first matching date on or after `not_before`:
+    - day only: this month if not passed, else the next month that HAS that day (31 skips short months), next year
+      if needed;
+    - day + month: the next occurrence (next year if passed this year);
+    - with a year: exactly that date (a past one is refused by the caller, as before).
+    None if no such date exists (e.g. day 32, 30 February 2027)."""
+    if not 1 <= day <= 31 or (month is not None and not 1 <= month <= 12):
+        return None
+    if year is not None:
+        if month is not None:
+            return _try_date(year, month, day)
+        start_month = not_before.month if year == not_before.year else 1
+        found = [d for y, m in _months_from(year, start_month, 13 - start_month) if (d := _try_date(y, m, day))]
+        future = [d for d in found if d >= not_before]
+        return (future or found or [None])[0]
+    if month is not None:
+        for y in range(not_before.year, not_before.year + 9):   # 29 February: the next leap year
+            d = _try_date(y, month, day)
+            if d and d >= not_before:
+                return d
+        return None
+    for y, m in _months_from(not_before.year, not_before.month, 14):
+        d = _try_date(y, m, day)
+        if d and d >= not_before:
+            return d
+    return None
+
+
+def _said_parts(args: Dict[str, Any], which: str) -> Optional[Tuple[int, Optional[int], Optional[int]]]:
+    day = parse_int(args.get(f"{which}_day"))
+    if day is None:
+        return None
+    month, year = parse_int(args.get(f"{which}_month")), parse_int(args.get(f"{which}_year"))
+    return day, month, year
+
+
 def say_date(d: date) -> str:
     return f"{d.day} {MONTHS[d.month - 1]}"
 
@@ -148,11 +223,84 @@ def nights_words(n: int, lang: str) -> str:
     return f"{word} raat"
 
 
+# ---------------- the starting city: words that are never a city, and "does the found place match what was said?"
+
+# The model sometimes returns these as the origin ("पता।" -> origin "पता" -> Google: Patna). Checked by code before
+# any Google lookup; an origin made only of these words is "not given".
+NOT_A_CITY_WORDS = {canon(w) for w in (
+    "pata", "patah", "nahi", "nahin", "nai", "na", "kuch", "kuchh", "koi", "kahin", "kahi", "kahan", "kahaan", "maloom",
+    "malum", "chhodo", "chodo", "chhod", "chod", "chhodiye", "do", "skip", "abhi", "baad", "mein", "se", "mujhe", "yaar",
+    "hai", "jaana", "jagah", "shahar", "starting", "city", "origin", "i", "don", "t", "dont", "know", "no", "idea", "not",
+    "sure", "none", "nothing", "unknown", "bhi", "भी",
+    "पता", "नहीं", "ना", "कुछ", "कोई", "कहीं", "कहां", "मालूम", "छोड़ो", "छोड़", "छोड़िए", "दो", "स्किप", "अभी", "बाद", "में",
+    "से", "मुझे", "यार", "है", "जाना", "जगह", "शहर")}
+
+
+def is_not_a_city(raw: Any) -> bool:
+    ws = tu_words(str(raw or ""))
+    return bool(ws) and all(w in NOT_A_CITY_WORDS for w in ws)
+
+
+# Name check: compare consonant skeletons, so Devanagari, Latin and spelling variants line up
+# (पटना / Patna -> "ptn", कोलकाता / Kolkata / Calcutta -> "klkt"); vowels, h/v/w/y and doubled letters are ignored.
+_DEV_CONSONANTS = {"क": "k", "ख": "k", "ग": "g", "घ": "g", "ङ": "n", "च": "c", "छ": "c", "ज": "j", "झ": "j", "ञ": "n",
+                   "ट": "t", "ठ": "t", "ड": "d", "ढ": "d", "ण": "n", "त": "t", "थ": "t", "द": "d", "ध": "d", "न": "n",
+                   "प": "p", "फ": "f", "ब": "b", "भ": "b", "म": "m", "य": "y", "र": "r", "ल": "l", "व": "v", "श": "s",
+                   "ष": "s", "स": "s", "ह": "h", "ळ": "l"}
+# Latin spellings -> the same letters (order matters: "chh"/"ch" are kept as c, a lone c is k as in "Calcutta").
+_LATIN_PAIRS = (("chh", "C"), ("ch", "C"), ("sh", "s"), ("th", "t"), ("dh", "d"), ("bh", "b"), ("kh", "k"), ("gh", "g"),
+                ("jh", "j"), ("ph", "f"), ("c", "k"), ("C", "c"), ("q", "k"), ("z", "j"), ("x", "ks"))
+
+
+def _skeleton(text: str) -> str:
+    out = []
+    for w in tu_words(text):
+        if any("\u0900" <= ch <= "\u097f" for ch in w):
+            out.extend(_DEV_CONSONANTS.get(ch, "") for ch in w)
+        else:
+            w = re.sub(r"[^a-z]", "", w)
+            for a, b in _LATIN_PAIRS:
+                w = w.replace(a, b)
+            out.append(w)
+    sk = re.sub(r"[aeiouhvwy]", "", "".join(out))
+    return re.sub(r"(.)\1+", r"\1", sk)
+
+
+def name_matches(said: str, place_ref: Dict[str, Any]) -> bool:
+    """Does the found place plausibly match what was said? Same first consonant and similar skeletons, against the
+    place's name, its city, or one word of the name ("Delhi" -> "New Delhi")."""
+    a = _skeleton(said)
+    if not a:
+        return False
+    names = [str(place_ref.get(k) or "") for k in ("name", "city")]
+    names += [w for n in names for w in n.split() if len(w) >= 3]
+    for n in names:
+        b = _skeleton(n)
+        if b and (a == b or (a[0] == b[0] and SequenceMatcher(None, a, b).ratio() >= 0.65)):
+            return True
+    return False
+
+
+def same_place(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    if not a or not b:
+        return False
+    if a.get("id") and a.get("id") == b.get("id"):
+        return True
+    names = lambda p: {str(p.get(k) or "").strip().lower() for k in ("name", "city")} - {""}  # noqa: E731
+    return bool(names(a) & names(b))
+
+
 @dataclass
 class UpdateResult:
     draft: TripDraftState
     problems: List[str] = field(default_factory=list)   # short spoken reasons for refused values
     changed: List[str] = field(default_factory=list)
+    origin_not_found: Optional[str] = None               # a valid name that the place search did not find
+    origin_invalid: bool = False                         # not a place name (digits, too long, ...): not given
+    origin_stopword: bool = False                        # "pata" / "पता" / "nahi" ...: not a city, no Google call
+    date_rolled_forward: bool = False                    # a day (and month) without a year/month became a future date
+    date_fields_missing: bool = False                    # the model sent only an ISO date (no as-spoken fields)
+    origin_unsure: bool = False                          # found, but the name doesn't match what was said
 
 
 def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: date, find_place_fn=None) -> UpdateResult:
@@ -183,13 +331,62 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             out.changed.append("destination")
         elif err:
             out.problems.append(err)
-    if args.get("origin_city"):
-        ref, err = place(args["origin_city"])
-        if ref:
-            draft.origin_city = ref
-            out.changed.append("origin_city")
-        elif err:
-            out.problems.append(err)
+    if args.get("origin_city") is not None and args.get("origin_city") != "":
+        name = clean_place_name(args["origin_city"])   # code checks what the model extracted
+        if name and is_not_a_city(name):
+            name, out.origin_stopword = None, True       # "pata" is not a city: discarded before any Google call
+        ref = place(name)[0] if name else None
+        if ref and not draft.origin_checked and (draft.origin_city or {}).get("id") != ref.get("id") \
+                and not name_matches(name, ref):
+            draft.origin_candidate, draft.origin_checked = ref, True   # "<name> se? Sahi hai?" once
+            draft.origin_skipped = False
+            out.origin_unsure = True
+        elif ref:
+            if (draft.origin_city or {}).get("id") != ref.get("id"):
+                draft.dates_confirmed = False   # the read-back says the origin, so it must be read back again
+                draft.origin_same_ok = False
+                out.changed.append("origin_city")
+            draft.origin_city, draft.origin_candidate = ref, None
+            draft.origin_skipped = False
+        elif out.origin_stopword:
+            out.origin_invalid = True
+        elif name:
+            out.origin_not_found = name
+        else:
+            out.origin_invalid = True
+
+    # Dates as spoken: the model passes only the parts the user said; CODE picks the month / year (rolling forward).
+    # Without these fields the model's ISO date is used as before (a past one is refused; code never guesses).
+    said_start, said_end = _said_parts(args, "start"), _said_parts(args, "end")
+    if said_start or said_end:
+        args = dict(args)
+        bad = False
+        s_res = None
+        if said_start:
+            day, month, year = said_start
+            s_res = resolve_said_date(day, month, year, today)
+            if s_res is None:
+                bad = True
+            else:
+                args["start_date"] = s_res.isoformat()
+                naive = _try_date(year or today.year, month or today.month, day)
+                out.date_rolled_forward = year is None and naive != s_res
+        if said_end and not bad:
+            day, month, year = said_end
+            if said_start and month is None and said_start[1] is not None and year is None:
+                month = said_start[1]      # "25 December se 27" -> 27 December
+            base = s_res or parse_date(draft.start_date) or today
+            e_res = resolve_said_date(day, month, year, base) if year is None else _try_date(year, month or base.month, day)
+            if e_res is None:
+                bad = True
+            else:
+                args["end_date"] = e_res.isoformat()
+        if bad:
+            out.problems.append("Tareekh samajh nahi aayi." if hi else "I didn't get the date.")
+            args.pop("start_date", None)
+            args.pop("end_date", None)
+    elif args.get("start_date") or args.get("end_date"):
+        out.date_fields_missing = True
 
     # Dates: start, end, or start + days. Checked together.
     start = parse_date(args.get("start_date")) if args.get("start_date") else (parse_date(draft.start_date) if draft.start_date else None)
@@ -269,13 +466,29 @@ QUESTIONS = {
     "adults": {"hi": "Kitne bade log jaa rahe hain?", "en": "How many adults are going?"},
     "children": {"hi": "Koi bachcha bhi saath hai?", "en": "Any children coming along?"},
     "budget_inr": {"hi": "Kul budget kitna hai?", "en": "What's the total budget?"},
+    "origin_city": {"hi": "Kahan se jaana hai?", "en": "Where are you starting from?"},
 }
+ORIGIN_RETRY = {"hi": "{name} nahi mila, phir se bolenge ya skip karein?",
+                "en": "I couldn't find {name}. Say it again, or say skip?"}
+ORIGIN_GIVE_UP = {"hi": "{name} bhi nahi mila, starting city ke bina aage badhte hain.",
+                  "en": "I couldn't find {name} either, so we'll go on without a starting city."}
+ORIGIN_CHECK = {"hi": "{name} se? Sahi hai?", "en": "Starting from {name}? Is that right?"}
+ORIGIN_SAME = {"hi": "{name} se {name} hi jaana hai? Sahi hai?", "en": "Starting from {name} and going to {name}? Is that right?"}
 
 
-def question_for(missing: List[str], lang: str, days_known: bool = False) -> str:
-    """At most 2 missing fields per question; the date pair counts as one."""
+def ask_fields(missing: List[str], ask_origin: bool = False) -> List[str]:
+    """What one question asks for: at most MAX_QUESTIONS missing fields (the date pair counts once), in the
+    fixed order; the optional origin goes after them, only if there is a free slot."""
+    fields = [f for f in missing if not (f == "end_date" and "start_date" in missing)][:MAX_QUESTIONS]
+    if ask_origin and len(fields) < MAX_QUESTIONS:
+        fields.append("origin_city")
+    return fields
+
+
+def question_for(missing: List[str], lang: str, days_known: bool = False, ask_origin: bool = False) -> str:
+    """At most 2 things per question; the date pair counts as one."""
     lang = "en" if lang == "en" else "hi"
-    fields = [f for f in missing if not (f == "end_date" and "start_date" in missing)][:2]
+    fields = ask_fields(missing, ask_origin)
     parts = []
     for f in fields:
         if f == "start_date" and days_known:
@@ -285,9 +498,28 @@ def question_for(missing: List[str], lang: str, days_known: bool = False) -> str
     return " ".join(parts)
 
 
+def people_words(adults: int, children: int, lang: str) -> str:
+    """2, 1 -> "do bade log, ek bachcha" / "2 adults, 1 child"."""
+    if lang == "en":
+        out = f"{adults} adult{'s' if adults != 1 else ''}"
+        return out + (f", {children} child{'ren' if children != 1 else ''}" if children else "")
+    word = lambda n: HINDI_NUMBERS[n] if 0 <= n < len(HINDI_NUMBERS) else str(n)  # noqa: E731
+    out = "ek bada" if adults == 1 else f"{word(adults)} bade log"
+    if children:
+        out += ", ek bachcha" if children == 1 else f", {word(children)} bachche"
+    return out
+
+
 def readback(draft: TripDraftState, lang: str) -> str:
+    """Without an origin: the dates only (unchanged). With one: origin se destination, dates, nights, people."""
     s, e = parse_date(draft.start_date), parse_date(draft.end_date)
     nights = max((e - s).days, 0)
+    if draft.origin_city:
+        frm, to = (draft.origin_city or {}).get("name", ""), (draft.destination or {}).get("name", "")
+        who = people_words(draft.adults or 0, draft.children or 0, "en" if lang == "en" else "hi")
+        if lang == "en":
+            return f"{frm} to {to}, {say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}, {who}. Is that right?"
+        return f"{frm} se {to}, {say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}, {who}. Sahi hai?"
     if lang == "en":
         return f"{say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}. Is that right?"
     return f"{say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}. Sahi hai?"
