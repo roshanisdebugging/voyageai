@@ -310,6 +310,8 @@ def parse_choice(qid: str, text: str) -> Any:
         return _one(found) or (BF.ANY if is_decide(toks) else None)
     if qid == "hotel_type":
         found = []
+        if any(_has_phrase(toks, p) for p in _FREE_STAR):
+            found.append("3star")                 # "three star" heard as "free star" (this question only)
         if sset & _BUDGET:
             found.append("budget")
         nums = [n for n in numbers_in(toks)] + [_CLASS_NUM_STAR.get(t) for t in toks if t in _CLASS_NUM_STAR]
@@ -351,6 +353,7 @@ _CLASS_NUM_STAR = {w: n for w, n in (("three", 3), ("teen", 3), ("थ्री",
                                      ("chaar", 4), ("फोर", 4), ("चार", 4), ("five", 5), ("paanch", 5), ("panch", 5),
                                      ("फाइव", 5), ("पांच", 5), ("seven", 7), ("सात", 7))}
 _CLASS_NUM_STAR = {canon(k): v for k, v in _CLASS_NUM_STAR.items()}
+_FREE_STAR = _phrases("free star", "फ्री स्टार", "फ्री स्टार्स", "free stars")
 
 
 def other_script(text: str) -> bool:
@@ -444,8 +447,10 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
         if is_decide(toks):
             return BF.ANY, None, False
         nums = numbers_in(toks)
-        if len(nums) == 1:
+        if len(nums) == 1 or (nums and len(set(nums)) == 1):
             return nums[0], None, False
+        if len(set(nums)) > 1:                      # "पच्चीस, पचहत्तर वर्ष": never pick one silently
+            return "__age_guess__", nums[-1], False
         got = extract(text, "age")
         age = got.get("age")
         return (age if isinstance(age, int) and not isinstance(age, bool) else None), None, True
@@ -464,9 +469,14 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
     return parse_choice(qid, text), None, False
 
 
-def _result(text: str, qid: str, **kw):
+OPEN_SCREEN = {"type": "navigate", "to": "/trip/booking"}   # allowlisted in the app's uiActions.ts only (not pages.py)
+
+
+def _result(text: str, qid: str, open_screen: bool = False, **kw):
+    """open_screen: on start / resume and after the services answer only (the app skips it if already there)."""
     from voice.agent import AgentResult
-    return AgentResult(text, ui_actions=[dict(REFRESH)], action="booking", step=re.sub(r"^t\d+_", "traveller_", qid), **kw)
+    actions = ([dict(OPEN_SCREEN)] if open_screen else []) + [dict(REFRESH)]
+    return AgentResult(text, ui_actions=actions, action="booking", step=re.sub(r"^t\d+_", "traveller_", qid), **kw)
 
 
 SCREEN_HINT = {"hi": "Aap screen par button bhi dabaa sakte hain.", "en": "You can also tap a button on the screen."}
@@ -474,6 +484,7 @@ TYPE_HINT = {"hi": "Aap screen par type bhi kar sakte hain.", "en": "You can als
 TYPE_ONLY = {"hi": "Screen par type kar dijiye.", "en": "Please type it on the screen."}
 NAME_UNCLEAR = {"hi": "Naam samajh nahi aaya. Dobara boliye, ya screen par type kar dijiye.",
                 "en": "I didn't get the name. Please say it again, or type it on the screen."}
+AGE_GUESS = {"hi": "Umar {age} hai? Sahi hai?", "en": "Is the age {age}? Is that right?"}
 DECIDE_OFFER = {"hi": "Kya main 'aap decide karo' maan loon?", "en": "Shall I take it as 'you decide'?"}
 
 
@@ -542,7 +553,7 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
         qid = BF.current_question(s)
         _mark_asked(redis_conn, user_id, s, conversation_id)
         text = _with_intro(BF.prompt_for(s, qid, lang, spoken=True), qid, None, lang)
-        return _result(f"{RESUMED[lang]} {text}" if resumed else text, qid)
+        return _result(f"{RESUMED[lang]} {text}" if resumed else text, qid, open_screen=True)
 
     lang = s.voice_lang if s.voice_lang in BF.PROMPTS else lang   # a bare "Rahul" / "34" doesn't switch language
     if is_cancel(transcript):
@@ -551,7 +562,16 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
 
     qid = BF.current_question(s)
     if s.miss_question != qid:                  # a new question: the miss count starts again
-        s.misses, s.miss_question, s.decide_offer = 0, qid, None
+        s.misses, s.miss_question, s.decide_offer, s.age_guess = 0, qid, None, None
+    if s.age_guess is not None:                 # we asked "Umar 75 hai? Sahi hai?"
+        said = yes_no(transcript)
+        guess, s.age_guess = s.age_guess, None
+        BF.save(redis_conn, user_id, s)
+        if said == "no":
+            _mark_asked(redis_conn, user_id, s, conversation_id)
+            return _result(BF.prompt_for(s, qid, lang, spoken=True), qid)
+        if said == "yes":
+            transcript = str(guess)
     if s.decide_offer == qid:                   # we asked "Kya main 'aap decide karo' maan loon?"
         said = yes_no(transcript)
         s.decide_offer = None
@@ -569,6 +589,10 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
     elif isinstance(value, str) and value.startswith("__new_phone__:"):
         BF.answer(redis_conn, user_id, trip_id, qid, "no")
         s, out = BF.answer(redis_conn, user_id, trip_id, "phone", value.split(":", 1)[1])
+    elif value == "__age_guess__":
+        s.age_guess = age_too
+        _mark_asked(redis_conn, user_id, s, conversation_id)
+        return _result(AGE_GUESS[lang].format(age=age_too), qid)
     elif value == "__ask_airline__":
         _mark_asked(redis_conn, user_id, s, conversation_id)
         return _result(BF.ERRORS[lang]["airline_name_needed"], qid)
@@ -603,7 +627,7 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
         reply = _miss_reply(s, nxt, base, lang, name_unclear=out.error == "name_script")
         _mark_asked(redis_conn, user_id, s, conversation_id)
         return _result(reply, nxt)
-    return _result(_with_intro(prompt, nxt, qid, lang), nxt)
+    return _result(_with_intro(prompt, nxt, qid, lang), nxt, open_screen=qid == "services")
 
 
 def _with_intro(prompt: str, nxt: str, previous: Optional[str], lang: str) -> str:

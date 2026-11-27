@@ -176,6 +176,7 @@ class BookingState:
     finished: bool = False
     editing_services: bool = False                              # Back / "change services": the choice is shown again
     voice_lang: str = "hi"                                      # the language of the sentence that started the voice flow
+    age_guess: Optional[int] = None                             # voice: two ages said ("25, 75"): "Umar 75 hai?" asked
     misses: int = 0                                             # voice: answers not understood for miss_question
     miss_question: Optional[str] = None
     decide_offer: Optional[str] = None                          # voice: "Kya main 'aap decide karo' maan loon?" asked
@@ -747,6 +748,78 @@ def _section(s: BookingState, qid: str) -> Tuple[int, int]:
     return sections.index(name) + 1, len(sections)
 
 
+CARD_LABELS = {
+    "hi": {"services": "Services", "flight_time": "Flight ka time", "flight_airline": "Airline", "train_class": "Train class",
+           "train_time": "Train ka time", "train_tatkal": "Tatkal", "hotel_type": "Hotel type", "hotel_rooms": "Kamre",
+           "phone": "Phone"},
+    "en": {"services": "Services", "flight_time": "Flight time", "flight_airline": "Airline", "train_class": "Train class",
+           "train_time": "Train time", "train_tatkal": "Tatkal", "hotel_type": "Hotel type", "hotel_rooms": "Rooms",
+           "phone": "Phone"},
+}
+NOW_LABELS = {
+    "hi": {"services": "kya book karna hai", "flight_time": "flight ka time", "flight_airline": "airline",
+           "train_class": "train ki class", "train_time": "train ka time", "train_tatkal": "Tatkal",
+           "hotel_type": "hotel ka type", "hotel_rooms": "kamre", "name": "{who} ka naam", "age": "{who} ki umar",
+           "phone": "phone number", "phone_ok": "phone number check", "review": "sab check karein",
+           "change": "kya badalna hai", "prefix": "Ab"},
+    "en": {"services": "what to book", "flight_time": "flight time", "flight_airline": "airline",
+           "train_class": "train class", "train_time": "train time", "train_tatkal": "Tatkal",
+           "hotel_type": "hotel type", "hotel_rooms": "rooms", "name": "{who}'s name", "age": "{who}'s age",
+           "phone": "phone number", "phone_ok": "phone number check", "review": "check everything",
+           "change": "what to change", "prefix": "Now"},
+}
+EMPTY = "-"
+
+
+def _row_key(qid: str) -> Optional[str]:
+    """The card row a question fills (None for the review)."""
+    if qid.endswith("_age_confirm"):
+        qid = qid[: -len("_confirm")]
+    t = _traveller(qid)
+    if t:
+        return f"traveller:{t[0]}"
+    if qid in ("phone", "phone_ok"):
+        return "phone"
+    if qid in ("review", "change"):
+        return None
+    return qid
+
+
+def card(s: BookingState, lang: str = "hi") -> Dict[str, Any]:
+    """The live summary on the booking screen: every field of the chosen services, "-" until answered, the
+    current one marked. Same Redis state as voice, so a voice answer shows up here after the refresh event."""
+    C = CARD_LABELS[lang]
+    qid = current_question(s)
+    now_key = _row_key(qid)
+    rows: List[Dict[str, Any]] = [{"key": "services", "label": C["services"],
+                                   "value": ", ".join(LABELS[lang][x] for x in s.services) if s.services and not s.editing_services
+                                   else EMPTY}]
+    for svc in SERVICES:
+        if svc in s.services:
+            for q in SERVICE_QUESTIONS[svc]:
+                v = s.answers.get(q)
+                rows.append({"key": q, "label": C[q], "value": EMPTY if v is None else _value_label(v, lang)})
+    for i, t in enumerate(s.travellers):
+        name, age = t.get("name"), t.get("age")
+        if name is None and age is None:
+            value = EMPTY
+        else:
+            value = f"{name or EMPTY}, {age if age is not None else EMPTY}" + (" saal" if lang == "hi" and age is not None else "")
+        rows.append({"key": f"traveller:{i}", "label": _person_label(BookingState(s.trip_id, s.adults, s.children), i, lang),
+                     "value": value})
+    rows.append({"key": "phone", "label": C["phone"], "value": f"{s.phone[:5]} {s.phone[5:]}" if s.phone else EMPTY})
+    for r in rows:
+        r["current"] = r["key"] == now_key
+    N = NOW_LABELS[lang]
+    t = _traveller(qid[: -len("_confirm")] if qid.endswith("_confirm") else qid)
+    if t:
+        who = _person_label(BookingState(s.trip_id, s.adults, s.children), t[0], lang)
+        what = N["name" if t[1] == "name" else "age"].format(who=who)
+    else:
+        what = N.get(qid, "")
+    return {"rows": rows, "now": f"{N['prefix']}: {what}" if what else ""}
+
+
 def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict[str, Any]:
     """Everything the screen needs for the current step. No prices, no availability, no suggestions."""
     qid = current_question(s)
@@ -766,6 +839,7 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
         "testNote": TEST_NOTE[lang],
         "error": ERRORS[lang].get(error) if error else None,
         "errorCode": error,
+        "card": card(s, lang),
     }
     if t:
         out["traveller"] = {"index": t[0] + 1, "isChild": _is_child(s, t[0]), "total": s.traveller_count()}

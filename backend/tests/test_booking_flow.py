@@ -382,7 +382,8 @@ with mock.patch.object(openai_client, "chat_tools", fake):
 
     r = turn("hotel book karwana hai")
     check("voice hi: trigger with a service -> its first question", r.action == "booking"
-          and r.reply_text.startswith("Hotel kaisa chahiye") and r.ui_actions == [{"type": "refresh", "what": "booking"}])
+          and r.reply_text.startswith("Hotel kaisa chahiye")
+          and r.ui_actions == [{"type": "navigate", "to": "/trip/booking"}, {"type": "refresh", "what": "booking"}])
     check("voice hi: the screen sees the same state", wsd("booking:get", T2)["question"] == "hotel_type")
     r = turn("aap decide karo")
     check("voice hi: 'aap decide karo' -> next question", r.reply_text.startswith("Kitne kamre"))
@@ -667,6 +668,61 @@ v = ans(T1, "any"); v = ans(T1, "1")
 check("screen: 'Mera naam' value only on traveller 1, nothing filled in", v.get("accountName") == "Asha Ak" and not v["choices"]
       and BF.load(redis_conn, uid_a, T1).travellers[0]["name"] is None)
 wsd("booking:cancel", T1)
+
+
+# ---------------- live card + opening the screen by voice + two voice fixes
+from voice import pages as voice_pages  # noqa: E402
+check("the booking route is NOT a page the model's navigate tool can open", "/trip/booking" not in voice_pages.ROUTES.values())
+NAV = {"type": "navigate", "to": "/trip/booking"}
+with mock.patch.object(openai_client, "chat_tools", fake):
+    redis_conn.delete(key(uid_a, T2))
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    r = say("book karwana hai", CV)
+    check("voice start: the reply opens the booking screen, then refreshes it", r.ui_actions == [NAV, {"type": "refresh", "what": "booking"}])
+    card = wsd("booking:get", T2)["card"]
+    check("card: all '-' at the start, services marked current, 'Ab: kya book karna hai'",
+          card["now"] == "Ab: kya book karna hai" and [r_["key"] for r_ in card["rows"] if r_["current"]] == ["services"]
+          and all(r_["value"] == "-" for r_ in card["rows"]), card)
+    r = say("train aur hotel", CV)
+    check("voice: the reply to the services answer opens the screen too", NAV in r.ui_actions)
+    card = wsd("booking:get", T2)["card"]
+    rows = {r_["key"]: r_ for r_ in card["rows"]}
+    check("card: the services filled in; one row per field of the chosen services, travellers and phone",
+          rows["services"]["value"] == "Train, Hotel" and list(rows) == ["services", "train_class", "train_time", "train_tatkal",
+          "hotel_type", "hotel_rooms", "traveller:0", "traveller:1", "traveller:2", "phone"]
+          and rows["train_class"]["current"] and card["now"] == "Ab: train ki class", list(rows))
+    r = say("2AC", CV)
+    check("voice: later answers don't navigate", NAV not in r.ui_actions and r.ui_actions == [{"type": "refresh", "what": "booking"}])
+    check("card: a voice answer fills its field", {r_["key"]: r_["value"] for r_ in wsd("booking:get", T2)["card"]["rows"]}["train_class"] == "2AC")
+    v = ans(T2, "evening")
+    check("card: a tap answer fills its field", {r_["key"]: r_["value"] for r_ in v["card"]["rows"]}["train_time"] == "Shaam")
+    say("haan", CV)
+    r = say("फ्री स्टार", CV)
+    check("free star: 'फ्री स्टार' at the hotel type -> 3-star", BF.load(redis_conn, uid_a, T2).answers.get("hotel_type") == "3star"
+          and r.reply_text.startswith("Kitne kamre"), r.reply_text)
+    say("do", CV); say("Ramesh", CV)
+    r = say("पच्चीस, पचहत्तर वर्ष", CV)
+    check("two ages said -> 'Umar 75 hai? Sahi hai?' (nothing stored yet)", r.reply_text == "Umar 75 hai? Sahi hai?"
+          and BF.load(redis_conn, uid_a, T2).travellers[0]["age"] is None, r.reply_text)
+    r = say("nahi", CV)
+    check("two ages: 'nahi' asks the age again", r.reply_text == "Ramesh ki umar?" and BF.load(redis_conn, uid_a, T2).travellers[0]["age"] is None)
+    say("पच्चीस, पचहत्तर वर्ष", CV)
+    r = say("haan", CV)
+    check("two ages: 'haan' stores the last number", BF.load(redis_conn, uid_a, T2).travellers[0]["age"] == 75 and r.reply_text == "Yatri 2 ka naam?", r.reply_text)
+    say("Priya", CV)
+    r = say("tees, tees saal", CV)
+    check("two ages: the same number twice is accepted", BF.load(redis_conn, uid_a, T2).travellers[1]["age"] == 30, r.reply_text)
+    rows = {r_["key"]: r_["value"] for r_ in wsd("booking:get", T2)["card"]["rows"]}
+    check("card: travellers as 'name, age saal', the next one '-'", rows["traveller:0"] == "Ramesh, 75 saal" and rows["traveller:1"] == "Priya, 30 saal"
+          and rows["traveller:2"] == "-", rows)
+    r = say("kuch aur baat", "conv_elsewhere")
+    r = say("booking jaari rakho", "conv_elsewhere")
+    check("voice resume: opens the screen again", NAV in r.ui_actions)
+    rows2 = {r_["key"]: r_["value"] for r_ in wsd("booking:start", T2)["card"]["rows"]}
+    check("leaving and coming back keeps every value on the card", rows2 == rows)
+    check("free star only at the hotel type question", V.parse_choice("train_class", "free star") is None
+          and V.parse_choice("hotel_type", "free star") == "3star" and V.parse_choice("flight_time", "free star") is None)
+    BF.cancel(redis_conn, uid_a, T2)
 
 logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
