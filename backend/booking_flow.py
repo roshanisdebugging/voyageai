@@ -1138,6 +1138,29 @@ def correct_name(redis_conn, user_id: str, trip_id: str, index: int, name: Optio
     return s, Outcome(True)
 
 
+def edit_field(redis_conn, user_id: str, trip_id: str, field: str) -> Tuple[Optional[BookingState], bool]:
+    """Voice, at the review only: clear ONE answer ("flight_airline", "hotel_rooms", "phone", ...) or the travellers
+    ("travellers" / "traveller:N"), so only that question is asked again and the flow comes back to the review.
+    Every other answer stays. (state, done); done False = not at the review or not one of this flow's questions."""
+    s = load(redis_conn, user_id, trip_id)
+    if s is None:
+        return None, False
+    if s.finished or current_question(s) != "review":
+        return s, False
+    if field == "phone":
+        s.phone, s.phone_ok = None, False
+    elif field == "travellers" or field.startswith("traveller:"):
+        if not change_part(s, field):
+            return s, False
+    elif field in question_ids(s) and field in s.answers:
+        s.answers.pop(field)
+    else:
+        return s, False
+    save(redis_conn, user_id, s)
+    log_event("review_edit", s, field=re.sub(r"^traveller:\d+$", "traveller", field))   # the field id only
+    return s, True
+
+
 def back(redis_conn, user_id: str, trip_id: str) -> Optional[BookingState]:
     s = load(redis_conn, user_id, trip_id)
     if s is None:

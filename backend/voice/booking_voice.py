@@ -193,6 +193,8 @@ def numbers_in(toks: List[str]) -> List[int]:
 
 
 _AGE_UNITS = _set("saal", "sal", "saal", "baras", "varsh", "years", "year", "yrs", "साल", "वर्ष", "बरस")
+# The word "age" said before the number ("रोहन, उमर बाईस साल"): never part of a name, read like "saal".
+_AGE_LABELS = _set("umar", "umr", "umra", "age", "उमर", "उम्र", "उमृ", "उम्")
 
 
 # ---------------- phone digits ("nau aath saat...", "double five", "नौ आठ", "98765 43210", "plus 91 ...")
@@ -275,7 +277,7 @@ def _strip_lead_in(toks: List[str]) -> List[str]:
 
 def _name_word(t: str) -> bool:
     return not (t.isdigit() or t in NUMBER_WORDS or t in _EN_UNITS or t in _EN_TENS or t in _NAME_FILLER
-                or t in _AGE_UNITS or t in _NAME_EXTRA_FILLER)
+                or t in _AGE_UNITS or t in _AGE_LABELS or t in _NAME_EXTRA_FILLER)
 
 
 def name_parts(toks: List[str]) -> Tuple[List[str], List[int], List[str]]:
@@ -305,7 +307,7 @@ def name_and_age(text: str) -> Tuple[Optional[str], Optional[int], bool]:
     """(name, age, unsure). Code only: filler words and numbers are taken out; `unsure` = a word next to "saal"
     that we can't read as a number (it would end up inside the name)."""
     words, ages, age_seg = name_parts(tokens(text))
-    unsure = bool(set(age_seg) & _AGE_UNITS) and not ages
+    unsure = bool(set(age_seg) & (_AGE_UNITS | _AGE_LABELS)) and not ages
     name = " ".join(w.capitalize() if w.isascii() else w for w in words) or None
     return name, (ages[0] if len(ages) == 1 else None), unsure or len(ages) > 1
 
@@ -413,16 +415,24 @@ def parse_choice(qid: str, text: str) -> Any:
 # used at the airline question only ("IndiGo" heard as "हिंदी को").
 
 AIRLINE_CHECK = "__airline_check__:"
-_HEARD_AS = {"IndiGo": ("हिंदी को", "hindi ko")}
+# "Air India" heard as just "India" / "इंडिया" (and close spellings); "India Express" stays Air India Express.
+_HEARD_AS = {"IndiGo": ("हिंदी को", "hindi ko"),
+             "Air India": ("india", "indiya", "indya", "इंडिया", "इण्डिया", "इंडीया", "एयर इण्डिया", "एअर इण्डिया",
+                           "एर इंडिया", "हेयर इंडिया", "hair india", "air indya", "एयरइण्डिया"),
+             "Air India Express": ("india express", "indiya express", "इंडिया एक्सप्रेस", "इण्डिया एक्सप्रेस",
+                                   "एर इंडिया एक्सप्रेस", "हेयर इंडिया एक्सप्रेस")}
 _AIRLINE_PHRASES = sorted({(tuple(tokens(alias)), name) for name, aliases in BF.AIRLINES
                            for alias in aliases + (name,) + _HEARD_AS.get(name, ())}, key=lambda x: -len(x[0]))
+_SAID_PHRASES = sorted({(tuple(tokens(alias)), name) for name, aliases in BF.AIRLINES
+                        for alias in aliases + (name,)}, key=lambda x: -len(x[0]))
 
 
-def airlines_in(toks: List[str]) -> List[str]:
-    """The known airlines said, longest form first ("air india express" is not also "air india")."""
+def airlines_in(toks: List[str], heard: bool = True) -> List[str]:
+    """The known airlines said, longest form first ("air india express" is not also "air india").
+    heard=False: only the airlines' own names (no mishearings such as a bare "India")."""
     used = [False] * len(toks)
     found: List[str] = []
-    for phrase, name in _AIRLINE_PHRASES:
+    for phrase, name in (_AIRLINE_PHRASES if heard else _SAID_PHRASES):
         n = len(phrase)
         for i in range(len(toks) - n + 1):
             if tuple(toks[i:i + n]) == phrase and not any(used[i:i + n]):
@@ -549,6 +559,130 @@ def _fix_target(s: BF.BookingState, qid: str) -> Optional[Tuple[int, str]]:
     return None
 
 
+# ---------------- a voice edit at the review: "एयरलाइन का नाम एयर इंडिया", "hotel 4 star", "phone number badlo"
+# The sentence names ONE field: only that question is asked again (or the new value said with it is applied through
+# the usual checks), every other answer stays, and the review is read again. A field word wins over "naam":
+# "एयरलाइन का नाम" is the airline. The travellers only with a yatri word plus naam / umar / a change word, or
+# "naam badlo". Nothing recognised: None (the review's usual answers: yes / no / "Samajh nahi aaya").
+
+_F_AIRLINE = _set("airline", "airlines", "airways", "एयरलाइन", "एयरलाइंस", "एयरलाइन्स", "एयरवेज")
+_F_TIME = _set("time", "timing", "samay", "waqt", "vakt", "टाइम", "टाइमिंग", "समय", "वक्त", "वक़्त")
+_F_ROOMS = _set("kamra", "kamre", "kamron", "room", "rooms", "कमरा", "कमरे", "कमरों", "रूम", "रूम्स")
+_F_CLASS = _set("class", "क्लास", "tier", "टियर", "coach", "कोच") | _SLEEPER
+_F_TATKAL = _set("tatkal", "tatkaal", "तत्काल", "तत्कल")
+_F_PHONE = _set("phone", "mobile", "फोन", "फ़ोन", "मोबाइल")
+_F_NUMBER = _set("number", "नंबर", "नम्बर")
+_F_PEOPLE = _set("yatri", "yatriyon", "yaatri", "traveller", "travellers", "traveler", "travelers", "passenger",
+                 "यात्री", "यात्रियों", "यात्रि") | _YATRI_LIKE
+_F_PEOPLE_WITH = _NAME_MARKERS | _AGE_LABELS | _set("badlo", "badal", "badalna", "badliye", "change", "galat",
+                                                     "बदलो", "बदल", "बदलना", "बदलिए", "चेंज", "गलत")
+_ALL_TIME_WORDS = set().union(*_TIMES.values())
+
+
+def _time_value(toks: List[str]) -> Optional[str]:
+    if set(toks) & _NAME_MARKERS:
+        toks = [t for t in toks if t not in _YATRI_LIKE]
+    keys = [k for t in toks for k, ws in _TIMES.items() if t in ws]
+    if len(set(keys)) == 1:
+        return keys[0]
+    if keys and set(toks) & _FIX_NEG:
+        return keys[-1]                           # "subah nahi, raat": the last one said
+    return None
+
+
+def _rooms_value(toks: List[str]) -> Optional[int]:
+    # "do" / "दो" is also "kar do": a number only right before the rooms word ("do kamre").
+    keep = [t for i, t in enumerate(toks) if t not in ("do", "दो") or (i + 1 < len(toks) and toks[i + 1] in _F_ROOMS)]
+    nums = numbers_in(keep)
+    return nums[0] if len(nums) == 1 else None
+
+
+def _phone_value(toks: List[str]) -> Optional[str]:
+    run: List[str] = []
+    for t in toks + ["|"]:                      # the digits said in one run ("98765 43210", "nau aath ...")
+        if t.isdigit() or t in _DIGIT_WORDS or t in _REPEAT or (t in NUMBER_WORDS and 10 <= NUMBER_WORDS[t] <= 99) \
+                or t in _EN_TENS or t in _EN_UNITS:
+            run.append(t)
+            continue
+        if run:
+            got = BF.normalize_phone(phone_digits(" ".join(run)) or "")
+            if got:
+                return got
+        run = []
+    return None
+
+
+def review_edit(s: BF.BookingState, text: str) -> Optional[Tuple[str, Any]]:
+    """(field, value or None) for a sentence at the review that names a field, else None."""
+    toks = tokens(text)
+    if not toks:
+        return None
+    sset = set(toks)
+    qids = BF.question_ids(s)
+    pos: Dict[str, int] = {}
+
+    def seen(field: str, words: set) -> None:
+        at = next((i for i, t in enumerate(toks) if t in words), None)
+        if at is not None and field in qids:
+            pos.setdefault(field, at)
+
+    said_flight, said_train = bool(sset & _SERVICE_WORDS["flight"]), bool(sset & _SERVICE_WORDS["train"])
+    time_words = _F_TIME | _ALL_TIME_WORDS
+    if sset & _NAME_MARKERS:
+        time_words = time_words - _YATRI_LIKE     # "रात्रि एक का नाम" is "यात्री एक का नाम", not "night"
+    if sset & time_words:
+        if said_train and not said_flight:
+            seen("train_time", time_words)
+        elif said_flight and not said_train:
+            seen("flight_time", time_words)
+        elif not said_flight and not said_train:
+            times = [q for q in ("flight_time", "train_time") if q in qids]
+            if len(times) == 1:
+                seen(times[0], time_words)
+    seen("flight_airline", _F_AIRLINE)
+    if "flight_airline" in qids and "flight_airline" not in pos and airlines_in(toks, heard=False):
+        pos["flight_airline"] = 0                 # "मुझे बस एयर इंडिया चेंज करना था"
+    if said_flight and "flight_time" not in pos:
+        seen("flight_airline", _SERVICE_WORDS["flight"])
+    seen("hotel_rooms", _F_ROOMS)
+    if "hotel_rooms" not in pos:
+        seen("hotel_type", _SERVICE_WORDS["hotel"] | _STAR | _LUXURY)
+    seen("train_class", _F_CLASS)
+    seen("train_tatkal", _F_TATKAL)
+    if "phone" in qids:
+        at = next((i for i, t in enumerate(toks) if t in _F_PHONE), None)
+        if at is not None:
+            pos["phone"] = at
+    people = bool(sset & _F_PEOPLE) and bool(sset & _F_PEOPLE_WITH) or any(_has_phrase(toks, p) for p in _FIX_ASK)
+    if not pos and not people and "phone" in qids and sset & _F_NUMBER:
+        pos["phone"] = next(i for i, t in enumerate(toks) if t in _F_NUMBER)
+    if pos:
+        field = min(pos, key=pos.get)             # one change per turn: the field named first
+        if field == "flight_airline":
+            known = airlines_in(toks)
+            value = known[0] if len(known) == 1 else ("cheapest" if sset & _CHEAPEST else None)
+        elif field in ("flight_time", "train_time"):
+            value = _time_value(toks)
+        elif field == "hotel_rooms":
+            value = _rooms_value(toks)
+        elif field == "phone":
+            value = _phone_value(toks)
+        elif field in ("hotel_type", "train_class"):
+            got = parse_choice(field, text)
+            value = got if got not in (None, BF.ANY) else None
+        else:
+            value = None
+        return field, value
+    if people:
+        for i, t in enumerate(toks):              # "yatri 2 ka naam badlo": only that traveller
+            if t in _F_PEOPLE:
+                near = numbers_in(toks[i + 1:i + 2])
+                if near and 1 <= near[0] <= s.traveller_count():
+                    return f"traveller:{near[0] - 1}", None
+        return "travellers", None
+    return None
+
+
 # ---------------- one voice turn
 
 def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -> Tuple[Any, Optional[int], bool]:
@@ -568,7 +702,7 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
         said = yes_no(text)
         if qid == "review" and said != "yes":
             part = parse_part(text)
-            if part:
+            if part and part != "travellers":     # the travellers only through review_edit (never a bare "naam")
                 return f"change:{part}", None, False
         return said, None, False
     if qid == "change":
@@ -774,6 +908,25 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
             if not out.ok:
                 return _result(f"{BF.ERRORS[lang][out.error]} {BF.prompt_for(s, nq, lang, spoken=True)}", nq)
         return _result(BF.prompt_for(s, nq, lang, spoken=True), nq)
+    edit = review_edit(s, transcript) if qid == "review" else None
+    if edit is not None and yes_no(transcript) == "yes" and (
+            edit[1] is None or edit[1] == (s.phone if edit[0] == "phone" else s.answers.get(edit[0]))):
+        edit = None                               # "phone number sahi hai", "IndiGo theek hai": the review's yes
+    if edit is not None:
+        field, new_value = edit
+        s, done = BF.edit_field(redis_conn, user_id, trip_id, field)
+        if s is None:
+            return _result(BF.CANCELLED[lang], "expired")
+        if done and new_value is not None:        # "airline Air India", "hotel 4 star": the usual checks
+            s, out = BF.answer(redis_conn, user_id, trip_id, field, new_value, lang=lang)
+            if s is None:
+                return _result(BF.CANCELLED[lang], "expired")
+        nq = BF.current_question(s)
+        _mark_asked(redis_conn, user_id, s, conversation_id)
+        prompt = BF.prompt_for(s, nq, lang, spoken=True)
+        if done and new_value is not None and not out.ok:
+            return _result(f"{BF.ERRORS[lang][out.error]} {prompt}", nq)
+        return _result(_with_intro(prompt, nq, qid, lang), nq)
     if checked_airline is not None:
         value, age_too, model_used = checked_airline, None, False
     else:
