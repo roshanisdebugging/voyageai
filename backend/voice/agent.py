@@ -1017,6 +1017,9 @@ def confirm_trip(redis_conn, user_id: str, conversation_id: str, lang: str, pend
     if not pc or pc.get("tool") != "create_trip":
         return AgentResult(NOTHING_TO_CONFIRM[lang], action="trip_confirm_none", error_code="no_pending")
     D.delete(redis_conn, user_id, conversation_id)
+    # BR-1006: the trip is done, so this conversation's old turns (the dictation, the read-back) must not let the
+    # model rebuild a draft from a later bare "haan". Only this conversation; the confirm turn itself isn't saved.
+    clear_memory(redis_conn, user_id, conversation_id)
     return AgentResult(CONFIRMED_REPLY[lang], ui_actions=[{"type": "submit_review"}], action="trip_confirm", step="confirmed")
 
 
@@ -1192,6 +1195,50 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
                        error_detail=f"answer tool failed: status={ans.get('status')} code={ans.get('fallback_code')}")
 
 
+# ---------------- a bare acknowledgement with nothing open (BR-1006)
+
+ACK_REPLY = {"hi": "Theek hai.", "en": "Okay."}
+_ACK_MAX_WORDS = 6
+_THANKS_WORDS = {canon(w) for w in (
+    "dhanyavaad", "dhanyavad", "dhanyawad", "dhanyawaad", "shukriya", "sukriya", "thanks", "thank", "thankyou", "you",
+    "u", "ok", "okay", "accha", "acha", "achha", "theek", "thik", "hai", "chalo", "bas", "ji", "haan", "han", "bhai",
+    "sir", "bahut", "very", "much", "so", "great", "nice", "good", "badhiya", "perfect", "done", "cool", "fine",
+    "धन्यवाद", "शुक्रिया", "थैंक", "थैंक्स", "यू", "ओके", "अच्छा", "ठीक", "है", "चलो", "बस", "जी", "हां", "भाई", "बहुत",
+    "बढ़िया", "बढिया")}
+# Words that make a short sentence a request, not a thank-you ("trip bana do", "shuru karo"): it goes to the model.
+_REQUEST_WORDS = {canon(w) for w in (
+    "bana", "banao", "banaiye", "karo", "kar", "kijiye", "shuru", "proceed", "confirm", "trip", "plan", "book", "booking",
+    "बना", "बनाओ", "बनाइए", "करो", "कर", "कीजिए", "शुरू", "कन्फर्म", "ट्रिप", "प्लान", "बुक", "बुकिंग")}
+
+
+def is_acknowledgement(text: str) -> bool:
+    """Only a yes / thanks / ok ("हाँ, बिलकुल.", "हाँ, सही है", "धन्यवाद", "ok chalo"), short, with no request word."""
+    from voice.confirm_words import is_positive_confirmation
+    words = tu_words(text)
+    if not words or len(words) > _ACK_MAX_WORDS or set(words) & _REQUEST_WORDS or any(ch.isdigit() for ch in text):
+        return False                    # "500 hai" answers a question (the digits are not in words())
+    return is_positive_confirmation(text) or set(words) <= _THANKS_WORDS
+
+
+def _model_asked(redis_conn, user_id: str, conversation_id: str) -> bool:
+    """The model's last reply in this conversation asked something ("Kitna budget hai?"): its answer goes to the model."""
+    history = load_memory(redis_conn, user_id, conversation_id)
+    last = next((m.get("content") or "" for m in reversed(history) if m.get("role") == "assistant"), "")
+    return last.rstrip().endswith("?")
+
+
+def _booking_open(redis_conn, user_id: str, trip) -> bool:
+    """A booking flow still open for the open trip: its questions keep their usual handling (never an ack)."""
+    trip_id = getattr(trip, "id", None) if trip is not None else None
+    if not trip_id:
+        return False
+    try:
+        import booking_flow as BF
+        return BF.load(redis_conn, user_id, trip_id) is not None
+    except Exception:
+        return True                     # unsure: the model handles it as before
+
+
 def _booking_turn(transcript: str, lang: str, user_id: str, conversation_id: str, trip, redis_conn):
     from voice import booking_voice
     return booking_voice.safe_handle(transcript, lang, user_id=user_id, conversation_id=conversation_id, trip=trip,
@@ -1279,6 +1326,9 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         result = AgentResult(UNCLEAR_REPLY[lang], action="unclear", error_code="no_words")
     elif is_delete_request(transcript):
         result = delete_refused(lang)   # voice never deletes; no LLM call
+    elif pending_conf is None and draft_state is None and is_acknowledgement(transcript)             and not _booking_open(redis_conn, user_id, trip) and not _model_asked(redis_conn, user_id, conversation_id):
+        # BR-1006: "हाँ, बिलकुल." / "dhanyavaad" with nothing open to answer: a fixed reply, no model call.
+        result = AgentResult(ACK_REPLY[lang], action="ack")
     else:
         from voice import context as trip_context
         if draft_state is not None and skip_kind is None:
@@ -1331,7 +1381,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
 
     if result.pending_actions:
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
-    if result.action not in ("error", "booking"):     # booking answers (names, phone) stay out of the memory
+    # booking answers (names, phone) stay out of the memory; so do acks and the trip confirm (memory just cleared)
+    if result.action not in ("error", "booking", "ack", "trip_confirm"):
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
     logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s%s", result.action,
                 f" step={result.step}" if result.step else "",

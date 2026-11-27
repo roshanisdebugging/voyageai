@@ -990,6 +990,10 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
     if model_used:
         BF.log_event("voice_answer", s, model_used=True, understood=True)
     if out.finished:
+        # BR-1006: the request is saved; this conversation's old turns (and any draft / pending) are dropped so a later
+        # "haan" can't rebuild an old trip draft. Only this conversation.
+        from voice.agent import clear_memory
+        clear_memory(redis_conn, user_id, conversation_id)
         return _result(BF.saved_text(out.request, lang), "done")
     if out.error == "save_failed":             # the Redis state is kept: "haan" again retries
         _mark_asked(redis_conn, user_id, s, conversation_id)
