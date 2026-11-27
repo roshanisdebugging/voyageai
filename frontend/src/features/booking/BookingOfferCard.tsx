@@ -5,7 +5,7 @@ import type { Trip } from '../trip/types';
 import { isPastTrip } from '../trip/tripRepository';
 import { BOOKING_CHANGED } from '../../voice/uiActions';
 import { bookingApi, type BookingView } from './bookingApi';
-import { bookingCardVisible } from './bookingLogic';
+import { bookingCardVisible, requestLine } from './bookingLogic';
 
 /**
  * Booking stage 2: the offer on the trip page once the plan is ready. Tapping a service opens the step screen
@@ -35,6 +35,8 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
 
   if (!visible) return null;
   const inProgress = Boolean(flow?.active);
+  const request = flow?.request ?? null;
+  const status = requestLine(request);
 
   const open = (services?: string[]) => navigate('/trip/booking', { state: { services } });
   const notNow = () => {
@@ -42,10 +44,23 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
     if (inProgress) bookingApi.cancel(trip.id).catch(() => {});
   };
 
+  // Stage 3: an open request (new / contacted): the status instead of the offer (shown to its owner only).
+  if (!inProgress && request?.open && status) {
+    return (
+      <section aria-label="Booking request" className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-3xl p-4 space-y-1 shadow-xs">
+        <p className="wrap-anywhere text-sm font-extrabold text-[var(--color-text-primary)]">{status}</p>
+        <p className="text-[11px] font-medium text-[var(--color-text-secondary)]">Test version: kuch bheja nahi jayega</p>
+      </section>
+    );
+  }
+
   const chip = 'flex min-h-12 flex-1 items-center justify-center gap-1.5 rounded-2xl border border-[#355F58]/30 bg-[#E8F0EE] px-2 text-sm font-extrabold text-(--color-primary) press-scale dark:border-emerald-800 dark:bg-[#12332B]';
 
   return (
     <section aria-label="Booking" className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-3xl p-4 space-y-3 shadow-xs">
+      {!inProgress && status && (
+        <p className="wrap-anywhere text-xs font-bold text-[var(--color-text-secondary)]">{status}</p>
+      )}
       <p className="text-sm font-extrabold text-[var(--color-text-primary)]">
         {inProgress ? `Booking adhoori hai (${flow?.progress?.label ?? ''}). Jaari rakhein?` : 'Train, flight ya hotel book karwana hai?'}
       </p>

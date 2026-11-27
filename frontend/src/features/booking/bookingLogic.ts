@@ -64,3 +64,8 @@ export function changedKeys(prev: Record<string, string> | null, rows: CardRow[]
 export function rowValues(rows: CardRow[]): Record<string, string> {
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
+
+/** Trip page: an open request (new / contacted) replaces the offer with its status line. */
+export function requestLine(req: { requestNo?: string; statusLabel?: string } | null | undefined): string | null {
+  return req?.requestNo ? `Request ${req.requestNo}: ${req.statusLabel ?? ''}`.trim() : null;
+}

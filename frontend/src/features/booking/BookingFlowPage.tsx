@@ -139,9 +139,9 @@ export const BookingFlowPage: React.FC = () => {
       {finishedOrGone && (
         <div className="space-y-4 text-center">
           <p className="text-base font-extrabold text-[var(--color-text-primary)]">
-            {view.finished ? view.message : 'Booking band hai.'}
+            {view.finished || view.request?.open ? (view.message || `Request ${view.request?.requestNo}: ${view.request?.statusLabel}`) : 'Booking band hai.'}
           </p>
-          {!view.finished && (
+          {!view.finished && !view.request?.open && (
             <button type="button" className={choiceCls} onClick={() => void run(() => bookingApi.start(tripId))}>Phir se shuru karein</button>
           )}
           <button type="button" className={primaryCls} onClick={() => navigate('/trip')}>Trip par wapas</button>

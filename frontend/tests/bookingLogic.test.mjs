@@ -60,5 +60,7 @@ check('card: the newly answered row is highlighted', B.changedKeys({ services: '
 check('card: a row going back to "-" (Back) is not highlighted', B.changedKeys({ hotel_type: '3-star' }, rows({ hotel_type: '-' })).length === 0);
 check('card: values map', JSON.stringify(B.rowValues(rows({ a: '1', b: '-' }))) === '{"a":"1","b":"-"}');
 
+check('status line for an open request', B.requestLine({ requestNo: 'BR-1001', statusLabel: 'Save ho gayi' }) === 'Request BR-1001: Save ho gayi');
+check('no request -> no status line', B.requestLine(null) === null && B.requestLine({}) === null);
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

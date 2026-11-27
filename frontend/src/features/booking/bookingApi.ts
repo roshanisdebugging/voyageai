@@ -11,6 +11,9 @@ export type BookingKind = 'services' | 'choice' | 'name' | 'age' | 'phone' | 'ye
 
 export interface BookingCard { rows: { key: string; label: string; value: string; current: boolean }[]; now: string }
 
+/** A saved booking request (stage 3): number and status only, for its owner. */
+export interface BookingRequestInfo { requestNo: string; status: string; statusLabel: string; open: boolean; createdAt?: string | null }
+
 export interface BookingView {
   active: boolean;
   tripId?: string;
@@ -33,6 +36,8 @@ export interface BookingView {
   partnerNotes?: string[];
   /** The live summary: every field of the chosen services, "-" until answered, the current one marked. */
   card?: BookingCard;
+  /** The owner's latest saved request for this trip (null when none). */
+  request?: BookingRequestInfo | null;
   finished?: boolean;
   cancelled?: boolean;
   expired?: boolean;
@@ -66,6 +71,7 @@ export const bookingApi = {
     call('booking:start', tripId, services?.length ? { services } : {}, 'POST', '/start'),
   answer: (tripId: string, question: string, value: string | string[]) =>
     call('booking:answer', tripId, { question, value }, 'POST', '/answer'),
+  request: (tripId: string) => call('booking:request', tripId, {}, 'GET', '/request'),
   back: (tripId: string) => call('booking:back', tripId, {}, 'POST', '/back'),
   cancel: (tripId: string) => call('booking:cancel', tripId, {}, 'DELETE', ''),
 };
