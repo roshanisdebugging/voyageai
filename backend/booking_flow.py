@@ -181,6 +181,7 @@ class BookingState:
     editing_services: bool = False                              # Back / "change services": the choice is shown again
     voice_lang: str = "hi"                                      # the language of the sentence that started the voice flow
     age_guess: Optional[int] = None                             # voice: two ages said ("25, 75"): "Umar 75 hai?" asked
+    airline_guess: Optional[str] = None                         # voice: an airline not in AIRLINES: "<x> airline? Sahi hai?"
     misses: int = 0                                             # voice: answers not understood for miss_question
     miss_question: Optional[str] = None
     decide_offer: Optional[str] = None                          # voice: "Kya main 'aap decide karo' maan loon?" asked
@@ -261,6 +262,43 @@ def name_problem(raw: Any, max_chars: int = NAME_MAX) -> Optional[str]:
     if sum(1 for ch in text if unicodedata.category(ch)[0] == "L") < 2:
         return "invalid"
     return None
+
+
+# ---------------- airlines: the known Indian airlines and how they are said / typed (voice adds STT mishearings)
+
+AIRLINES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("Air India Express", ("air india express", "airindia express", "ai express", "एयर इंडिया एक्सप्रेस",
+                           "एअर इंडिया एक्सप्रेस")),
+    ("Air India", ("air india", "airindia", "air indiya", "एयर इंडिया", "एअर इंडिया", "एयरइंडिया")),
+    ("IndiGo", ("indigo", "indi go", "indigo airlines", "इंडिगो", "इंडीगो", "इण्डिगो", "इंडी गो")),
+    ("SpiceJet", ("spicejet", "spice jet", "spice", "स्पाइसजेट", "स्पाइस जेट", "स्पाइस")),
+    ("Akasa Air", ("akasa", "akasa air", "aakasa", "akasha air", "aakasa air", "आकासा", "अकासा", "आकासा एयर",
+                   "अकासा एयर", "आकाशा एयर")),
+    ("Alliance Air", ("alliance air", "alliance", "एलायंस एयर", "अलायंस एयर", "एलायंस", "अलायंस")),
+    ("Star Air", ("star air", "starair", "स्टार एयर")),
+    ("Fly91", ("fly91", "fly 91", "fly ninety one", "flyninetyone", "फ्लाई 91", "फ्लाई नाइंटी वन")),
+)
+_AIRLINE_SUFFIX = ("airlines", "airline", "airways", "एयरलाइंस", "एयरलाइन", "एयरवेज")
+
+
+def _airline_key(text: str) -> str:
+    kept = [ch if unicodedata.category(ch)[0] in "LMN" else " " for ch in unicodedata.normalize("NFC", text or "").lower()]
+    words = "".join(kept).split()
+    while words and words[-1] in _AIRLINE_SUFFIX:
+        words = words[:-1]
+    return " ".join(words)
+
+
+_AIRLINE_KEYS = {_airline_key(alias): name for name, aliases in AIRLINES for alias in aliases + (name,)}
+
+
+def airline_name(value: Any) -> Optional[str]:
+    """The airline's normal name ("IndiGo") when the whole answer is one of its known forms ("indigo", "इंडिगो",
+    "Spice Jet airlines"); None otherwise."""
+    if not isinstance(value, str):
+        return None
+    k = _airline_key(value)
+    return _AIRLINE_KEYS.get(k) or _AIRLINE_KEYS.get(k.replace(" ", ""))
 
 
 def clean_name(raw: Any, max_chars: int = NAME_MAX) -> Optional[str]:
@@ -466,6 +504,10 @@ def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
     if qid == "flight_airline":
         if value in ("cheapest", ANY):
             s.answers[qid] = value
+            return Outcome(True)
+        known = airline_name(value)
+        if known:                                   # stored (and shown / spoken) by its normal name
+            s.answers[qid] = known
             return Outcome(True)
         problem = name_problem(value, AIRLINE_MAX)
         if problem:
@@ -1029,6 +1071,26 @@ def answer(redis_conn, user_id: str, trip_id: str, question: str, value: Any,
     else:
         save(redis_conn, user_id, s)
     return s, out
+
+
+def correct_name(redis_conn, user_id: str, trip_id: str, index: int, name: Optional[str]) -> Tuple[Optional[BookingState], Outcome]:
+    """Voice: "संज नहीं, रोशन झा" / "naam badlo". Before the review only. The traveller's name is replaced (same checks
+    as any name) or cleared (name None: the name is asked again), and the age is cleared so it is asked again.
+    Nothing else changes; the next question comes from the usual order."""
+    s = load(redis_conn, user_id, trip_id)
+    if s is None:
+        return None, Outcome(False, "expired")
+    if s.finished or not 0 <= index < len(s.travellers):
+        return s, Outcome(False, "stale")
+    if name is not None:
+        problem = name_problem(name)
+        if problem:
+            return s, Outcome(False, "name_script" if problem == "script" else "name_invalid")   # never stored
+    s.travellers[index] = {"name": clean_name(name) if name is not None else None, "age": None}
+    s.age_check = None
+    save(redis_conn, user_id, s)
+    log_event("name_fix", s, new_name=name is not None)       # a flag only
+    return s, Outcome(True)
 
 
 def back(redis_conn, user_id: str, trip_id: str) -> Optional[BookingState]:

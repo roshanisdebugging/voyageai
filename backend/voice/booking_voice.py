@@ -279,7 +279,8 @@ _LUXURY = _set("luxury", "premium", "lakjari", "लक्जरी", "लग्�
 _CHEAPEST = _BUDGET
 _AIRLINE_FILLER = _set("koi", "khaas", "khas", "airline", "airlines", "se", "chahiye", "chaiye", "hai", "mujhe", "wali",
                        "wala", "flight", "ki", "ka", "me", "mein", "prefer", "please", "particular", "कोई", "खास",
-                       "एयरलाइन", "से", "चाहिए", "है", "मुझे", "वाली", "की", "का", "में", "only", "sirf", "सिर्फ")
+                       "एयरलाइन", "से", "चाहिए", "है", "मुझे", "वाली", "की", "का", "में", "only", "sirf", "सिर्फ",
+                       "ko", "को", "airways", "एयरलाइंस", "एयरवेज")
 _PARTS = {"services": _set("services", "service", "seva", "सेवा", "सर्विस"),
           "flight": _SERVICE_WORDS["flight"], "train": _SERVICE_WORDS["train"], "hotel": _SERVICE_WORDS["hotel"],
           "travellers": _set("travellers", "traveller", "travelers", "traveler", "yatri", "yatriyon", "log", "logon",
@@ -340,13 +341,42 @@ def parse_choice(qid: str, text: str) -> Any:
             return "cheapest"
         if is_decide(toks):
             return BF.ANY
+        known = airlines_in(toks)
+        if known:
+            return known[0] if len(known) == 1 else None    # "IndiGo ya Air India": never pick one
         rest = [t for t in toks if t not in _AIRLINE_FILLER]
         if any(other_script(t) for t in rest):
             return None                           # not understood: never stored
         if not rest:
             return "__ask_airline__"            # "koi khaas airline" without a name
-        return " ".join(w.capitalize() if w.isascii() else w for w in rest)
+        heard = " ".join(w.capitalize() if w.isascii() else w for w in rest)
+        if BF.name_problem(heard, BF.AIRLINE_MAX):
+            return None
+        return AIRLINE_CHECK + heard              # not a known airline: "<heard> airline? Sahi hai?" first
     return None
+
+
+# ---------------- airlines (BF.AIRLINES) as they are said; plus speech-to-text mishearings seen in real tests,
+# used at the airline question only ("IndiGo" heard as "हिंदी को").
+
+AIRLINE_CHECK = "__airline_check__:"
+_HEARD_AS = {"IndiGo": ("हिंदी को", "hindi ko")}
+_AIRLINE_PHRASES = sorted({(tuple(tokens(alias)), name) for name, aliases in BF.AIRLINES
+                           for alias in aliases + (name,) + _HEARD_AS.get(name, ())}, key=lambda x: -len(x[0]))
+
+
+def airlines_in(toks: List[str]) -> List[str]:
+    """The known airlines said, longest form first ("air india express" is not also "air india")."""
+    used = [False] * len(toks)
+    found: List[str] = []
+    for phrase, name in _AIRLINE_PHRASES:
+        n = len(phrase)
+        for i in range(len(toks) - n + 1):
+            if tuple(toks[i:i + n]) == phrase and not any(used[i:i + n]):
+                used[i:i + n] = [True] * n
+                if name not in found:
+                    found.append(name)
+    return found
 
 
 _CLASS_NUM_STAR = {w: n for w, n in (("three", 3), ("teen", 3), ("थ्री", 3), ("तीन", 3), ("four", 4), ("char", 4),
@@ -399,6 +429,72 @@ def _said_in(name: str, text: str) -> bool:
     """The model's name must be words the user said (it may not invent or transliterate one)."""
     said = set(tokens(text))
     return bool(name) and all(w in said for w in tokens(name))
+
+
+# ---------------- a name correction: "संज नहीं, रोशन झा", "nahi, naam Roshan Jha hai", "name is Roshan Jha"
+
+_FIX_NEG = _set("nahi", "nahin", "nai", "na", "no", "not", "galat", "wrong", "incorrect", "नहीं", "नही", "ना", "गलत")
+_FIX_NAME = _set("naam", "name", "नाम")
+_FIX_FILLER = _set("sahi", "सही", "correct", "actually", "matlab", "मतलब", "balki", "बल्कि", "to", "toh", "तो", "sorry",
+                   "सॉरी", "hai", "है", "tha", "था", "nahi", "bolo", "boliye", "बोलो", "बोलिए", "likho", "लिखो")
+_FIX_ASK = _phrases("naam badlo", "naam badliye", "naam badal", "naam badalna", "naam change", "change name",
+                    "change the name", "नाम बदलो", "नाम बदलिए", "नाम बदलना", "नाम बदल", "नाम चेंज")
+_FIX_BACK = _set("peeche", "piche", "pichhe", "peechhe", "pichhe", "पीछे", "back")
+_DONT_KNOW = _set("pata", "maloom", "malum", "पता", "मालूम", "know")
+_WHO = _set("yatri", "traveller", "traveler", "यात्री")
+SAY_NAME = {"hi": "Sahi naam boliye.", "en": "Please say the correct name."}
+
+
+def name_fix(text: str, mode: str) -> Optional[Dict[str, Any]]:
+    """A name correction, or None. mode "age": at that traveller's age question (a negation or "naam" word is
+    enough); "confirm": at the age "sahi hai?" step (a new name is needed: a bare "nahi" stays the yes/no answer);
+    "later": a later question before the review ("naam" must be said).
+    Returns {"name": str|None, "age": int|None, "who": index|None, "ask": "name"|"again"}."""
+    toks = tokens(text)
+    sset = set(toks)
+    if not toks or sset & _DONT_KNOW:
+        return None
+    who = None
+    for i, t in enumerate(toks):                 # "yatri 2 ka naam galat hai"
+        if t in _WHO:
+            near = numbers_in(toks[i + 1:i + 2]) or numbers_in(toks[max(0, i - 1):i])
+            if near and near[0] >= 1:
+                who = near[0] - 1
+                toks = toks[:max(0, i - 1)] + [x for x in toks[max(0, i - 1):i + 2] if x not in _WHO
+                                               and not numbers_in([x])] + toks[i + 2:]
+            break
+    asks_again = any(_has_phrase(toks, p) for p in _FIX_ASK) or (mode == "age" and sset & _FIX_BACK and len(toks) <= 3)
+    if asks_again:
+        return {"name": None, "age": None, "who": who, "ask": "again"}
+    neg = [i for i, t in enumerate(toks) if t in _FIX_NEG]
+    has_naam = bool(sset & _FIX_NAME)
+    if not neg and not has_naam:
+        return None
+    if mode == "later" and not has_naam:
+        return None
+    seg = toks[neg[-1] + 1:] if neg else toks
+    nums = numbers_in(seg)
+    words = [t for t in seg if not t.isdigit() and t not in NUMBER_WORDS and t not in _EN_UNITS and t not in _EN_TENS
+             and t not in _NAME_FILLER and t not in _AGE_UNITS and t not in _FIX_NEG and t not in _FIX_FILLER]
+    if not words:
+        if nums or mode == "confirm":
+            return None                          # "nahi, 25" is an age; at "sahi hai?" a bare "nahi" is the answer
+        return {"name": None, "age": None, "who": who, "ask": "name"}
+    name = " ".join(w.capitalize() if w.isascii() else w for w in words)
+    return {"name": name, "age": nums[0] if len(nums) == 1 else None, "who": who, "ask": None}
+
+
+def _fix_target(s: BF.BookingState, qid: str) -> Optional[Tuple[int, str]]:
+    """Whose name a correction is for and how strict to be; None where no correction is taken (name questions,
+    the services questions, the review)."""
+    confirm = qid.endswith("_age_confirm")
+    t = BF._traveller(qid[: -len("_confirm")] if confirm else qid)
+    if t and t[1] == "age":
+        return t[0], ("confirm" if confirm else "age")
+    if qid in ("phone", "phone_ok"):
+        named = [i for i, x in enumerate(s.travellers) if x.get("name")]
+        return (named[-1], "later") if named else None
+    return None
 
 
 # ---------------- one voice turn
@@ -485,6 +581,7 @@ TYPE_ONLY = {"hi": "Screen par type kar dijiye.", "en": "Please type it on the s
 NAME_UNCLEAR = {"hi": "Naam samajh nahi aaya. Dobara boliye, ya screen par type kar dijiye.",
                 "en": "I didn't get the name. Please say it again, or type it on the screen."}
 AGE_GUESS = {"hi": "Umar {age} hai? Sahi hai?", "en": "Is the age {age}? Is that right?"}
+AIRLINE_ASK = {"hi": "{name} airline? Sahi hai?", "en": "{name} airline? Is that right?"}
 DECIDE_OFFER = {"hi": "Kya main 'aap decide karo' maan loon?", "en": "Shall I take it as 'you decide'?"}
 
 
@@ -564,7 +661,7 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
 
     qid = BF.current_question(s)
     if s.miss_question != qid:                  # a new question: the miss count starts again
-        s.misses, s.miss_question, s.decide_offer, s.age_guess = 0, qid, None, None
+        s.misses, s.miss_question, s.decide_offer, s.age_guess, s.airline_guess = 0, qid, None, None, None
     if s.age_guess is not None:                 # we asked "Umar 75 hai? Sahi hai?"
         said = yes_no(transcript)
         guess, s.age_guess = s.age_guess, None
@@ -584,7 +681,55 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
         if said == "yes":
             BF.save(redis_conn, user_id, s)
             transcript = "aap decide karo"
-    value, age_too, model_used = _value_for(s, qid, transcript, extract)
+    checked_airline = None
+    if s.airline_guess is not None:             # we asked "<heard> airline? Sahi hai?"
+        said = yes_no(transcript)
+        guess, s.airline_guess = s.airline_guess, None
+        BF.save(redis_conn, user_id, s)
+        if said == "yes":
+            checked_airline = guess
+        elif said == "no":
+            again = parse_choice(qid, transcript)          # "nahi, IndiGo"
+            if not (isinstance(again, str) and (again in ("cheapest", BF.ANY) or BF.airline_name(again))):
+                _mark_asked(redis_conn, user_id, s, conversation_id)
+                return _result(BF.prompt_for(s, qid, lang, spoken=True), qid)
+    target = _fix_target(s, qid) if s.age_guess is None and s.decide_offer is None else None
+    fix = name_fix(transcript, target[1]) if target else None
+    if fix is not None:
+        who = fix["who"] if fix["who"] is not None and fix["who"] < s.traveller_count() else target[0]
+        if target[1] == "later" or fix["who"] is not None:
+            if not (who < len(s.travellers) and s.travellers[who].get("name")):
+                fix = None                          # nobody's name to correct there: the usual answer
+    if fix is not None:
+        s, out = BF.correct_name(redis_conn, user_id, trip_id, who, fix["name"])
+        if s is None:
+            return _result(BF.CANCELLED[lang], "expired")
+        nq = BF.current_question(s)
+        if not out.ok:
+            reply = NAME_UNCLEAR[lang] if out.error == "name_script" else f"{BF.ERRORS[lang][out.error]} {SAY_NAME[lang]}"
+            _mark_asked(redis_conn, user_id, s, conversation_id)
+            return _result(reply, qid)
+        _mark_asked(redis_conn, user_id, s, conversation_id)
+        if fix["name"] is None:
+            reply = SAY_NAME[lang] if fix["ask"] == "name" else BF.prompt_for(s, nq, lang, spoken=True)
+            return _result(reply, nq)
+        if fix["age"] is not None and nq.endswith("_age"):
+            s, out = BF.answer(redis_conn, user_id, trip_id, nq, fix["age"], lang=lang)
+            if s is None:
+                return _result(BF.CANCELLED[lang], "expired")
+            nq = BF.current_question(s)
+            _mark_asked(redis_conn, user_id, s, conversation_id)
+            if not out.ok:
+                return _result(f"{BF.ERRORS[lang][out.error]} {BF.prompt_for(s, nq, lang, spoken=True)}", nq)
+        return _result(BF.prompt_for(s, nq, lang, spoken=True), nq)
+    if checked_airline is not None:
+        value, age_too, model_used = checked_airline, None, False
+    else:
+        value, age_too, model_used = _value_for(s, qid, transcript, extract)
+    if isinstance(value, str) and value.startswith(AIRLINE_CHECK):
+        s.airline_guess = value[len(AIRLINE_CHECK):]
+        _mark_asked(redis_conn, user_id, s, conversation_id)
+        return _result(AIRLINE_ASK[lang].format(name=s.airline_guess), qid)
     if value == "__new_age__":
         BF.answer(redis_conn, user_id, trip_id, qid, "no")
         s, out = BF.answer(redis_conn, user_id, trip_id, BF.current_question(BF.load(redis_conn, user_id, trip_id)), age_too)

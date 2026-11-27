@@ -204,7 +204,7 @@ check("choices: yes / no / decide", [C("train_tatkal", x) for x in ("haan chaleg
       == ["yes", "no", "no", "any"])
 check("choices: 'koi bhi nahi' is a no, not 'any'", C("train_tatkal", "koi bhi nahi") == "no")
 check("choices: airline", [C("flight_airline", x) for x in ("jo sasta mile", "IndiGo", "koi khaas airline", "you decide")]
-      == ["cheapest", "Indigo", "__ask_airline__", "any"])
+      == ["cheapest", "IndiGo", "__ask_airline__", "any"])
 
 # ---------------- screen: every service combination, "aap decide karo" at every service question
 combos = [list(c) for n in (1, 2, 3) for c in itertools.combinations(BF.SERVICES, n)]
@@ -464,7 +464,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
            ("yes", "Now the travellers' names and ages. Traveller 1's name?"), ("Asha", "How old is Asha"),
            ("thirty four", "Please give one mobile"),
            ("nine eight seven six five four three two one zero", "Number: 9 8 7 6 5, 4 3 2 1 0. Is that right?"),
-           ("yes", "Flight morning, Indigo. Train sleeper, any, Tatkal okay. 1 traveller."), ("yes", "Your request is saved: BR-")]
+           ("yes", "Flight morning, IndiGo. Train sleeper, any, Tatkal okay. 1 traveller."), ("yes", "Your request is saved: BR-")]
     bad = [(t, r.reply_text) for t, want in seq for r in [say(t, CV, trip=TRIP1, stt="en")] if not r.reply_text.startswith(want)]
     check("voice English: flight + train end to end", not bad and not redis_conn.exists(key(uid_a, T1)), bad)
 
@@ -736,9 +736,110 @@ with mock.patch.object(openai_client, "chat_tools", fake):
           and V.parse_choice("hotel_type", "free star") == "3star" and V.parse_choice("flight_time", "free star") is None)
     BF.cancel(redis_conn, uid_a, T2)
 
+    # ---- real test (fix): a name corrected by voice at the age question; "IndiGo" heard as "हिंदी को"
+    redis_conn.delete(key(uid_a, T2))
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    state = lambda t=T2: BF.load(redis_conn, uid_a, t)  # noqa: E731
+    say("flight book karwana hai", CV); say("subah", CV)
+    r = say("हिंदी को चाहिए।", CV)
+    check("airline: 'हिंदी को चाहिए।' (IndiGo misheard) -> IndiGo, next question", state().answers.get("flight_airline") == "IndiGo"
+          and r.reply_text == "Ab yatriyon ke naam aur umar. Yatri 1 ka naam?", r.reply_text)
+    say("Ramesh", CV); say("chalis", CV)
+    r = say("संज्ह।", CV)
+    check("evidence A: the misheard name is taken first", r.reply_text == "संज्ह ki umar?", r.reply_text)
+    r = say("संज नहीं, नाम रोशन झा है।", CV)
+    check("evidence A: 'संज नहीं, नाम रोशन झा है।' replaces the name and asks the age again",
+          r.reply_text == "रोशन झा ki umar?" and state().travellers[1] == {"name": "रोशन झा", "age": None}, r.reply_text)
+    r = say("संज नहीं, रोशन झा।", CV)
+    check("evidence A: 'संज नहीं, रोशन झा।' at the age question: the name again, never an age",
+          r.reply_text == "रोशन झा ki umar?" and state().travellers[1] == {"name": "रोशन झा", "age": None}, r.reply_text)
+    r = say("पच्चीस साल।", CV)
+    check("evidence A: then 'पच्चीस साल।' is the age of the corrected name", state().travellers[1] == {"name": "रोशन झा", "age": 25}
+          and r.reply_text == "Bachche 1 ka naam?", r.reply_text)
+    say("Aryan", CV)
+    r = say("nahi", CV)
+    check("bare 'nahi' at the age question -> 'Sahi naam boliye.', the name is asked again",
+          r.reply_text == "Sahi naam boliye." and BF.current_question(state()) == "t2_name" and state().travellers[2]["name"] is None, r.reply_text)
+    r = say("Arjun", CV)
+    check("bare 'nahi': the next answer is the name", r.reply_text == "Arjun ki umar?" and state().travellers[2]["name"] == "Arjun", r.reply_text)
+    r = say("galat hai", CV)
+    check("bare 'galat hai' at the age question -> 'Sahi naam boliye.'", r.reply_text == "Sahi naam boliye.", r.reply_text)
+    say("Arjun", CV)
+    r = say("naam badlo", CV)
+    check("'naam badlo' at the age question asks the name again", r.reply_text == "Bachche 1 ka naam?" and state().travellers[2]["name"] is None, r.reply_text)
+    say("Arjun", CV)
+    r = say("peeche", CV)
+    check("'peeche' at the age question asks the name again", r.reply_text == "Bachche 1 ka naam?", r.reply_text)
+    say("Arjun", CV)
+    r = say("nahi, naam Aryan hai, umar aath saal", CV)
+    check("Hinglish correction with the age too -> both stored, next question", state().travellers[2] == {"name": "Aryan", "age": 8}
+          and r.reply_text.startswith("Ek mobile number"), r.reply_text)
+    r = say("nahi, naam Rohan hai", CV)
+    check("correction before the review (phone question): the last traveller's name, the age asked again",
+          r.reply_text == "Rohan ki umar?" and state().travellers[2] == {"name": "Rohan", "age": None}, r.reply_text)
+    r = say("aath", CV)
+    check("... then back to the phone question", r.reply_text.startswith("Ek mobile number") and state().travellers[2]["age"] == 8, r.reply_text)
+    r = say("yatri 1 ka naam galat hai, naam Mahesh hai", CV)
+    check("'yatri 1 ka naam galat hai, naam Mahesh hai' at the phone question -> traveller 1", r.reply_text == "Mahesh ki umar?"
+          and state().travellers[0] == {"name": "Mahesh", "age": None} and state().travellers[1]["name"] == "रोशन झा", r.reply_text)
+    say("chalis", CV)
+    r = say("nahi, naam ᱩᱢᱟᱱᱟᱛᱷ hai", CV)
+    check("a correction in another script is refused like any name (nothing changed)",
+          r.reply_text.startswith("Naam samajh nahi aaya") and state().travellers[2]["name"] == "Rohan", r.reply_text)
+    say("9876543210", CV)
+    r = say("haan", CV)
+    check("review: the airline's normal name is spoken ('Flight subah, IndiGo.'), never the misheard words",
+          r.reply_text.startswith("Flight subah, IndiGo.") and "हिंदी" not in r.reply_text, r.reply_text)
+    g = wsd("booking:get", T2)
+    check("review screen: 'Airline: IndiGo'", any("Airline: IndiGo" in x["text"] for x in g["summary"]), g.get("summary"))
+    rows = {r_["key"]: r_["value"] for r_ in g["card"]["rows"]}
+    check("card: corrected names shown", rows["traveller:0"] == "Mahesh, 40 saal" and rows["traveller:1"] == "रोशन झा, 25 saal", rows)
+    BF.cancel(redis_conn, uid_a, T2)
+
+    check("correction phrases (unit)", [ (V.name_fix(t, "age") or {}).get("name") for t in (
+        "संज नहीं, रोशन झा", "नाम रोशन झा है", "nahi, naam Roshan Jha hai", "galat hai, Roshan Jha", "name is Roshan Jha")]
+          == ["रोशन झा", "रोशन झा", "Roshan Jha", "Roshan Jha", "Roshan Jha"])
+    check("not corrections: an age, 'nahi, 25', 'pata nahi'; at 'sahi hai?' a bare 'nahi'; later without 'naam'",
+          V.name_fix("पच्चीस साल।", "age") is None and V.name_fix("nahi, 25", "age") is None and V.name_fix("pata nahi", "age") is None
+          and V.name_fix("nahi", "confirm") is None and V.name_fix("nahi", "later") is None and V.name_fix("98765 43210", "later") is None)
+
+    # ---- airline: known names and an unknown one (asked once before saving)
+    check("airline aliases", [V.parse_choice("flight_airline", t) for t in ("IndiGo", "इंडिगो", "indigo airlines", "air india express",
+          "एयर इंडिया", "spice jet", "akasa air", "alliance air", "star air", "fly ninety one", "IndiGo ya Air India")]
+          == ["IndiGo", "IndiGo", "IndiGo", "Air India Express", "Air India", "SpiceJet", "Akasa Air", "Alliance Air", "Star Air", "Fly91", None])
+    check("'हिंदी को' is IndiGo only at the airline question", V.parse_choice("flight_airline", "हिंदी को") == "IndiGo"
+          and V.parse_choice("flight_time", "हिंदी को") is None)
+    redis_conn.delete(key(uid_a, T1))
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    say("flight book karwana hai", CV, trip=TRIP1); say("raat", CV, trip=TRIP1)
+    r = say("Vistara", CV, trip=TRIP1)
+    check("unknown airline: 'Vistara airline? Sahi hai?' (nothing saved yet)", r.reply_text == "Vistara airline? Sahi hai?"
+          and "flight_airline" not in state(T1).answers, r.reply_text)
+    r = say("nahi", CV, trip=TRIP1)
+    check("unknown airline: 'nahi' asks again", r.reply_text == "Koi khaas airline, ya jo sasta mile?" and "flight_airline" not in state(T1).answers, r.reply_text)
+    say("Vistara", CV, trip=TRIP1)
+    r = say("nahi, IndiGo", CV, trip=TRIP1)
+    check("unknown airline: 'nahi, IndiGo' takes IndiGo", state(T1).answers.get("flight_airline") == "IndiGo", r.reply_text)
+    BF.back(redis_conn, uid_a, T1)
+    say("Vistara", CV, trip=TRIP1)
+    r = say("haan", CV, trip=TRIP1)
+    check("unknown airline: 'haan' keeps it", state(T1).answers.get("flight_airline") == "Vistara"
+          and r.reply_text.startswith("Ab yatriyon ke naam aur umar."), r.reply_text)
+    BF.back(redis_conn, uid_a, T1)
+    say("Vistara", CV, trip=TRIP1)
+    r = say("jo sasta mile", CV, trip=TRIP1)
+    check("unknown airline: another answer instead of haan/nahi is taken as the answer", state(T1).answers.get("flight_airline") == "cheapest", r.reply_text)
+    BF.back(redis_conn, uid_a, T1)
+    v = ans(T1, "indigo")
+    check("screen: typed 'indigo' is stored as 'IndiGo'", state(T1).answers.get("flight_airline") == "IndiGo", v.get("error"))
+    BF.back(redis_conn, uid_a, T1)
+    v = ans(T1, "Vistara")
+    check("screen: a typed unknown airline is kept as typed (no extra question on the screen)", state(T1).answers.get("flight_airline") == "Vistara")
+    BF.cancel(redis_conn, uid_a, T1)
+
 logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
-leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "राहुल", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
+leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "Roshan", "रोशन", "संज", "Mahesh", "Rohan", "Vistara", "हिंदी", "राहुल", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
 check("logs: no names, numbers or words", not leaks, leaks)
 check("database: nothing but booking_requests changed by the whole booking flow", db_snapshot() == BEFORE)
 check("redis: no booking keys left for these users", not list(redis_conn.scan_iter(f"booking:flow:{uid_a}:*"))
