@@ -140,8 +140,16 @@ def init_db():
         import models_package  # trip_stays, trip_transports, trip_expenses
         import models_chat     # chat_messages
         import models_place    # cities
+        import models_booking  # booking_requests (booking stage 3)
 
-        Base.metadata.create_all(bind=engine)
+        # SKIP_BOOKING_TABLE_CREATE=true leaves booking_requests (with its sequence and open-request index) out,
+        # e.g. while this checkout runs against a shared database. Unset = created like every other table.
+        if os.getenv("SKIP_BOOKING_TABLE_CREATE", "").strip().lower() == "true":
+            tables = [t for t in Base.metadata.sorted_tables if t.name != models_booking.TABLE]
+            Base.metadata.create_all(bind=engine, tables=tables)
+            print("[DATABASE INIT] booking_requests skipped (SKIP_BOOKING_TABLE_CREATE=true)")
+        else:
+            Base.metadata.create_all(bind=engine)
 
         with engine.connect() as conn:
             conn.execute(text("""

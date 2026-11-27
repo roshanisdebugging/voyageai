@@ -973,7 +973,7 @@ WS_TRIP_ACTIONS = {
     "trips:refine", "trips:regenerate_itinerary", "trips:swap_activity",
     "trips:set_activity_done", "trips:set_budget",
     # Booking stage 2 (questions only, nothing saved or sent): booking_flow.SCREEN_ACTIONS
-    "booking:get", "booking:start", "booking:answer", "booking:back", "booking:cancel",
+    "booking:get", "booking:start", "booking:answer", "booking:back", "booking:cancel", "booking:request",
 }
 
 # (bucket, requests per minute) per action. Anything not listed uses "general".
@@ -4201,6 +4201,12 @@ def _booking_rest(trip_id: str, action: str, payload: Optional[dict], current_us
 @app.get("/api/trips/{trip_id}/booking", dependencies=[Depends(general_limiter)])
 def booking_get_endpoint(trip_id: str, current_user: AuthUser = Depends(get_current_user), db: Session = Depends(get_db)):
     return _booking_rest(trip_id, "booking:get", None, current_user, db)
+
+
+@app.get("/api/trips/{trip_id}/booking/request", dependencies=[Depends(general_limiter)])
+def booking_request_endpoint(trip_id: str, current_user: AuthUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Read-only: the owner's latest booking request for this trip (number + status), or null."""
+    return _booking_rest(trip_id, "booking:request", None, current_user, db)
 
 
 @app.post("/api/trips/{trip_id}/booking/start", dependencies=[Depends(general_limiter)])

@@ -11,6 +11,7 @@ import io
 import itertools
 import logging
 import os
+import re
 import sys
 import tempfile
 import uuid
@@ -104,11 +105,18 @@ T_PAST = make_trip(uid_a, 1, 0, past=True)
 T_B = make_trip(uid_b, 1, 0)
 
 
+def close_requests():
+    """Stage 3: this flow test starts many flows on the same trips; a saved open request would block the next one.
+    (Saving and the one-open-request rule are tested on local Postgres in test_booking_requests.)"""
+    with database.engine.begin() as c:
+        c.execute(sql("UPDATE booking_requests SET status = 'cancelled' WHERE status IN ('new', 'contacted')"))
+
+
 def db_snapshot():
-    """Every table's rows, hashed: the booking flow must not change the database."""
+    """Every table's rows, hashed: the booking flow changes nothing but booking_requests (stage 3)."""
     out = {}
     with database.engine.connect() as c:
-        for table in sorted(database.Base.metadata.tables):
+        for table in sorted(t for t in database.Base.metadata.tables if t != "booking_requests"):
             rows = c.execute(sql(f'SELECT * FROM "{table}"')).fetchall()
             out[table] = hashlib.sha256(repr(sorted(map(repr, rows))).encode()).hexdigest()
     return out
@@ -124,6 +132,8 @@ def ws(token, action, payload):
 
 
 def wsd(action, trip, token=tok_a, **payload):
+    if action == "booking:start":
+        close_requests()
     f = ws(token, action, {"trip_id": trip, **payload})
     return f["data"] if f["status"] == 200 else {"_status": f["status"], "_error": f["error"]}
 
@@ -218,7 +228,7 @@ for combo in combos:
     ok = ok and any(line["part"] == "traveller:0" and line["text"] == "Asha Ak (34)" for line in v["summary"])
     ok = ok and not any("bujurg" in line["text"].lower() or "elderly" in line["text"].lower() for line in v["summary"])
     v = ans(T1, "yes")
-    ok = ok and v.get("finished") and v["message"] == "Abhi ye test hai. Kuch bheja nahi gaya." and not redis_conn.exists(key(uid_a, T1))
+    ok = ok and v.get("finished") and re.fullmatch(r"Aapki request save ho gayi hai: BR-\d+\. Abhi ye test hai, partner ko nahi bheji gayi\.", v["message"])         and v["request"]["status"] == "new" and not redis_conn.exists(key(uid_a, T1))
     check(f"screen: {'+'.join(combo)} -> only its questions, 'any' accepted, review, test message, state deleted", ok, asked)
 
 # invalid answers + confirm-once ages + read-back no + change one part
@@ -355,6 +365,7 @@ fake = FakeTools()
 
 
 def say(text, conv, trip=TRIP2, user=None, stt="hi"):
+    close_requests()
     return agent.run_agent(text, stt, user_id=user or uid_a, conversation_id=conv, screen="/trip", trip=trip,
                            redis_conn=redis_conn)
 
@@ -429,8 +440,9 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     r = turn("3 star"); r = turn("ek kamra")
     check("voice hi: then the review again", r.reply_text.startswith("Hotel 3-star, ek kamra. Teen yatri."), r.reply_text)
     r = turn("haan")
-    check("voice hi: finish -> 'Abhi ye test hai. Kuch bheja nahi gaya.' and the state is deleted",
-          r.reply_text == "Abhi ye test hai. Kuch bheja nahi gaya." and not redis_conn.exists(key(uid_a, T2)))
+    check("voice hi: finish -> 'Aapki request save ho gayi hai: BR-…' and the state is deleted",
+          re.fullmatch(r"Aapki request save ho gayi hai: BR-\d+\. Abhi ye test hai, partner ko nahi bheji gayi\.", r.reply_text)
+          and not redis_conn.exists(key(uid_a, T2)), r.reply_text)
     check("voice hi: the model was called once only (for the one-letter name code couldn't accept)",
           FakeTools.calls == [["booking_answer"]], FakeTools.calls)
     mem = " ".join(m["content"] for m in agent.load_memory(redis_conn, uid_a, CV))
@@ -441,7 +453,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     seq = [("मुझे ट्रेन बुक करनी है", "Train mein kaunsi class"), ("थर्ड एसी", "Train kis time"), ("शाम", "Tatkal chalega?"),
            ("नहीं", "Ab yatriyon ke naam aur umar. Yatri 1 ka naam?"), ("राहुल शर्मा", "राहुल शर्मा ki umar?"),
            ("चौंतीस साल", "Ek mobile number"), ("नौ आठ सात छह पांच चार तीन दो एक शून्य", "Number: 9 8 7 6 5, 4 3 2 1 0"),
-           ("हां", "Train 3AC, shaam, Tatkal nahi. Ek yatri."), ("हां", "Abhi ye test hai")]
+           ("हां", "Train 3AC, shaam, Tatkal nahi. Ek yatri."), ("हां", "Aapki request save ho gayi hai: BR-")]
     bad = [(t, r.reply_text) for t, want in seq for r in [say(t, CV, trip=TRIP1)] if not r.reply_text.startswith(want)]
     check("voice Devanagari: train flow end to end", not bad and not redis_conn.exists(key(uid_a, T1)), bad)
 
@@ -452,7 +464,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
            ("yes", "Now the travellers' names and ages. Traveller 1's name?"), ("Asha", "How old is Asha"),
            ("thirty four", "Please give one mobile"),
            ("nine eight seven six five four three two one zero", "Number: 9 8 7 6 5, 4 3 2 1 0. Is that right?"),
-           ("yes", "Flight morning, Indigo. Train sleeper, any, Tatkal okay. 1 traveller."), ("yes", "This is a test for now. Nothing was sent.")]
+           ("yes", "Flight morning, Indigo. Train sleeper, any, Tatkal okay. 1 traveller."), ("yes", "Your request is saved: BR-")]
     bad = [(t, r.reply_text) for t, want in seq for r in [say(t, CV, trip=TRIP1, stt="en")] if not r.reply_text.startswith(want)]
     check("voice English: flight + train end to end", not bad and not redis_conn.exists(key(uid_a, T1)), bad)
 
@@ -728,7 +740,7 @@ logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
 leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "राहुल", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
 check("logs: no names, numbers or words", not leaks, leaks)
-check("database: unchanged by the whole booking flow", db_snapshot() == BEFORE)
+check("database: nothing but booking_requests changed by the whole booking flow", db_snapshot() == BEFORE)
 check("redis: no booking keys left for these users", not list(redis_conn.scan_iter(f"booking:flow:{uid_a}:*"))
       and not list(redis_conn.scan_iter(f"booking:flow:{uid_b}:*")))
 

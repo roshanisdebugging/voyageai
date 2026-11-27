@@ -17,7 +17,9 @@ import logging
 import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
-from datetime import date
+import os
+import uuid
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("booking")
@@ -131,6 +133,7 @@ ERRORS = {
         "decide_not_allowed": "Ye aapko batana hoga.",
         "stale": "Ye sawaal badal gaya hai.",
         "trip_past": "Ye trip khatam ho chuki hai.",
+        "save_failed": "Request save nahi ho payi. Thodi der baad phir try kijiye.",
         "no_travellers": "Is trip mein koi yatri nahi hai.",
     },
     "en": {
@@ -147,6 +150,7 @@ ERRORS = {
         "decide_not_allowed": "I need this one from you.",
         "stale": "This question has changed.",
         "trip_past": "This trip is already over.",
+        "save_failed": "The request couldn't be saved. Please try again in a little while.",
         "no_travellers": "This trip has no travellers.",
     },
 }
@@ -401,6 +405,7 @@ class Outcome:
     ok: bool
     error: Optional[str] = None      # an ERRORS code
     finished: bool = False
+    request: Optional[Dict[str, Any]] = None   # the saved booking request (stage 3), at the final confirmation
 
 
 def _drop_service_answers(s: BookingState, svc: str) -> None:
@@ -852,6 +857,102 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
     return out
 
 
+# ---------------- stage 3: the confirmed request (booking_requests)
+
+SAVED = {"hi": "Aapki request save ho gayi hai: {no}. Abhi ye test hai, partner ko nahi bheji gayi.",
+         "en": "Your request is saved: {no}. This is a test for now; it was not sent to the partner."}
+SENT = {"hi": "Aapki request {no} bhej di gayi hai. Partner aapko jaldi sampark karega.",
+        "en": "Your request {no} has been sent. The partner will contact you soon."}
+ALREADY = {"hi": "Aapki request {no} pehle se save hai.", "en": "Your request {no} is already saved."}
+STATUS_LABELS = {
+    "hi": {"new": "Save ho gayi", "contacted": "Partner ne sampark kiya", "booked": "Booking ho gayi", "cancelled": "Cancel"},
+    "en": {"new": "Saved", "contacted": "Partner contacted you", "booked": "Booked", "cancelled": "Cancelled"},
+}
+
+
+class RequestExists(BookingError):
+    """The trip already has an open request: no new flow."""
+
+    def __init__(self, request: Dict[str, Any]):
+        super().__init__("request_exists")
+        self.request = request
+
+
+def notify_enabled() -> bool:
+    """BOOKING_NOTIFY_ENABLED (default false). Until the email step exists, never claim the request was sent."""
+    return os.getenv("BOOKING_NOTIFY_ENABLED", "").strip().lower() == "true"
+
+
+def saved_text(request: Optional[Dict[str, Any]], lang: str) -> str:
+    no = (request or {}).get("requestNo", "")
+    return (SENT if notify_enabled() else SAVED)[lang].format(no=no)
+
+
+def already_text(request: Dict[str, Any], lang: str) -> str:
+    return ALREADY[lang].format(no=request.get("requestNo", ""))
+
+
+def _public(row, lang: str = "hi") -> Dict[str, Any]:
+    """What the owner's screen / voice may show: number and status only (no names, ages or phone)."""
+    from models_booking import OPEN_STATUSES
+    return {"requestNo": row.request_no, "status": row.status,
+            "statusLabel": STATUS_LABELS[lang].get(row.status, row.status), "open": row.status in OPEN_STATUSES,
+            "createdAt": row.created_at.isoformat() if row.created_at else None}
+
+
+def current_request(db, user_id: str, trip_id: str, lang: str = "hi") -> Optional[Dict[str, Any]]:
+    """This user's latest request for this trip (the trip is owner-checked by the caller)."""
+    from models_booking import BookingRequestModel as R
+    row = (db.query(R).filter(R.trip_id == trip_id, R.user_id == user_id)
+           .order_by(R.created_at.desc(), R.request_seq.desc()).first())
+    return _public(row, lang) if row else None
+
+
+def _next_number(db) -> int:
+    from sqlalchemy import func
+    from models_booking import BookingRequestModel as R, FIRST_NUMBER, REQUEST_NO_SEQ
+    if db.get_bind().dialect.name == "postgresql":
+        return int(db.execute(REQUEST_NO_SEQ.next_value()).scalar())
+    return int(db.query(func.max(R.request_seq)).scalar() or FIRST_NUMBER - 1) + 1   # SQLite (tests only)
+
+
+def save_request(s: BookingState, user_id: str, lang: str = "hi") -> Tuple[Dict[str, Any], bool]:
+    """Create the trip's request, or return its open one (a double tap / voice + tap never makes two).
+    The partial unique index decides a race: the loser gets the winner's row. Returns (request, created)."""
+    from sqlalchemy.exc import IntegrityError
+    from database import SessionLocal
+    from models_booking import BookingRequestModel as R, OPEN_STATUSES
+    db = SessionLocal()
+    try:
+        def open_row():
+            return db.query(R).filter(R.trip_id == s.trip_id, R.status.in_(OPEN_STATUSES)).first()
+        row = open_row()
+        if row is not None:
+            return _public(row, lang), False
+        now = datetime.now(timezone.utc)
+        n = _next_number(db)
+        chosen = [q for svc in SERVICES if svc in s.services for q in SERVICE_QUESTIONS[svc]]
+        row = R(id=f"brq_{uuid.uuid4().hex[:16]}", request_seq=n, request_no=f"BR-{n}", trip_id=s.trip_id,
+                user_id=user_id, status="new", services=list(s.services),
+                preferences={q: s.answers[q] for q in chosen if q in s.answers},
+                travellers=[{"name": t.get("name"), "age": t.get("age")} for t in s.travellers],
+                phone=s.phone, partner_note=" ".join(partner_notes(s)) or None,
+                consent_text=CONSENT.get(lang, CONSENT["hi"]), consented_at=now, notify_status="pending",
+                created_at=now, updated_at=now)
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            row = open_row()
+            if row is None:
+                raise
+            return _public(row, lang), False
+        return _public(row, lang), True
+    finally:
+        db.close()
+
+
 # ---------------- entry points (screen WS/REST and voice)
 
 def _trip_is_past(trip) -> bool:
@@ -884,6 +985,10 @@ def start(redis_conn, db, user_id: str, trip, services: Optional[List[str]] = No
     if s is not None:
         log_event("resume", s, step=current_question(s))
         return s
+    existing = current_request(db, user_id, trip.id)
+    if existing and existing["open"]:
+        log_event("start_blocked", None, open_request=True)
+        raise RequestExists(existing)
     if trip.status == "COMPLETED" or _trip_is_past(trip):
         raise BookingError("trip_past")
     adults, children = _counts(trip)
@@ -900,7 +1005,8 @@ def start(redis_conn, db, user_id: str, trip, services: Optional[List[str]] = No
     return s
 
 
-def answer(redis_conn, user_id: str, trip_id: str, question: str, value: Any) -> Tuple[Optional[BookingState], Outcome]:
+def answer(redis_conn, user_id: str, trip_id: str, question: str, value: Any,
+           lang: str = "hi") -> Tuple[Optional[BookingState], Outcome]:
     s = load(redis_conn, user_id, trip_id)
     if s is None:
         return None, Outcome(False, "expired")
@@ -909,8 +1015,17 @@ def answer(redis_conn, user_id: str, trip_id: str, question: str, value: Any) ->
     log_event("answer", s, step=re.sub(r"^t\d+_", "traveller_", qid), answered=out.ok,
               skipped=bool(out.ok and value == ANY), error=out.error or "none")
     if out.finished:
+        # Stage 3: the request row first; the Redis state is deleted only after the row is committed.
+        # A failure keeps the Redis state untouched (the review is asked again) and logs only the error class.
+        try:
+            req, created = save_request(s, user_id, lang)
+        except Exception as err:
+            log_event("request_save_failed", s, error=type(err).__name__)
+            return load(redis_conn, user_id, trip_id), Outcome(False, "save_failed")
         delete(redis_conn, user_id, trip_id)
-        log_event("finish", s, sent=False, older_travellers=older_travellers(s))   # a count only
+        log_event("finish", s, sent=False, created=created, notify=notify_enabled(),
+                  older_travellers=older_travellers(s))   # counts and flags only
+        out.request = req
     else:
         save(redis_conn, user_id, s)
     return s, out
@@ -935,25 +1050,34 @@ def cancel(redis_conn, user_id: str, trip_id: str) -> bool:
 
 # ---------------- the WS / REST response shape
 
-def response(s: Optional[BookingState], out: Optional[Outcome] = None, lang: str = "hi") -> Dict[str, Any]:
+def response(s: Optional[BookingState], out: Optional[Outcome] = None, lang: str = "hi",
+             request: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if out is not None and out.finished:
-        return {"active": False, "finished": True, "message": DONE[lang], "testNote": TEST_NOTE[lang]}
+        return {"active": False, "finished": True, "message": saved_text(out.request, lang), "request": out.request,
+                "testNote": TEST_NOTE[lang]}
     if s is None:
         return {"active": False, "expired": bool(out and out.error == "expired"), "offer": OFFER[lang],
-                "testNote": TEST_NOTE[lang]}
+                "testNote": TEST_NOTE[lang], "request": request}
     return view(s, lang, out.error if out is not None and not out.ok else None)
 
 
-SCREEN_ACTIONS = {"booking:get", "booking:start", "booking:answer", "booking:back", "booking:cancel"}
+SCREEN_ACTIONS = {"booking:get", "booking:start", "booking:answer", "booking:back", "booking:cancel", "booking:request"}
 
 
 def screen_action(redis_conn, db, user_id: str, trip, action: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """WS booking:* and the REST routes. `trip` is the owner-checked trip; the key is always the session user's."""
+    if action == "booking:request":                # read-only: this user's latest request for this trip
+        return {"request": current_request(db, user_id, trip.id)}
     if action == "booking:get":
-        return response(load(redis_conn, user_id, trip.id))
+        s = load(redis_conn, user_id, trip.id)
+        return response(s, request=None if s else current_request(db, user_id, trip.id))
     if action == "booking:start":
         services = data.get("services") if isinstance(data.get("services"), list) else None
-        return response(start(redis_conn, db, user_id, trip, services))
+        try:
+            return response(start(redis_conn, db, user_id, trip, services))
+        except RequestExists as err:
+            return {"active": False, "request": err.request, "message": already_text(err.request, "hi"),
+                    "testNote": TEST_NOTE["hi"]}
     if action == "booking:answer":
         s, out = answer(redis_conn, user_id, trip.id, str(data.get("question") or "")[:40], _screen_value(data.get("value")))
         return response(s, out)
@@ -961,7 +1085,8 @@ def screen_action(redis_conn, db, user_id: str, trip, action: str, data: Dict[st
         return response(back(redis_conn, user_id, trip.id))
     if action == "booking:cancel":
         cancel(redis_conn, user_id, trip.id)
-        return {"active": False, "cancelled": True, "message": CANCELLED["hi"], "offer": OFFER["hi"]}
+        return {"active": False, "cancelled": True, "message": CANCELLED["hi"], "offer": OFFER["hi"],
+                "request": current_request(db, user_id, trip.id)}
     raise ValueError("Unknown booking action")
 
 

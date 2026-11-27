@@ -546,6 +546,8 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
                         return _result(NO_TRIP[lang], "no_trip")
                     s = BF.start(redis_conn, db, user_id, db_trip, services_in(tokens(transcript)))
                     s.voice_lang = asked_lang
+            except BF.RequestExists as err:     # one open request per trip: no new flow
+                return _result(BF.already_text(err.request, lang), "request_exists")
             except BF.BookingError as err:
                 return _result(BF.ERRORS[lang][err.code], "refused")
         if resumed:                             # a resumed flow keeps the language it was started in
@@ -606,14 +608,17 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
     else:
         if value == "__bad_phone__":
             value = "x"
-        s, out = BF.answer(redis_conn, user_id, trip_id, qid, value)
+        s, out = BF.answer(redis_conn, user_id, trip_id, qid, value, lang=lang)
         # "Rahul, 34 saal": the age was said with the name, so it answers the next question too.
         if out.ok and age_too is not None and s is not None and BF.current_question(s) == qid.replace("_name", "_age"):
             s, out = BF.answer(redis_conn, user_id, trip_id, BF.current_question(s), age_too)
     if model_used:
         BF.log_event("voice_answer", s, model_used=True, understood=True)
     if out.finished:
-        return _result(BF.DONE[lang], "done")
+        return _result(BF.saved_text(out.request, lang), "done")
+    if out.error == "save_failed":             # the Redis state is kept: "haan" again retries
+        _mark_asked(redis_conn, user_id, s, conversation_id)
+        return _result(BF.ERRORS[lang]["save_failed"], "review")
     if s is None:
         return _result(BF.CANCELLED[lang], "expired")
     nxt = BF.current_question(s)
