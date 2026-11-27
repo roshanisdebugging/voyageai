@@ -845,7 +845,9 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
     dd = res.draft
     origin_readback_next = (dd.origin_city is not None and not dd.origin_candidate and not dd.origin_is_destination()
                             and dd.next_step() == "confirm_date")
-    if "destination" in res.changed and not prefix and not origin_readback_next:
+    dest_new = "destination" in res.changed and (res.draft.destination or {}).get("id") != prev_dest_id
+    if dest_new and not prefix and not origin_readback_next:
+        # Said only on the turn the destination is first set or changed (the model re-sends it on every update).
         # (not before "<origin> se <destination>, ...": that already names the destination)
         name = (res.draft.destination or {}).get("name", "")
         length = f", {res.draft.days} din" if res.draft.days and lang != "en" else (f", {res.draft.days} days" if res.draft.days else "")

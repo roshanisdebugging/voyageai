@@ -557,11 +557,22 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
     asked_origin(c)
     ra("pata nahi", c)
     r = ra("Goa hi jaana hai", c, {"destination": "Goa"})
-    check("without an origin -> read-back as before, destination said once", r.reply_text == f"Goa. {RB_HI}"
-          and r.reply_text.count("Goa") == 1, r.reply_text)
+    check("without an origin -> read-back as before; Goa was already set, so no 'Goa.' again", r.reply_text == RB_HI
+          and "Goa" not in r.reply_text, r.reply_text)
     c = new_conv()
     r = ra("Kolkata se Goa jaana hai, 3 din", c, {"origin_city": "Kolkata", "destination": "Goa", "days": 3})
     check("a question (not a read-back) keeps the 'Goa, 3 din.' prefix", r.reply_text.startswith("Goa, 3 din. "), r.reply_text)
+    # destination prefix only on the turn it is first set or changed (the model re-sends it on every update)
+    c = new_conv()
+    r = ra("Goa jaana hai", c, {"destination": "Goa"})
+    check("prefix: first time -> 'Goa. Kab se kab tak jaana hai? ...'", r.reply_text.startswith("Goa. "), r.reply_text)
+    r = ra("teen bade log", c, {"destination": "Goa", "adults": 3})
+    check("prefix: destination re-sent unchanged -> no 'Goa.' prefix", not r.reply_text.startswith("Goa") and r.step == "ask", r.reply_text)
+    r = ra("Kolkata se", c, {"destination": "Goa", "origin_city": "Kolkata"})
+    check("prefix: re-sent again with another answer -> still none", not r.reply_text.startswith("Goa."), r.reply_text)
+    r = ra("nahi, Jaipur jaana hai", c, {"destination": "Jaipur"})
+    check("prefix: destination changed -> the new one is said once", r.reply_text.startswith("Jaipur") and r.reply_text.count("Jaipur") >= 1
+          and "Goa" not in r.reply_text, r.reply_text)
     check("the prompt says 'पता' alone is not a city", '"पता" / "pata" alone is NOT a city' in agent.SYSTEM_PROMPT)
 
 # ---------------------------------------------------------------- trip creation (typed form and voice prefill)
