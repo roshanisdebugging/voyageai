@@ -78,7 +78,12 @@ export interface ItineraryActivity {
   bookingRequired?: boolean;
   isConfirmed?: boolean;
   isDone?: boolean;
+  /** Place check (AI itineraries): Google's place id when found; null / missing = not checked (older trips too). */
+  placeId?: string | null;
+  verifyStatus?: PlaceVerifyStatus | null;
 }
+
+export type PlaceVerifyStatus = 'verified' | 'not_found' | 'far';
 
 export interface ItineraryDay {
   id: string;

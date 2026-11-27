@@ -110,10 +110,13 @@ def destination_centre(trip, city: str, search_fn: Callable = None) -> Optional[
 
 
 def resolve(name: str, city: str, search_fn: Callable = None,
-            centre: Optional[Tuple[float, float]] = None) -> Tuple[Optional[Dict[str, Any]], str]:
+            centre: Optional[Tuple[float, float]] = None,
+            radius_km: float = RESOLVE_RADIUS_KM) -> Tuple[Optional[Dict[str, Any]], str]:
     """(place, why). place = {place_id, latitude, longitude, ambiguous} or None.
     why = ok | no_results | outside_radius | no_name_match | unavailable | error:<Class>.
-    One Google search per call ("<name> <city>", the shared, ranked, India-only search)."""
+    One Google search per call ("<name> <city>", the shared, ranked, India-only search).
+    radius_km: card stops use RESOLVE_RADIUS_KM; place_verify passes a wider trip radius (its own distance check
+    then flags a stop far from the rest of its day)."""
     search_fn = search_fn or _default_search
     try:
         found = search_fn(f"{name} {city}")
@@ -130,7 +133,7 @@ def resolve(name: str, city: str, search_fn: Callable = None,
     if not ranked:
         return None, "no_results"
     if centre is not None:
-        ranked = [r for r in ranked if _km(centre[0], centre[1], r[2], r[3]) <= RESOLVE_RADIUS_KM]
+        ranked = [r for r in ranked if _km(centre[0], centre[1], r[2], r[3]) <= radius_km]
         if not ranked:
             return None, "outside_radius"
     scored = [(name_score(name, str(r[1].get("name") or "")), r) for r in ranked]

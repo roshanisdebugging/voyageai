@@ -12,6 +12,7 @@ import { TravelFromHere, TravelOriginBar } from './TravelLeg';
 import { TripBudgetStrip } from './TripBudgetStrip';
 import { MAX_LEGS_PER_DAY } from '../map/mapLogic';
 import { PlanCardInfo, PlanDayLabel, UnresolvedStopNote } from './PlanCardInfo';
+import { PlaceVerifyLabel } from './PlaceVerifyLabel';
 import { planCardOf } from './planCard';
 import { BookingOfferCard } from '../../features/booking/BookingOfferCard';
 
@@ -542,6 +543,7 @@ export const ItineraryView: React.FC = () => {
                             <span className="truncate">{act.locationName || destName}</span>
                           </p>
                           <UnresolvedStopNote meta={planCard} activityId={act.id} />
+                          <PlaceVerifyLabel status={act.verifyStatus} />
                           {/* Travel time from the device's current location (never from the previous activity) */}
                           <TravelFromHere dest={act} routeAllowed={coordRank < MAX_LEGS_PER_DAY} />
                         </div>

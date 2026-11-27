@@ -40,4 +40,7 @@ class ItineraryActivityModel(Base):
     booking_required = Column(Boolean, default=False)
     is_confirmed = Column(Boolean, default=False)             # ALWAYS False for AI recommendations
     is_done = Column(Boolean, default=False)                  # traveler marked it as done
+    # place_verify.py (AI itineraries): Google's place_id when found, and verified / not_found / far (NULL = not checked)
+    place_id = Column(String, nullable=True)
+    verify_status = Column(String, nullable=True)
     booking_reference_id = Column(String, nullable=True)
