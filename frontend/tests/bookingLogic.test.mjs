@@ -62,5 +62,7 @@ check('card: values map', JSON.stringify(B.rowValues(rows({ a: '1', b: '-' }))) 
 
 check('status line for an open request', B.requestLine({ requestNo: 'BR-1001', statusLabel: 'Save ho gayi' }) === 'Request BR-1001: Save ho gayi');
 check('no request -> no status line', B.requestLine(null) === null && B.requestLine({}) === null);
+check('partner email: poll only while sending', B.notifyPending({ notify: 'sending' }) === true
+  && ['sent', 'failed', 'off', undefined].every((n) => B.notifyPending({ notify: n }) === false) && B.notifyPending(null) === false);
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

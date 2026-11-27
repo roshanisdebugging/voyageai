@@ -16,6 +16,9 @@ from database import Base
 
 TABLE = "booking_requests"
 STATUSES = ("new", "contacted", "booked", "cancelled")
+NOTIFY_STATUSES = ("off", "pending", "sending", "sent", "failed")
+# Columns added after the table first shipped: database.init_db adds them to an existing table (Postgres).
+ADDED_COLUMNS = (("notified_at", "TIMESTAMPTZ"), ("notify_error", "VARCHAR(20)"))
 OPEN_STATUSES = ("new", "contacted")
 FIRST_NUMBER = 1001
 REQUEST_NO_SEQ = Sequence("booking_request_no_seq", start=FIRST_NUMBER)   # created with the table (Postgres)
@@ -41,6 +44,9 @@ class BookingRequestModel(Base):
     consent_text = Column(Text, nullable=False)
     consented_at = Column(DateTime(timezone=True), nullable=False)
     notify_status = Column(String, nullable=False, default="pending", server_default="pending")   # the email step
+    # stage 4: off (BOOKING_NOTIFY_ENABLED was false) / pending / sending / sent / failed
+    notified_at = Column(DateTime(timezone=True), nullable=True)           # when the partner email was sent
+    notify_error = Column(String(20), nullable=True)                       # a short class only: auth / timeout / ...
     created_at = Column(DateTime(timezone=True), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False)
 

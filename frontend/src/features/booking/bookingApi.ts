@@ -12,7 +12,12 @@ export type BookingKind = 'services' | 'choice' | 'name' | 'age' | 'phone' | 'ye
 export interface BookingCard { rows: { key: string; label: string; value: string; current: boolean }[]; now: string }
 
 /** A saved booking request (stage 3): number and status only, for its owner. */
-export interface BookingRequestInfo { requestNo: string; status: string; statusLabel: string; open: boolean; createdAt?: string | null }
+export interface BookingRequestInfo {
+  requestNo: string; status: string; statusLabel: string; open: boolean; createdAt?: string | null;
+  /** Stage 4, the partner email: off (not emailed) / sending / sent / failed, and the line to show for it. */
+  notify?: 'off' | 'sending' | 'sent' | 'failed';
+  notifyText?: string;
+}
 
 export interface BookingView {
   active: boolean;

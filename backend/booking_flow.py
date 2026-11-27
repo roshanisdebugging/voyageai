@@ -883,7 +883,7 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
         "selected": list(s.services) if qid == "services" else [],
         "progress": {"step": step, "total": total, "label": f"{step} of {total}"},
         "canBack": qid != "services" or s.choosing_change,
-        "testNote": TEST_NOTE[lang],
+        "testNote": test_note(lang),
         "error": ERRORS[lang].get(error) if error else None,
         "errorCode": error,
         "card": card(s, lang),
@@ -903,8 +903,19 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
 
 SAVED = {"hi": "Aapki request save ho gayi hai: {no}. Abhi ye test hai, partner ko nahi bheji gayi.",
          "en": "Your request is saved: {no}. This is a test for now; it was not sent to the partner."}
-SENT = {"hi": "Aapki request {no} bhej di gayi hai. Partner aapko jaldi sampark karega.",
-        "en": "Your request {no} has been sent. The partner will contact you soon."}
+# Stage 4 (BOOKING_NOTIFY_ENABLED=true): the wording follows notify_status; "bhej di gayi hai" only once really sent.
+SENDING = {"hi": "Aapki request save ho gayi hai: {no}. Partner ko bhej rahe hain.",
+           "en": "Your request is saved: {no}. We are sending it to the partner."}
+SENT = {"hi": "Aapki request save ho gayi hai: {no}. Partner ko bhej di gayi hai, wo {hours} ghante mein sampark karenge.",
+        "en": "Your request is saved: {no}. It has been sent to the partner; they will contact you within {hours} hours."}
+SEND_FAILED = {"hi": "Request save hai ({no}), par partner ko bhejna nahi ho paya. Hum dobara koshish karenge.",
+               "en": "Your request is saved ({no}), but sending it to the partner failed. We will try again."}
+NOTIFY_LINES = {   # the trip page's status card (the request number is on the line above)
+    "hi": {"sending": "Partner ko bhej rahe hain…", "sent": "Partner ko bhej di gayi hai, wo {hours} ghante mein sampark karenge.",
+           "failed": "Partner ko bhejna nahi ho paya. Hum dobara koshish karenge."},
+    "en": {"sending": "Sending it to the partner…", "sent": "Sent to the partner; they will contact you within {hours} hours.",
+           "failed": "Sending it to the partner failed. We will try again."},
+}
 ALREADY = {"hi": "Aapki request {no} pehle se save hai.", "en": "Your request {no} is already saved."}
 STATUS_LABELS = {
     "hi": {"new": "Save ho gayi", "contacted": "Partner ne sampark kiya", "booked": "Booking ho gayi", "cancelled": "Cancel"},
@@ -925,9 +936,27 @@ def notify_enabled() -> bool:
     return os.getenv("BOOKING_NOTIFY_ENABLED", "").strip().lower() == "true"
 
 
+def test_note(lang: str = "hi") -> Optional[str]:
+    """"Test version: kuch bheja nahi jayega" only while nothing is emailed."""
+    return None if notify_enabled() else TEST_NOTE[lang]
+
+
+def notify_state(notify_status: Optional[str]) -> str:
+    """off / sending / sent / failed, as the customer sees it (pending and sending both read "sending")."""
+    if not notify_enabled() or notify_status in (None, "off"):
+        return "off"
+    return {"pending": "sending", "sending": "sending", "sent": "sent", "failed": "failed"}.get(notify_status, "sending")
+
+
 def saved_text(request: Optional[Dict[str, Any]], lang: str) -> str:
-    no = (request or {}).get("requestNo", "")
-    return (SENT if notify_enabled() else SAVED)[lang].format(no=no)
+    request = request or {}
+    no = request.get("requestNo", "")
+    state = request.get("notify") or "off"
+    if not notify_enabled() or state == "off":
+        return SAVED[lang].format(no=no)
+    from booking_mail import reply_hours
+    texts = {"sending": SENDING, "sent": SENT, "failed": SEND_FAILED}[state]
+    return texts[lang].format(no=no, hours=reply_hours())
 
 
 def already_text(request: Dict[str, Any], lang: str) -> str:
@@ -937,9 +966,15 @@ def already_text(request: Dict[str, Any], lang: str) -> str:
 def _public(row, lang: str = "hi") -> Dict[str, Any]:
     """What the owner's screen / voice may show: number and status only (no names, ages or phone)."""
     from models_booking import OPEN_STATUSES
-    return {"requestNo": row.request_no, "status": row.status,
-            "statusLabel": STATUS_LABELS[lang].get(row.status, row.status), "open": row.status in OPEN_STATUSES,
-            "createdAt": row.created_at.isoformat() if row.created_at else None}
+    out = {"requestNo": row.request_no, "status": row.status,
+           "statusLabel": STATUS_LABELS[lang].get(row.status, row.status), "open": row.status in OPEN_STATUSES,
+           "createdAt": row.created_at.isoformat() if row.created_at else None}
+    notify = notify_state(row.notify_status)
+    out["notify"] = notify
+    if notify != "off" and row.status == "new":
+        from booking_mail import reply_hours
+        out["notifyText"] = NOTIFY_LINES[lang][notify].format(hours=reply_hours())
+    return out
 
 
 def current_request(db, user_id: str, trip_id: str, lang: str = "hi") -> Optional[Dict[str, Any]]:
@@ -979,7 +1014,8 @@ def save_request(s: BookingState, user_id: str, lang: str = "hi") -> Tuple[Dict[
                 preferences={q: s.answers[q] for q in chosen if q in s.answers},
                 travellers=[{"name": t.get("name"), "age": t.get("age")} for t in s.travellers],
                 phone=s.phone, partner_note=" ".join(partner_notes(s)) or None,
-                consent_text=CONSENT.get(lang, CONSENT["hi"]), consented_at=now, notify_status="pending",
+                consent_text=CONSENT.get(lang, CONSENT["hi"]), consented_at=now,
+                notify_status="pending" if notify_enabled() else "off",
                 created_at=now, updated_at=now)
         db.add(row)
         try:
@@ -1065,7 +1101,16 @@ def answer(redis_conn, user_id: str, trip_id: str, question: str, value: Any,
             log_event("request_save_failed", s, error=type(err).__name__)
             return load(redis_conn, user_id, trip_id), Outcome(False, "save_failed")
         delete(redis_conn, user_id, trip_id)
-        log_event("finish", s, sent=False, created=created, notify=notify_enabled(),
+        mail = False
+        if notify_enabled() and req.get("notify") == "sending":
+            # Stage 4: the email goes from a background thread (sent once: booking_mail claims the row first).
+            try:
+                import booking_mail
+                booking_mail.send_in_background(req["requestNo"])
+                mail = True
+            except Exception as err:
+                log_event("mail_start_failed", s, error=type(err).__name__)
+        log_event("finish", s, sent=False, created=created, notify=notify_enabled(), mail_started=mail,
                   older_travellers=older_travellers(s))   # counts and flags only
         out.request = req
     else:
@@ -1116,10 +1161,13 @@ def response(s: Optional[BookingState], out: Optional[Outcome] = None, lang: str
              request: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if out is not None and out.finished:
         return {"active": False, "finished": True, "message": saved_text(out.request, lang), "request": out.request,
-                "testNote": TEST_NOTE[lang]}
+                "testNote": test_note(lang)}
     if s is None:
-        return {"active": False, "expired": bool(out and out.error == "expired"), "offer": OFFER[lang],
-                "testNote": TEST_NOTE[lang], "request": request}
+        res = {"active": False, "expired": bool(out and out.error == "expired"), "offer": OFFER[lang],
+               "testNote": test_note(lang), "request": request}
+        if request and request.get("status") == "new" and request.get("notify", "off") != "off":
+            res["message"] = saved_text(request, lang)      # stage 4: the email's real state (sending / sent / failed)
+        return res
     return view(s, lang, out.error if out is not None and not out.ok else None)
 
 
@@ -1139,7 +1187,7 @@ def screen_action(redis_conn, db, user_id: str, trip, action: str, data: Dict[st
             return response(start(redis_conn, db, user_id, trip, services))
         except RequestExists as err:
             return {"active": False, "request": err.request, "message": already_text(err.request, "hi"),
-                    "testNote": TEST_NOTE["hi"]}
+                    "testNote": test_note("hi")}
     if action == "booking:answer":
         s, out = answer(redis_conn, user_id, trip.id, str(data.get("question") or "")[:40], _screen_value(data.get("value")))
         return response(s, out)

@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS booking_requests (
     partner_note   TEXT,
     consent_text   TEXT NOT NULL,
     consented_at   TIMESTAMPTZ NOT NULL,
-    notify_status  VARCHAR NOT NULL DEFAULT 'pending',
+    notify_status  VARCHAR NOT NULL DEFAULT 'pending',   -- off | pending | sending | sent | failed (stage 4)
+    notified_at    TIMESTAMPTZ,                          -- when the partner email was sent
+    notify_error   VARCHAR(20),                          -- auth | timeout | connection | recipient | smtp | config | other
     created_at     TIMESTAMPTZ NOT NULL,
     updated_at     TIMESTAMPTZ NOT NULL
 );
@@ -28,6 +30,10 @@ CREATE INDEX IF NOT EXISTS ix_booking_requests_user_id ON booking_requests (user
 -- One OPEN request per trip (new / contacted); booked and cancelled are closed.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_booking_requests_open_trip
     ON booking_requests (trip_id) WHERE status IN ('new', 'contacted');
+
+-- Stage 4 on a table created before it (init_db runs these too, unless SKIP_BOOKING_TABLE_CREATE=true):
+ALTER TABLE booking_requests ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
+ALTER TABLE booking_requests ADD COLUMN IF NOT EXISTS notify_error VARCHAR(20);
 
 -- ---------- rollback (drops every booking request!)
 -- DROP INDEX IF EXISTS uq_booking_requests_open_trip;

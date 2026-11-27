@@ -66,6 +66,11 @@ export function rowValues(rows: CardRow[]): Record<string, string> {
 }
 
 /** Trip page: an open request (new / contacted) replaces the offer with its status line. */
+/** Stage 4: keep re-reading the request while its partner email is still going out (sending -> sent / failed). */
+export function notifyPending(req: { notify?: string } | null | undefined): boolean {
+  return req?.notify === 'sending';
+}
+
 export function requestLine(req: { requestNo?: string; statusLabel?: string } | null | undefined): string | null {
   return req?.requestNo ? `Request ${req.requestNo}: ${req.statusLabel ?? ''}`.trim() : null;
 }

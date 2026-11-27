@@ -1,11 +1,14 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plane, TrainFront, BedDouble } from 'lucide-react';
 import type { Trip } from '../trip/types';
 import { isPastTrip } from '../trip/tripRepository';
 import { BOOKING_CHANGED } from '../../voice/uiActions';
 import { bookingApi, type BookingView } from './bookingApi';
-import { bookingCardVisible, requestLine } from './bookingLogic';
+import { bookingCardVisible, notifyPending, requestLine } from './bookingLogic';
+
+const POLL_MS = 5000;
+const POLL_MAX = 36;   // about 3 minutes: the email takes seconds, or ~1 minute with its one retry
 
 /**
  * Booking stage 2: the offer on the trip page once the plan is ready. Tapping a service opens the step screen
@@ -16,6 +19,7 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
   const navigate = useNavigate();
   const [dismissed, setDismissed] = useState(false);
   const [flow, setFlow] = useState<BookingView | null>(null);
+  const polls = useRef(0);
   const visible = bookingCardVisible(trip.itineraryStatus, isPastTrip(trip), dismissed);
 
   const reload = useCallback(() => {
@@ -33,6 +37,15 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
     };
   }, [reload]);
 
+  // Stage 4: while the partner email is going out, re-read the request so the card turns to sent / failed.
+  const sending = notifyPending(flow?.request);
+  useEffect(() => {
+    if (!sending) { polls.current = 0; return; }
+    if (polls.current >= POLL_MAX) return;
+    const t = window.setTimeout(() => { polls.current += 1; reload(); }, POLL_MS);
+    return () => window.clearTimeout(t);
+  }, [sending, flow, reload]);
+
   if (!visible) return null;
   const inProgress = Boolean(flow?.active);
   const request = flow?.request ?? null;
@@ -49,7 +62,9 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
     return (
       <section aria-label="Booking request" className="bg-[var(--color-surface)] border border-[var(--color-border)] dark:border-zinc-700 rounded-3xl p-4 space-y-1 shadow-xs">
         <p className="wrap-anywhere text-sm font-extrabold text-[var(--color-text-primary)]">{status}</p>
-        <p className="text-[11px] font-medium text-[var(--color-text-secondary)]">Test version: kuch bheja nahi jayega</p>
+        {(request.notifyText || flow?.testNote) && (
+          <p role="status" className="wrap-anywhere text-xs font-medium text-[var(--color-text-secondary)]">{request.notifyText || flow?.testNote}</p>
+        )}
       </section>
     );
   }
@@ -76,7 +91,7 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
         </div>
       )}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">Test version: kuch bheja nahi jayega</span>
+        <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">{flow?.testNote ?? ''}</span>
         <button type="button" onClick={notNow} className="min-h-11 shrink-0 px-2 text-xs font-bold text-[var(--color-text-secondary)] hover:underline">
           Abhi nahi
         </button>

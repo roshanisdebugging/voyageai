@@ -150,6 +150,10 @@ def init_db():
             print("[DATABASE INIT] booking_requests skipped (SKIP_BOOKING_TABLE_CREATE=true)")
         else:
             Base.metadata.create_all(bind=engine)
+            if engine.dialect.name == "postgresql":     # columns added later (create_all doesn't add them)
+                with engine.begin() as conn:
+                    for col, sql_type in models_booking.ADDED_COLUMNS:
+                        conn.execute(text(f"ALTER TABLE {models_booking.TABLE} ADD COLUMN IF NOT EXISTS {col} {sql_type}"))
 
         with engine.connect() as conn:
             conn.execute(text("""

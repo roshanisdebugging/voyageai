@@ -5,7 +5,7 @@ import { useTrip } from '../trip/TripContext';
 import { BOOKING_CHANGED } from '../../voice/uiActions';
 import { bookingApi, type BookingView } from './bookingApi';
 import { BookingLiveCard } from './BookingLiveCard';
-import { cleanAgeInput, cleanPhoneInput, nameProblem, toggleService, NAME_MAX, NAME_MESSAGES } from './bookingLogic';
+import { cleanAgeInput, cleanPhoneInput, nameProblem, notifyPending, toggleService, NAME_MAX, NAME_MESSAGES } from './bookingLogic';
 
 /**
  * Booking stage 2: one question at a time (the server decides which), large tap choices, typed names / ages / phone,
@@ -71,6 +71,15 @@ export const BookingFlowPage: React.FC = () => {
     };
   }, [tripId, show]);
 
+  // Stage 4: after the confirm, re-read while the partner email is going out (the message turns to sent / failed).
+  const sending = Boolean(view && !view.active && notifyPending(view.request));
+  const polls = useRef(0);
+  useEffect(() => {
+    if (!tripId || !sending || polls.current >= 36) return;
+    const t = window.setTimeout(() => { polls.current += 1; bookingApi.get(tripId).then(show).catch(() => {}); }, 5000);
+    return () => window.clearTimeout(t);
+  }, [tripId, sending, view, show]);
+
   if (!tripId) {
     return (
       <div className="max-w-xl mx-auto px-4 pt-10 pb-28 text-center space-y-4">
@@ -119,9 +128,11 @@ export const BookingFlowPage: React.FC = () => {
         {view?.active && <span className="text-xs font-bold text-[var(--color-text-secondary)]">{view.progress?.label}</span>}
       </div>
 
-      <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-        Test version: kuch bheja nahi jayega
-      </p>
+      {view?.testNote && (
+        <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          {view.testNote}
+        </p>
+      )}
 
       {loadError && (
         <div className="space-y-3">
@@ -138,7 +149,7 @@ export const BookingFlowPage: React.FC = () => {
 
       {finishedOrGone && (
         <div className="space-y-4 text-center">
-          <p className="text-base font-extrabold text-[var(--color-text-primary)]">
+          <p role="status" className="text-base font-extrabold text-[var(--color-text-primary)]">
             {view.finished || view.request?.open ? (view.message || `Request ${view.request?.requestNo}: ${view.request?.statusLabel}`) : 'Booking band hai.'}
           </p>
           {!view.finished && !view.request?.open && (

@@ -37,6 +37,9 @@ dotenv.load_dotenv = lambda *a, **k: None          # database.py must not load b
 os.environ["DATABASE_URL"] = CI_URL.render_as_string(hide_password=False)
 os.environ.pop("SKIP_BOOKING_TABLE_CREATE", None)
 os.environ.pop("BOOKING_NOTIFY_ENABLED", None)
+for _k in ("SMTP_HOST", "SMTP_PORT", "BOOKING_REPLY_HOURS"):
+    os.environ.pop(_k, None)
+os.environ.update({"SMTP_USER": "sender@example.com", "SMTP_PASSWORD": "fake-smtp-pw", "PARTNER_EMAIL": "partner@example.com"})
 os.environ.pop("VOICE_DEBUG_STORE", None)
 os.environ["AI_PROVIDER"] = "mock"
 os.environ["OPENAI_API_KEY"] = "test-key-not-real"
@@ -81,6 +84,7 @@ try:
           and database.engine.url.database == CI_DB, f"{database.engine.url.host}/{database.engine.url.database}")
     import main  # noqa: E402  (runs init_db on voyage_booking_ci)
     import booking_flow as BF  # noqa: E402
+    import booking_mail  # noqa: E402
     import openai_client  # noqa: E402
     from fastapi.testclient import TestClient  # noqa: E402
     from models_booking import BookingRequestModel as R  # noqa: E402
@@ -107,7 +111,7 @@ try:
     print("booking_requests columns:", ", ".join(cols))
     check("table created by init_db with every column", cols == ["id", "request_seq", "request_no", "trip_id", "user_id", "status",
           "services", "preferences", "travellers", "phone", "partner_note", "consent_text", "consented_at", "notify_status",
-          "created_at", "updated_at"], cols)
+          "notified_at", "notify_error", "created_at", "updated_at"], cols)
     check("partial unique index on trip_id for open statuses", idx and "UNIQUE" in idx and "(trip_id)" in idx
           and "'new'" in idx and "'contacted'" in idx, idx)
     check("request numbers start at 1001 (sequence)", seq_start == 1001, seq_start)
@@ -176,8 +180,8 @@ try:
     v = ans(T1, "yes")
     rs = rows(T1)
     row = rs[0] if rs else None
-    check("confirm: one row, BR-1001, status new, notify pending", len(rs) == 1 and row.request_no == "BR-1001" and row.request_seq == 1001
-          and row.status == "new" and row.notify_status == "pending")
+    check("confirm: one row, BR-1001, status new, notify off (BOOKING_NOTIFY_ENABLED unset: nothing sent)", len(rs) == 1
+          and row.request_no == "BR-1001" and row.request_seq == 1001 and row.status == "new" and row.notify_status == "off")
     check("confirm: the right values", row.user_id == uid_a and row.services == ["hotel"]
           and row.preferences == {"hotel_type": "3star", "hotel_rooms": 2} and row.travellers == [{"name": "Dadaji Sharma", "age": 75}]
           and row.phone == "9876543210" and row.partner_note == "1 yatri 60 saal ya usse upar hain; lift ya ground floor wala kamra dekhein."
@@ -263,12 +267,34 @@ try:
             r = agent.run_agent("haan", "hi", user_id=uid_a, conversation_id=CV, screen="/trip", trip=TRIP4, redis_conn=redis_conn)
         check("db failure (voice): the retry message, state kept", r.reply_text == "Request save nahi ho payi. Thodi der baad phir try kijiye."
               and redis_conn.exists(key(uid_a, T4)), r.reply_text)
+        # stage 4: notify on; SMTP is simulated (nothing leaves this machine), the thread is joined to see the end state
+        sent_mail, threads = [], []
+        real_bg = booking_mail.send_in_background
+
+        def bg(no):
+            t = real_bg(no)
+            threads.append(t)
+            return t
         os.environ["BOOKING_NOTIFY_ENABLED"] = "true"
-        r = agent.run_agent("haan", "hi", user_id=uid_a, conversation_id=CV, screen="/trip", trip=TRIP4, redis_conn=redis_conn)
-        os.environ.pop("BOOKING_NOTIFY_ENABLED")
+        with mock.patch.object(booking_mail, "smtp_send", lambda msg, cfg: sent_mail.append(msg)),                 mock.patch.object(booking_mail, "send_in_background", bg):
+            r = agent.run_agent("haan", "hi", user_id=uid_a, conversation_id=CV, screen="/trip", trip=TRIP4, redis_conn=redis_conn)
+            for t in threads:
+                t.join(10)
         no4 = rows(T4)[0].request_no if rows(T4) else None
-        check("voice 'haan' again saves it; notify on -> 'bhej di gayi hai'", r.reply_text ==
-              f"Aapki request {no4} bhej di gayi hai. Partner aapko jaldi sampark karega." and not redis_conn.exists(key(uid_a, T4)), r.reply_text)
+        check("voice 'haan' again saves it; notify on -> 'Partner ko bhej rahe hain' (not yet 'bhej di')", r.reply_text ==
+              f"Aapki request save ho gayi hai: {no4}. Partner ko bhej rahe hain." and not redis_conn.exists(key(uid_a, T4)), r.reply_text)
+        row4 = rows(T4)[0]
+        check("postgres: the email was sent once in the background -> notify_status sent, notified_at set",
+              len(sent_mail) == 1 and row4.notify_status == "sent" and row4.notified_at is not None and row4.notify_error is None,
+              (len(sent_mail), row4.notify_status))
+        g = wsd("booking:get", T4)
+        check("screen after sending: 'bhej di gayi hai, wo 2 ghante mein sampark karenge' + the card line",
+              g.get("message") == f"Aapki request save ho gayi hai: {no4}. Partner ko bhej di gayi hai, wo 2 ghante mein sampark karenge."
+              and g["request"]["notify"] == "sent" and g["request"]["notifyText"].startswith("Partner ko bhej di gayi hai")
+              and g.get("testNote") is None, g)
+        check("postgres: a second send for the same request is skipped", booking_mail.notify_request(no4, send=lambda m, c: sent_mail.append(m))
+              == "skipped" and len(sent_mail) == 1)
+        os.environ.pop("BOOKING_NOTIFY_ENABLED")
         r = agent.run_agent("book karwana hai", "hi", user_id=uid_a, conversation_id=CV + "x", screen="/trip", trip=TRIP4, redis_conn=redis_conn)
         check("voice trigger with an open request: 'pehle se save hai', no new flow",
               r.reply_text == f"Aapki request {no4} pehle se save hai." and not redis_conn.exists(key(uid_a, T4)), r.reply_text)
@@ -277,9 +303,11 @@ try:
             c.execute(sql("UPDATE booking_requests SET status = 'cancelled' WHERE trip_id = :t"), {"t": T4})
         to_review(T4)
         os.environ["BOOKING_NOTIFY_ENABLED"] = "true"
-        v = ans(T4, "yes")
+        with mock.patch.object(booking_mail, "send_in_background", lambda no: None):   # left pending: "sending"
+            v = ans(T4, "yes")
         os.environ.pop("BOOKING_NOTIFY_ENABLED")
-        check("screen reply (notify on): sent wording", v.get("finished") and v["message"].endswith("bhej di gayi hai. Partner aapko jaldi sampark karega."))
+        check("screen reply (notify on): 'bhej rahe hain' while the email is going out",
+              v.get("finished") and v["message"].endswith("Partner ko bhej rahe hain.") and v["request"]["notify"] == "sending", v.get("message"))
         with database.engine.begin() as c:
             c.execute(sql("UPDATE booking_requests SET status = 'cancelled' WHERE trip_id = :t"), {"t": T4})
         to_review(T4)
@@ -307,7 +335,7 @@ try:
         check("no login: REST refused", client.get(f"/api/trips/{T1}/booking/request").status_code == 401)
         r_ = client.get(f"/api/trips/{T1}/booking/request", headers=H(tok_a))
         check("owner: REST read-only request (number + status, no personal data)", r_.status_code == 200
-              and set(r_.json()["request"]) == {"requestNo", "status", "statusLabel", "open", "createdAt"}, r_.json())
+              and set(r_.json()["request"]) <= {"requestNo", "status", "statusLabel", "open", "createdAt", "notify", "notifyText"}, r_.json())
         r = agent.run_agent("book karwana hai", "hi", user_id=uid_b, conversation_id="conv_b", screen="/trip",
                             trip=agent.TripInfo(title="Goa", start_date=d(5), end_date=d(7), id=T1), redis_conn=redis_conn)
         check("another user: voice never hears A's request number", "BR-" not in r.reply_text, r.reply_text)
@@ -332,6 +360,8 @@ try:
     leaks = [w for w in ("Dadaji", "Sharma", "Ram", "Sita", "9876543210", "98765", "75 ", "lift ya ground") if w in logs]
     check("logs: no names, ages, phone numbers or the note", not leaks and "event=finish" in logs, leaks)
     check("logs: no password", not _PASSWORD or _PASSWORD not in logs)
+    check("logs: the mail lines carry request_no and notify_status only", "[BOOKING MAIL] request=BR-" in logs
+          and "notify_status=sent" in logs and "@example.com" not in logs and "fake-smtp-pw" not in logs)
     check("logs: a failed save logs only the error class", "event=request_save_failed" in logs and "error=OperationalError" in logs
           and "db down" not in logs)
 
@@ -354,6 +384,13 @@ try:
         idx_back = c.execute(sql("SELECT 1 FROM pg_indexes WHERE indexname = 'uq_booking_requests_open_trip'")).scalar() == 1
     check("SKIP_BOOKING_TABLE_CREATE=true: init_db leaves booking_requests out (other tables fine)", absent and others)
     check("unset: init_db creates it again with its index", back and idx_back)
+    # stage 4 columns on a table created before them: init_db adds them (ALTER ... ADD COLUMN IF NOT EXISTS)
+    with database.engine.begin() as c:
+        c.execute(sql("ALTER TABLE booking_requests DROP COLUMN notified_at, DROP COLUMN notify_error"))
+    database.init_db()
+    with database.engine.connect() as c:
+        added = {r[0] for r in c.execute(sql("SELECT column_name FROM information_schema.columns WHERE table_name = 'booking_requests'"))}
+    check("init_db adds notified_at / notify_error to an older booking_requests table", {"notified_at", "notify_error"} <= added)
 
     with database.engine.connect() as c:
         n_rows = c.execute(sql("SELECT count(*) FROM booking_requests")).scalar()
