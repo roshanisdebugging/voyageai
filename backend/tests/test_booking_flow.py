@@ -1038,9 +1038,23 @@ with mock.patch.object(openai_client, "chat_tools", fake):
           and "रोहन, 22 years" in body and "उमर" not in body, body)
     close_requests()
 
+    # "Umar" is also a name: umar / उमर / age is an age label only with a number next to it
+    for said, want in (("रोहन, उमर बाईस साल", ("रोहन", 22)), ("रोहन उम्र 22", ("रोहन", 22)), ("Umar Farooq", ("Umar Farooq", None)),
+                       ("उमर फारूक", ("उमर फारूक", None)), ("Umar, age 30", ("Umar", 30)), ("मेरा नाम उमर है", ("उमर", None)),
+                       ("Umar", ("Umar", None)), ("बाईस साल उमर रोहन", ("रोहन", 22)), ("Rohan umar twenty two", ("Rohan", 22))):
+        got = V.name_and_age(said)
+        check(f"age word: {said!r} -> {want}", got == (*want, False), got)
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    redis_conn.delete(key(uid_a, T3))
+    s3("hotel book karwana hai"); s3("budget"); s3("ek kamra")
+    r = s3("Umar Farooq")
+    check("flow: 'Umar Farooq' -> name 'Umar Farooq', the age asked next", st3().travellers[0] == {"name": "Umar Farooq", "age": None}
+          and r.reply_text == "Umar Farooq ki umar?", r.reply_text)
+    BF.cancel(redis_conn, uid_a, T3)
+
 logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
-leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "Roshan", "रोशन", "रौशन", "Jaipur", "hazaar", "संज", "Mahesh", "Rohan", "Vistara", "हिंदी", "राहुल", "रोहन", "Mohan", "उमर", "इंडिया", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
+leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "Roshan", "रोशन", "रौशन", "Jaipur", "hazaar", "संज", "Mahesh", "Rohan", "Vistara", "हिंदी", "राहुल", "रोहन", "Mohan", "उमर", "Farooq", "इंडिया", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
 check("logs: no names, numbers or words", not leaks, leaks)
 check("database: nothing but booking_requests changed by the whole booking flow", db_snapshot() == BEFORE)
 check("redis: no booking keys left for these users", not list(redis_conn.scan_iter(f"booking:flow:{uid_a}:*"))

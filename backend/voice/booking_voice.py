@@ -193,7 +193,8 @@ def numbers_in(toks: List[str]) -> List[int]:
 
 
 _AGE_UNITS = _set("saal", "sal", "saal", "baras", "varsh", "years", "year", "yrs", "साल", "वर्ष", "बरस")
-# The word "age" said before the number ("रोहन, उमर बाईस साल"): never part of a name, read like "saal".
+# The word "age" ("रोहन, उमर बाईस साल"). Only a label when a number is next to it (see _drop_age_labels); otherwise
+# it is a name ("Umar Farooq", "उमर फारूक", "मेरा नाम उमर है").
 _AGE_LABELS = _set("umar", "umr", "umra", "age", "उमर", "उम्र", "उमृ", "उम्")
 
 
@@ -244,9 +245,9 @@ def phone_digits(text: str) -> Optional[str]:
 _NAME_FILLER = _set(
     "mera", "meri", "mere", "naam", "name", "is", "hai", "hain", "he", "my", "its", "it's", "i", "am", "main", "mai",
     "ka", "ki", "ke", "unka", "unki", "uska", "uski", "inka", "inki", "iska", "iski", "aur", "wo", "woh", "voh", "ye",
-    "yeh", "umar", "umr", "age", "old", "ji", "sir", "pehla", "pehle", "dusra", "yatri", "traveller", "traveler",
+    "yeh", "old", "ji", "sir", "pehla", "pehle", "dusra", "yatri", "traveller", "traveler",
     "bachche", "bachcha", "bachchi", "beta", "beti", "child", "the", "of", "and", "aged", "naam", "called",
-    "मेरा", "मेरी", "नाम", "है", "हैं", "उनका", "उनकी", "उसका", "उसकी", "इनका", "इनकी", "और", "वो", "वह", "यह", "ये", "उम्र",
+    "मेरा", "मेरी", "नाम", "है", "हैं", "उनका", "उनकी", "उसका", "उसकी", "इनका", "इनकी", "और", "वो", "वह", "यह", "ये",
     "का", "की", "के", "जी", "मैं", "पहले", "पहला", "यात्री", "बच्चे", "बच्चा", "बच्ची", "बेटा", "बेटी")
 
 
@@ -277,12 +278,36 @@ def _strip_lead_in(toks: List[str]) -> List[str]:
 
 def _name_word(t: str) -> bool:
     return not (t.isdigit() or t in NUMBER_WORDS or t in _EN_UNITS or t in _EN_TENS or t in _NAME_FILLER
-                or t in _AGE_UNITS or t in _AGE_LABELS or t in _NAME_EXTRA_FILLER)
+                or t in _AGE_UNITS or t in _NAME_EXTRA_FILLER)
+
+
+def _is_number(t: str) -> bool:
+    return t.isdigit() or t in NUMBER_WORDS or t in _EN_UNITS or t in _EN_TENS
+
+
+def _drop_age_labels(toks: List[str]) -> List[str]:
+    """Removes umar / उमर / age ... only where it labels an age: a number within the next 3 words (no other label word
+    in between: "Umar, age 30" keeps the name Umar), or a number right before it ("बाईस साल उमर")."""
+    out = []
+    for i, t in enumerate(toks):
+        if t in _AGE_LABELS:
+            after = False
+            for x in toks[i + 1:i + 4]:
+                if x in _AGE_LABELS:
+                    break
+                if _is_number(x):
+                    after = True
+                    break
+            before = i >= 1 and (_is_number(toks[i - 1]) or (toks[i - 1] in _AGE_UNITS and i >= 2 and _is_number(toks[i - 2])))
+            if after or before:
+                continue
+        out.append(t)
+    return out
 
 
 def name_parts(toks: List[str]) -> Tuple[List[str], List[int], List[str]]:
     """(name words, numbers said for the age, the tokens the age was read from)."""
-    toks = _strip_lead_in(toks)
+    toks = _drop_age_labels(_strip_lead_in(toks))
     name_seg, age_seg = toks, toks
     marker = next((i for i, t in enumerate(toks) if t in _NAME_MARKERS), None)
     if marker is not None:
@@ -307,7 +332,7 @@ def name_and_age(text: str) -> Tuple[Optional[str], Optional[int], bool]:
     """(name, age, unsure). Code only: filler words and numbers are taken out; `unsure` = a word next to "saal"
     that we can't read as a number (it would end up inside the name)."""
     words, ages, age_seg = name_parts(tokens(text))
-    unsure = bool(set(age_seg) & (_AGE_UNITS | _AGE_LABELS)) and not ages
+    unsure = bool(set(age_seg) & _AGE_UNITS) and not ages
     name = " ".join(w.capitalize() if w.isascii() else w for w in words) or None
     return name, (ages[0] if len(ages) == 1 else None), unsure or len(ages) > 1
 
