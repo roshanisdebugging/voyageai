@@ -1190,6 +1190,12 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
                        error_detail=f"answer tool failed: status={ans.get('status')} code={ans.get('fallback_code')}")
 
 
+def _booking_turn(transcript: str, lang: str, user_id: str, conversation_id: str, trip, redis_conn):
+    from voice import booking_voice
+    return booking_voice.safe_handle(transcript, lang, user_id=user_id, conversation_id=conversation_id, trip=trip,
+                                     redis_conn=redis_conn)
+
+
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
               screen: Optional[str], trip: Optional[TripInfo], redis_conn=None,
               screen_place: Optional[Dict[str, Any]] = None,
@@ -1247,6 +1253,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         result = answer_origin_same(redis_conn, user_id, conversation_id, draft_state, said, lang)
         if result is None:
             draft_state = D.load(redis_conn, user_id, conversation_id)
+    elif (booking_result := _booking_turn(transcript, lang, user_id, conversation_id, trip, redis_conn)) is not None:
+        result = booking_result      # booking stage 2: "book karwana hai" / an answer to the last booking question
 
     if result is not None:
         pass
@@ -1313,7 +1321,7 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
 
     if result.pending_actions:
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
-    if result.action != "error":
+    if result.action not in ("error", "booking"):     # booking answers (names, phone) stay out of the memory
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
     logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s%s", result.action,
                 f" step={result.step}" if result.step else "",
