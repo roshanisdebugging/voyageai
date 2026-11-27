@@ -972,6 +972,8 @@ WS_TRIP_ACTIONS = {
     "trips:weather_replan", "trips:optimize_day", "trips:optimize_budget",
     "trips:refine", "trips:regenerate_itinerary", "trips:swap_activity",
     "trips:set_activity_done", "trips:set_budget",
+    # Booking stage 2 (questions only, nothing saved or sent): booking_flow.SCREEN_ACTIONS
+    "booking:get", "booking:start", "booking:answer", "booking:back", "booking:cancel",
 }
 
 # (bucket, requests per minute) per action. Anything not listed uses "general".
@@ -1517,6 +1519,13 @@ async def process_ws_action(
         import trip_actions
         return trip_actions.swap_activity(
             db, user.id, data["trip_id"], data.get("activity_id") or data.get("activityId"), data.get("replacement") or {})
+
+    elif reqname.startswith("booking:"):
+        # Booking stage 2: the screen's steps. Same state as voice (Redis only, keyed by the session user + trip).
+        import booking_flow
+        from redis_client import redis_conn as booking_redis
+        trip = find_owned_trip(db, data["trip_id"], user.id)   # already owner-checked above (WS_TRIP_ACTIONS)
+        return booking_flow.screen_action(booking_redis, db, user.id, trip, reqname, data)
 
     elif reqname == "places:save":
         # Voice step 5: the Undo of "unsave" (and a WS path for saving). Keyed by the session user only.
@@ -4176,6 +4185,44 @@ def set_trip_budget_endpoint(
         return trip_actions.set_trip_budget(db, current_user.id, trip_id, (payload or {}).get("amount"))
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
+
+
+def _booking_rest(trip_id: str, action: str, payload: Optional[dict], current_user: AuthUser, db: Session):
+    """REST fallback of WS booking:* (booking stage 2: questions only; nothing is saved to the DB or sent)."""
+    import booking_flow
+    from redis_client import redis_conn as booking_redis
+    trip = verify_trip_ownership(trip_id, current_user.id, db)
+    try:
+        return booking_flow.screen_action(booking_redis, db, current_user.id, trip, action, payload or {})
+    except booking_flow.BookingError as err:
+        raise HTTPException(status_code=400, detail={"code": err.code, "message": str(err)})
+
+
+@app.get("/api/trips/{trip_id}/booking", dependencies=[Depends(general_limiter)])
+def booking_get_endpoint(trip_id: str, current_user: AuthUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _booking_rest(trip_id, "booking:get", None, current_user, db)
+
+
+@app.post("/api/trips/{trip_id}/booking/start", dependencies=[Depends(general_limiter)])
+def booking_start_endpoint(trip_id: str, payload: Optional[dict] = None, current_user: AuthUser = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    return _booking_rest(trip_id, "booking:start", payload, current_user, db)
+
+
+@app.post("/api/trips/{trip_id}/booking/answer", dependencies=[Depends(general_limiter)])
+def booking_answer_endpoint(trip_id: str, payload: dict, current_user: AuthUser = Depends(get_current_user),
+                            db: Session = Depends(get_db)):
+    return _booking_rest(trip_id, "booking:answer", payload, current_user, db)
+
+
+@app.post("/api/trips/{trip_id}/booking/back", dependencies=[Depends(general_limiter)])
+def booking_back_endpoint(trip_id: str, current_user: AuthUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _booking_rest(trip_id, "booking:back", None, current_user, db)
+
+
+@app.delete("/api/trips/{trip_id}/booking", dependencies=[Depends(general_limiter)])
+def booking_cancel_endpoint(trip_id: str, current_user: AuthUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    return _booking_rest(trip_id, "booking:cancel", None, current_user, db)
 
 
 @app.post("/api/trips/{trip_id}/expenses", status_code=status.HTTP_201_CREATED, dependencies=[Depends(general_limiter)])
