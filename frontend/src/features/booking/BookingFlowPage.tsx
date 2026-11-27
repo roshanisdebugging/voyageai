@@ -4,6 +4,7 @@ import { ArrowLeft, Check, RefreshCw } from 'lucide-react';
 import { useTrip } from '../trip/TripContext';
 import { BOOKING_CHANGED } from '../../voice/uiActions';
 import { bookingApi, type BookingView } from './bookingApi';
+import { BookingLiveCard } from './BookingLiveCard';
 import { cleanAgeInput, cleanPhoneInput, nameProblem, toggleService, NAME_MAX, NAME_MESSAGES } from './bookingLogic';
 
 /**
@@ -146,6 +147,8 @@ export const BookingFlowPage: React.FC = () => {
           <button type="button" className={primaryCls} onClick={() => navigate('/trip')}>Trip par wapas</button>
         </div>
       )}
+
+      {view?.active && view.card && <BookingLiveCard card={view.card} />}
 
       {view?.active && (
         <div className="space-y-4">

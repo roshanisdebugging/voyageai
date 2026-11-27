@@ -131,7 +131,10 @@ export function sanitizePrefill(raw: unknown): TripDraft | null {
   };
 }
 
-// Mirrors ROUTES in backend/voice/pages.py.
+/** The booking screen (booking stage 2). */
+export const BOOKING_ROUTE = '/trip/booking';
+
+// Mirrors ROUTES in backend/voice/pages.py, plus BOOKING_ROUTE (see below).
 const ALLOWED_ROUTES = new Set([
   '/home',
   '/trips',
@@ -146,6 +149,9 @@ const ALLOWED_ROUTES = new Set([
   '/saved-places',
   '/more',
   '/trips/new',
+  // NOT in pages.py on purpose: the model's navigate tool can't open the booking screen. Only the booking flow's
+  // own code (backend/voice/booking_voice.py) sends it, on start / resume and after the services answer.
+  BOOKING_ROUTE,
 ]);
 const ITINERARY_DAY = /^\/trip\/itinerary\?day=([1-9]|[12][0-9]|30)$/;
 
@@ -163,6 +169,8 @@ export function runUiActions(actions: unknown, handlers: UiActionHandlers | ((to
   let ran = 0;
   for (const action of actions as UiAction[]) {
     if (action?.type === 'navigate' && isAllowedRoute(action.to)) {
+      // The booking screen already open: nothing to do (no second history entry, no reload).
+      if (action.to === BOOKING_ROUTE && typeof window !== 'undefined' && window.location?.pathname === BOOKING_ROUTE) continue;
       h.navigate(action.to);
       ran += 1;
     } else if (action?.type === 'map_focus' && h.mapFocus && inIndia(action.lat, action.lng)

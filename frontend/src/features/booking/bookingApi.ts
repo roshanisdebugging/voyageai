@@ -9,6 +9,8 @@ export interface BookingChoice { value: string; label: string }
 export interface BookingSummaryLine { part: string; label: string; text: string; note?: string }
 export type BookingKind = 'services' | 'choice' | 'name' | 'age' | 'phone' | 'yesno' | 'review' | 'change';
 
+export interface BookingCard { rows: { key: string; label: string; value: string; current: boolean }[]; now: string }
+
 export interface BookingView {
   active: boolean;
   tripId?: string;
@@ -29,6 +31,8 @@ export interface BookingView {
   /** Traveller 1 only: the account's name for the optional "Mera naam" button (never filled in by itself). */
   accountName?: string;
   partnerNotes?: string[];
+  /** The live summary: every field of the chosen services, "-" until answered, the current one marked. */
+  card?: BookingCard;
   finished?: boolean;
   cancelled?: boolean;
   expired?: boolean;

@@ -49,3 +49,18 @@ export function toggleService(selected: string[], value: string): string[] {
   const next = selected.includes(value) ? selected.filter((s) => s !== value) : [...selected, value];
   return ORDER.filter((s) => next.includes(s));
 }
+
+export interface CardRow { key: string; label: string; value: string; current: boolean }
+
+/**
+ * Live card: the rows whose value changed since the last view (a voice or tap answer arrived). The first view
+ * after opening the screen highlights nothing (prev = null), so coming back doesn't flash every row.
+ */
+export function changedKeys(prev: Record<string, string> | null, rows: CardRow[]): string[] {
+  if (!prev) return [];
+  return rows.filter((r) => r.value !== '-' && prev[r.key] !== r.value).map((r) => r.key);
+}
+
+export function rowValues(rows: CardRow[]): Record<string, string> {
+  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+}

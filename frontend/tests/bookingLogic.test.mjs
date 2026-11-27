@@ -39,7 +39,26 @@ check('voice refresh "itinerary" still uses the old handler', U.runUiActions([{ 
   { navigate: () => {}, refresh: (w) => { refreshed = w; } }) === 1 && refreshed === 'itinerary');
 check('voice refresh of an unknown thing is ignored', U.runUiActions([{ type: 'refresh', what: 'bookings_all' }],
   { navigate: () => {}, refresh: () => {} }) === 0);
+// Opening the booking screen by voice: allowlisted, skipped when it is already open.
+let went = null;
+globalThis.window = { location: { pathname: '/trip' }, dispatchEvent: () => true };
+check('navigate /trip/booking is allowed', U.isAllowedRoute('/trip/booking')
+  && U.runUiActions([{ type: 'navigate', to: '/trip/booking' }], { navigate: (to) => { went = to; } }) === 1 && went === '/trip/booking');
+went = null;
+globalThis.window.location.pathname = '/trip/booking';
+check('navigate /trip/booking skipped when the screen is already open', U.runUiActions([{ type: 'navigate', to: '/trip/booking' }],
+  { navigate: (to) => { went = to; } }) === 0 && went === null);
+check('other navigations are unchanged on the booking screen', U.runUiActions([{ type: 'navigate', to: '/map' }],
+  { navigate: (to) => { went = to; } }) === 1 && went === '/map');
 delete globalThis.window;
+
+// Live card highlight: only rows whose value changed, nothing on the first view, never a '-' row.
+const rows = (o) => Object.entries(o).map(([key, value]) => ({ key, label: key, value, current: false }));
+check('card: first view highlights nothing', B.changedKeys(null, rows({ services: 'Hotel', hotel_type: '-' })).length === 0);
+check('card: the newly answered row is highlighted', B.changedKeys({ services: 'Hotel', hotel_type: '-' },
+  rows({ services: 'Hotel', hotel_type: '3-star' })).join() === 'hotel_type');
+check('card: a row going back to "-" (Back) is not highlighted', B.changedKeys({ hotel_type: '3-star' }, rows({ hotel_type: '-' })).length === 0);
+check('card: values map', JSON.stringify(B.rowValues(rows({ a: '1', b: '-' }))) === '{"a":"1","b":"-"}');
 
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
