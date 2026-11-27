@@ -36,6 +36,7 @@ import { RidesPage } from './components/rides/RidesPage';
 import { ExpensesPage } from './components/expenses/ExpensesPage';
 import { TourGuidePage } from './components/tour-guide/TourGuidePage';
 import { ItineraryView } from './components/itinerary/ItineraryView';
+import { BookingFlowPage } from './features/booking/BookingFlowPage';
 import { SavedPlacesPage } from './components/places/SavedPlacesPage';
 import { RefreshCw, AlertTriangle } from 'lucide-react';
 
@@ -182,6 +183,7 @@ const MainContent: React.FC<{ guideMicSlotRef: React.Ref<HTMLDivElement>; mapToo
       <Route path="/trip/rides" element={<RidesPage />} />
       <Route path="/expenses" element={<ExpensesPage />} />
       <Route path="/trip/expenses" element={<ExpensesPage />} />
+      <Route path="/trip/booking" element={<BookingFlowPage />} />
       <Route path="/trip/itinerary" element={<ItineraryView />} />
       <Route path="/trip/details" element={<ItineraryView />} />
       <Route path="/itinerary" element={<ItineraryView />} />

@@ -1,0 +1,64 @@
+/**
+ * Booking stage 2 (questions only; nothing is saved to the database or sent to anyone).
+ * WS booking:* first, the REST routes as a fallback. Both are owner-only on the server, and voice uses the same state.
+ */
+import { wsClient } from '../../services/wsClient';
+import { fetchWithAuth, getApiBaseUrl } from '../../config/apiConfig';
+
+export interface BookingChoice { value: string; label: string }
+export interface BookingSummaryLine { part: string; label: string; text: string }
+export type BookingKind = 'services' | 'choice' | 'name' | 'age' | 'phone' | 'yesno' | 'review' | 'change';
+
+export interface BookingView {
+  active: boolean;
+  tripId?: string;
+  question?: string;
+  kind?: BookingKind;
+  prompt?: string;
+  choices?: BookingChoice[];
+  allowText?: boolean;
+  selected?: string[];
+  progress?: { step: number; total: number; label: string };
+  canBack?: boolean;
+  testNote?: string;
+  error?: string | null;
+  errorCode?: string | null;
+  traveller?: { index: number; isChild: boolean; total: number };
+  summary?: BookingSummaryLine[];
+  consent?: string;
+  finished?: boolean;
+  cancelled?: boolean;
+  expired?: boolean;
+  message?: string;
+  offer?: string;
+}
+
+async function call(action: string, tripId: string, payload: Record<string, unknown>,
+                    method: 'GET' | 'POST' | 'DELETE', path: string): Promise<BookingView> {
+  try {
+    return await wsClient.sendRequest<BookingView>(action, { ...payload, trip_id: tripId });
+  } catch {
+    const res = await fetchWithAuth(`${getApiBaseUrl()}/api/trips/${encodeURIComponent(tripId)}/booking${path}`, {
+      method,
+      headers: method === 'POST' ? { 'Content-Type': 'application/json' } : undefined,
+      body: method === 'POST' ? JSON.stringify(payload) : undefined,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = body?.detail;
+      throw new Error(typeof detail?.message === 'string' ? detail.message
+        : typeof detail === 'string' ? detail : "Booking couldn't load. Please try again.");
+    }
+    return body as BookingView;
+  }
+}
+
+export const bookingApi = {
+  get: (tripId: string) => call('booking:get', tripId, {}, 'GET', ''),
+  start: (tripId: string, services?: string[]) =>
+    call('booking:start', tripId, services?.length ? { services } : {}, 'POST', '/start'),
+  answer: (tripId: string, question: string, value: string | string[]) =>
+    call('booking:answer', tripId, { question, value }, 'POST', '/answer'),
+  back: (tripId: string) => call('booking:back', tripId, {}, 'POST', '/back'),
+  cancel: (tripId: string) => call('booking:cancel', tripId, {}, 'DELETE', ''),
+};

@@ -9,7 +9,8 @@
  * - open_review {prefill}: open the trip wizard's review page with the voice draft (checked shape, India only)
  * - submit_review: press Proceed on the wizard's review page (the wizard ignores it on any other step)
  * - open_swap {activity_id, activity_name, day_number}: the existing swap sheet (its own Confirm applies the swap)
- * - refresh {what}: reload itinerary | expenses | saved_places after a change made by voice (steps 5, 6)
+ * - refresh {what}: reload itinerary | expenses | saved_places after a change made by voice (steps 5, 6),
+ *   or booking (booking stage 2): the booking screen reloads its state (a window event, BOOKING_CHANGED)
  * - undo_toast {message, undo: {action, payload}}: 5 s toast; Undo (tap only) runs an allowlisted /ws/app action
  */
 import type { TripDraft } from '../features/trip/types';
@@ -33,8 +34,10 @@ export interface UiAction {
   places?: unknown;
 }
 
-export type RefreshWhat = 'itinerary' | 'expenses' | 'saved_places';
-const REFRESH_WHAT = new Set<RefreshWhat>(['itinerary', 'expenses', 'saved_places']);
+export type RefreshWhat = 'itinerary' | 'expenses' | 'saved_places' | 'booking';
+const REFRESH_WHAT = new Set<RefreshWhat>(['itinerary', 'expenses', 'saved_places', 'booking']);
+/** Fired when a voice reply changed the booking flow; the booking screen and card reload their state. */
+export const BOOKING_CHANGED = 'voyage:booking-changed';
 
 /** The ONLY /ws/app actions an Undo may run (mirrors UNDO_ALLOWLIST in backend/voice/tools/actions.py). */
 export const UNDO_ALLOWLIST = new Set(['trips:set_activity_done', 'places:save', 'places:unsave']);
@@ -80,7 +83,7 @@ export interface UiActionHandlers {
   openReview?: (prefill: TripDraft) => void;
   submitReview?: () => void;
   openSwap?: (target: OpenSwapAction) => void;
-  refresh?: (what: RefreshWhat) => void;
+  refresh?: (what: Exclude<RefreshWhat, 'booking'>) => void;
   undoToast?: (toast: UndoToastAction) => void;
 }
 
@@ -193,8 +196,11 @@ export function runUiActions(actions: unknown, handlers: UiActionHandlers | ((to
         activityName: action.activity_name as string, dayNumber: action.day_number as number,
       });
       ran += 1;
+    } else if (action?.type === 'refresh' && action.what === 'booking') {
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event(BOOKING_CHANGED));
+      ran += 1;
     } else if (action?.type === 'refresh' && h.refresh && REFRESH_WHAT.has(action.what as RefreshWhat)) {
-      h.refresh(action.what as RefreshWhat);
+      h.refresh(action.what as Exclude<RefreshWhat, 'booking'>);
       ran += 1;
     } else if (action?.type === 'undo_toast' && h.undoToast && str(action.message, 160) && checkedUndo(action.undo)) {
       const undo = checkedUndo(action.undo)!;
