@@ -103,6 +103,7 @@ T1 = make_trip(uid_a, 1, 0)        # one adult (the account holder)
 T2 = make_trip(uid_a, 2, 1)        # two adults + one child
 T_PAST = make_trip(uid_a, 1, 0, past=True)
 T_B = make_trip(uid_b, 1, 0)
+T3 = make_trip(uid_a, 2, 0)        # two adults (BR-1005: flight + hotel, review edits)
 
 
 def close_requests():
@@ -631,7 +632,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     check("spoken review: no 'key: value' and no names", not any(":" in t or "Umanath" in t or "Sita" in t for _, t in worst))
     check("spoken review: 'aap decide karo' is said as 'jo mile'", "Flight jo mile, Air India Express." in worst[-1][1] or
           any("jo mile" in t for _, t in worst))
-    check("words: real variants of time / class / hotel / yes-no", [V.parse_choice("flight_time", x) for x in ("सवेरे", "morning", "दिन में", "evening", "night", "रात्रि")]
+    check("words: real variants of time / class / hotel / yes-no", [V.parse_choice("flight_time", x) for x in ("सवेरे", "morning", "दोपहर में", "evening", "night", "रात्रि")]
           == ["morning", "morning", "afternoon", "evening", "night", "night"]
           and [V.parse_choice("train_class", x) for x in ("स्लीपर", "थ्री एसी", "3A", "टू एसी", "स्लिपर")] == ["SL", "3A", "3A", "2A", "SL"]
           and [V.parse_choice("hotel_type", x) for x in ("थ्री स्टार", "फाइव स्टार", "बजट")] == ["3star", "4plus", "budget"]
@@ -837,9 +838,223 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     check("screen: a typed unknown airline is kept as typed (no extra question on the screen)", state(T1).answers.get("flight_airline") == "Vistara")
     BF.cancel(redis_conn, uid_a, T1)
 
+# ---------------- real test BR-1004: the STT hint heard as an answer; names with lead-ins and repeats
+from types import SimpleNamespace  # noqa: E402
+from voice import pipeline, stt  # noqa: E402
+
+HINT = "Namaste. Mujhe Delhi se Jaipur jaana hai, 3 din ke liye, budget 20 hazaar. Itinerary dikhao."
+with mock.patch.object(openai_client, "chat_tools", fake):
+    redis_conn.delete(key(uid_a, T1))
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    say("flight book karwana hai", CV, trip=TRIP1)
+    close_requests()
+    tr = SimpleNamespace(text=HINT, language="hi")
+    n = len(FakeTools.calls)
+    pipeline.decide_reply(SimpleNamespace(user_id=uid_a, conversation_id=CV, session_id=CV, screen="/trip/booking", trip=TRIP1,
+                                          location=None, screen_place=None, turn_id="t_echo"), tr)
+    st = BF.load(redis_conn, uid_a, T1)
+    check("evidence A: the STT hint text at 'Flight kis time' -> 'nothing heard', no time set, no model call",
+          tr.reply_text == pipeline.EMPTY_TRANSCRIPT_REPLY and tr.action == "unclear" and "flight_time" not in st.answers
+          and BF.current_question(st) == "flight_time" and len(FakeTools.calls) == n, (tr.reply_text, st.answers))
+    check("hint check: the hint, the hint inside a longer clip, most of the hint -> echo; normal answers are not",
+          stt.is_prompt_echo(HINT) and stt.is_prompt_echo(HINT + " dopahar") and stt.is_prompt_echo("mujhe delhi se jaipur jaana hai 3 din ke liye budget 20 hazaar")
+          and not any(stt.is_prompt_echo(t) for t in ("dopahar", "Mujhe Delhi se Jaipur jaana hai", "mujhe delhi se jaipur jaana hai 3 din ke liye", "")))
+    with mock.patch.dict(os.environ, {"VOICE_STT_PROMPT": "Goa trip, Panaji, Calangute beach, do raat"}):
+        check("hint check follows VOICE_STT_PROMPT (whatever hint is in use)", stt.is_prompt_echo("Goa trip, Panaji, Calangute beach, do raat")
+              and not stt.is_prompt_echo(HINT))
+    with mock.patch.dict(os.environ, {"VOICE_STT_PROMPT": ""}):
+        check("no hint configured -> nothing is an echo", not stt.is_prompt_echo(HINT))
+    r = say("3 din ke liye", CV, trip=TRIP1)
+    check("'3 din ke liye' is not a flight time ('din' removed; digits)", "flight_time" not in BF.load(redis_conn, uid_a, T1).answers, r.reply_text)
+    for said, want in (("dopahar", "afternoon"), ("दोपहर", "afternoon"), ("subah", "morning"), ("afternoon", "afternoon")):
+        check(f"time: {said!r} -> {want}", V.parse_choice("flight_time", said) == want and V.parse_choice("train_time", said) == want)
+    check("time: a long sentence / two time words / digits -> not taken", [V.parse_choice("flight_time", t) for t in (
+        HINT, "mujhe lagta hai ki subah wali flight theek rahegi shayad", "subah ya shaam", "raat 9 baje", "din mein")] == [None] * 5)
+    r = say("dopahar", CV, trip=TRIP1)
+    check("... and 'dopahar' then answers it", BF.load(redis_conn, uid_a, T1).answers.get("flight_time") == "afternoon", r.reply_text)
+    BF.cancel(redis_conn, uid_a, T1)
+
+    # names (the exact BR-1004 transcripts), at the name step, at the age step and at the age "sahi hai?" step
+    redis_conn.delete(key(uid_a, T1))
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    say("hotel book karwana hai", CV, trip=TRIP1); say("budget", CV, trip=TRIP1)
+    r = say("ek kamra", CV, trip=TRIP1)
+    check("names: at 'Yatri 1 ka naam?'", r.reply_text.endswith("Yatri 1 ka naam?"), r.reply_text)
+    r = say("रात्रि एक का नाम रौशन", CV, trip=TRIP1)
+    t0 = BF.load(redis_conn, uid_a, T1).travellers[0]
+    check("B1: 'रात्रि एक का नाम रौशन' -> name रौशन, 'एक' is not an age", t0 == {"name": "रौशन", "age": None} and r.reply_text == "रौशन ki umar?",
+          (t0, r.reply_text))
+    for said in ("रात्री का नाम रोशन है, रात्रि रोशन है, रोशन है", "नाम है रोशन, सिर्फ रोशन", "भाई, नाम है रोशन", "रोशन नाम है उसका"):
+        r = say(said, CV, trip=TRIP1)
+        t0 = BF.load(redis_conn, uid_a, T1).travellers[0]
+        check(f"B at the age question: {said!r} -> name रोशन, age still asked", t0 == {"name": "रोशन", "age": None}
+              and r.reply_text == "रोशन ki umar?", (t0, r.reply_text))
+    r = say("पच्चीस hours", CV, trip=TRIP1)
+    check("the age question still reads 'पच्चीस hours' as 25", BF.load(redis_conn, uid_a, T1).travellers[0] == {"name": "रोशन", "age": 25},
+          r.reply_text)
+    BF.cancel(redis_conn, uid_a, T1)
+    for said, want in (("रात्रि एक का नाम रौशन", "रौशन"), ("रात्री का नाम रोशन है, रात्रि रोशन है, रोशन है", "रोशन"),
+                       ("नाम है रोशन, सिर्फ रोशन", "रोशन"), ("भाई, नाम है रोशन", "रोशन"), ("रोशन नाम है उसका", "रोशन"),
+                       ("Roshan Jha", "Roshan Jha"), ("रोशन झा", "रोशन झा"), ("Mera naam Rahul Sharma hai", "Rahul Sharma"),
+                       ("my name is Asha", "Asha"), ("Yatri 2 ka naam Priya hai, umar 30", "Priya")):
+        name, age, _ = V.name_and_age(said)
+        check(f"name step: {said!r} -> {want!r}", name == want and age in (None, 30) and (age == 30) == said.endswith("30"), (name, age))
+    check("name step: 'Rahul, 34 saal' keeps its age", V.name_and_age("Rahul, 34 saal")[:2] == ("Rahul", 34))
+    check("age 'sahi hai?' step: 'रात्रि एक का नाम रौशन' is a correction to रौशन (no age 1)",
+          V.name_fix("रात्रि एक का नाम रौशन", "confirm") == {"name": "रौशन", "age": None, "who": None, "ask": None})
+    check("nothing usable left -> 'Sahi naam boliye.' path", V.name_fix("naam hai", "age") == {"name": None, "age": None, "who": None, "ask": "name"}
+          and V.name_and_age("bhai sirf")[0] is None)
+
+# ---------------- real test BR-1005: "India" for Air India, edits at the review, "उमर" as the age word
+import booking_mail  # noqa: E402
+from models_booking import BookingRequestModel  # noqa: E402
+
+TRIP3 = agent.TripInfo(title="Goa", start_date=d(5), end_date=d(7), id=T3)
+with mock.patch.object(openai_client, "chat_tools", fake):
+    st3 = lambda: BF.load(redis_conn, uid_a, T3)  # noqa: E731
+    s3 = lambda text: say(text, CV, trip=TRIP3)   # noqa: E731
+
+    def to_review(airline_said="India"):
+        """flight + hotel, two adults, up to the review (the BR-1005 answers)."""
+        redis_conn.delete(key(uid_a, T3))
+        s3("flight aur hotel book karwana hai"); s3("raat")
+        r_ = s3(airline_said)
+        if r_.reply_text.endswith("Sahi hai?"):
+            s3("हाँ।")
+        s3("3 star"); s3("do kamre")
+        s3("Roshan, 30 saal")
+        r_ = s3("रोहन, उमर बाईस साल।")
+        check("C: 'रोहन, उमर बाईस साल।' -> name रोहन, age 22 (उमर is the age word)", st3().travellers[1] == {"name": "रोहन", "age": 22}
+              and r_.reply_text.startswith("Ek mobile number"), (st3().travellers[1], r_.reply_text))
+        s3("9876543210")
+        return s3("haan")
+
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    r = to_review("India")
+    check("A: 'India' at the airline question -> Air India (no 'India airline? Sahi hai?')",
+          st3().answers.get("flight_airline") == "Air India", st3().answers)
+    check("A: the spoken review says 'Air India'", r.reply_text.startswith("Flight raat, Air India. Hotel 3-star, do kamre. Do yatri.")
+          and r.reply_text.endswith("Sahi hai?"), r.reply_text)
+    for said, want in (("India", "Air India"), ("इंडिया", "Air India"), ("एयर इंडिया", "Air India"), ("air india", "Air India"),
+                       ("airindia", "Air India"), ("इंडिया।", "Air India"), ("Air India Express", "Air India Express"),
+                       ("एयर इंडिया एक्सप्रेस", "Air India Express"), ("इंडिया एक्सप्रेस", "Air India Express"),
+                       ("Vistara", V.AIRLINE_CHECK + "Vistara")):
+        check(f"A: airline question {said!r} -> {want!r}", V.parse_choice("flight_airline", said) == want, V.parse_choice("flight_airline", said))
+    check("A: 'India' is Air India only at the airline question", V.parse_choice("flight_time", "India") is None
+          and BF.airline_name("India") is None)
+
+    # B: the exact sentences at the review
+    before = st3()
+    r = s3("मैंने बोला था एयरलाइन का नाम एयर इंडिया, एयर इंडिया।")
+    after = st3()
+    check("B1: 'एयरलाइन का नाम एयर इंडिया' at the review changes only the airline, travellers and the rest kept, review again",
+          after.answers == before.answers and after.travellers == before.travellers and after.phone == before.phone and after.phone_ok
+          and BF.current_question(after) == "review" and r.reply_text.startswith("Flight raat, Air India.")
+          and "naam" not in r.reply_text.lower(), r.reply_text)
+    r = s3("ये सब तो मैंने बता ही दिया था। मुझे बस एयर इंडिया चेंज करना था, बाकी सब चीज तो सेम ही है।")
+    after = st3()
+    check("B2: the second sentence never becomes a name; travellers kept, still at the review",
+          after.travellers == before.travellers and BF.current_question(after) == "review"
+          and "akshar" not in r.reply_text and "Yatri 1" not in r.reply_text, r.reply_text)
+    BF.cancel(redis_conn, uid_a, T3)
+
+    # the review with "India" first saved as an unknown airline (the BR-1005 case): the airline sentence fixes it
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    redis_conn.delete(key(uid_a, T3))
+    to_review("Indus")
+    before = st3()
+    r = s3("मैंने बोला था एयरलाइन का नाम एयर इंडिया, एयर इंडिया।")
+    check("B1 from a wrong airline: the airline becomes Air India, nothing else changes",
+          st3().answers == {**before.answers, "flight_airline": "Air India"} and st3().travellers == before.travellers
+          and r.reply_text.startswith("Flight raat, Air India."), (st3().answers, r.reply_text))
+    r = s3("airline badlo")
+    check("review edit without a value: only the airline question, then back to the review",
+          r.reply_text == "Koi khaas airline, ya jo sasta mile?" and "flight_airline" not in st3().answers
+          and st3().answers.get("hotel_type") == "3star", r.reply_text)
+    r = s3("IndiGo")
+    check("... the new airline, then the review read again", st3().answers.get("flight_airline") == "IndiGo"
+          and r.reply_text.startswith("Flight raat, IndiGo.") and st3().travellers == before.travellers, r.reply_text)
+    r = s3("hotel 4 star")
+    check("review: 'hotel 4 star' applied directly, review again", st3().answers.get("hotel_type") == "4plus"
+          and st3().answers.get("hotel_rooms") == 2 and r.reply_text.startswith("Flight raat, IndiGo. Hotel 4-star"), r.reply_text)
+    r = s3("hotel badalna hai")
+    check("review: 'hotel badalna hai' asks only the hotel type", r.reply_text.startswith("Hotel kaisa chahiye")
+          and st3().answers.get("hotel_rooms") == 2, r.reply_text)
+    r = s3("budget")
+    check("... then the review again (rooms kept)", BF.current_question(st3()) == "review" and "do kamre" in r.reply_text, r.reply_text)
+    r = s3("kamre teen kar do")
+    check("review: 'kamre teen kar do' -> 3 rooms ('kar do' is not 2)", st3().answers.get("hotel_rooms") == 3
+          and "teen kamre" in r.reply_text, r.reply_text)
+    r = s3("kamre badal do")
+    check("review: 'kamre badal do' asks only the rooms", r.reply_text.startswith("Kitne kamre") and "hotel_rooms" not in st3().answers
+          and st3().answers.get("hotel_type") == "budget", r.reply_text)
+    s3("do")
+    r = s3("flight subah ki kar do")
+    check("review: 'flight subah ki kar do' -> the flight time only", st3().answers.get("flight_time") == "morning"
+          and st3().answers.get("flight_airline") == "IndiGo" and r.reply_text.startswith("Flight subah, IndiGo."), r.reply_text)
+    r = s3("phone number badlo")
+    check("review: 'phone number badlo' asks only the phone", r.reply_text.startswith("Ek mobile number") and st3().phone is None
+          and st3().travellers == before.travellers, r.reply_text)
+    r = s3("9123456789")
+    check("... read back as usual", r.reply_text == "Number: 9 1 2 3 4, 5 6 7 8 9. Sahi hai?", r.reply_text)
+    r = s3("haan")
+    check("... then the review again", BF.current_question(st3()) == "review" and "Phone 91234 56789" in r.reply_text, r.reply_text)
+    r = s3("phone number 98765 43210 kar do")
+    check("review: 'phone number 98765 43210 kar do' -> the new number read back", st3().phone == "9876543210"
+          and r.reply_text == "Number: 9 8 7 6 5, 4 3 2 1 0. Sahi hai?", r.reply_text)
+    s3("haan")
+    r = s3("yatri 2 ka naam badlo")
+    check("review: 'yatri 2 ka naam badlo' -> only traveller 2 asked again", st3().travellers[0] == before.travellers[0]
+          and st3().travellers[1] == {"name": None, "age": None} and r.reply_text == "Yatri 2 ka naam?", (st3().travellers, r.reply_text))
+    s3("Mohan, 40 saal")
+    check("... then the review again", BF.current_question(st3()) == "review" and st3().travellers[1] == {"name": "Mohan", "age": 40})
+    r = s3("yatriyon ke naam badlo")
+    check("review: 'yatriyon ke naam badlo' -> the travellers again", r.reply_text.endswith("Yatri 1 ka naam?")
+          and st3().travellers == [{"name": None, "age": None}] * 2 and st3().answers.get("flight_airline") == "IndiGo", r.reply_text)
+    s3("Roshan, 30 saal"); s3("रोहन, उमर बाईस साल।")
+    check("... back at the review with everything else kept", BF.current_question(st3()) == "review" and st3().phone == "9876543210")
+    before = st3()
+    for said in ("naam", "mera naam", "ye sab to maine bata diya tha", "kuch samajh nahi aa raha hai bhai", "Rohan Sharma"):
+        r = s3(said)
+        after = st3()
+        check(f"review: unrecognised {said!r} -> 'Samajh nahi aaya.' + the review; nothing cleared",
+              r.reply_text.startswith("Samajh nahi aaya.") and "Flight subah, IndiGo." in r.reply_text
+              and after.travellers == before.travellers and after.answers == before.answers and after.phone == before.phone
+              and BF.current_question(after) == "review", r.reply_text)
+    s3("IndiGo theek hai")
+    check("review: 'IndiGo theek hai' (the same airline + yes) is the review's yes: saved", st3() is None)
+    close_requests()
+
+    # the review's yes after 'India': the request and the partner email say "Air India"
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    to_review("इंडिया")
+    r = s3("haan")
+    with database.SessionLocal() as db:
+        row = db.query(BookingRequestModel).filter(BookingRequestModel.trip_id == T3).order_by(BookingRequestModel.created_at.desc()).first()
+        body = booking_mail.build_message(booking_mail._row_dict(row), booking_mail._trip_info(db, T3), "a@example.com",
+                                          "b@example.com").get_content()
+    check("A: saved request + email: 'Airline: Air India' (never 'India'), 'रोहन, 22 years'",
+          row.preferences.get("flight_airline") == "Air India" and "Airline: Air India\n" in body and "Airline: India" not in body
+          and "रोहन, 22 years" in body and "उमर" not in body, body)
+    close_requests()
+
+    # "Umar" is also a name: umar / उमर / age is an age label only with a number next to it
+    for said, want in (("रोहन, उमर बाईस साल", ("रोहन", 22)), ("रोहन उम्र 22", ("रोहन", 22)), ("Umar Farooq", ("Umar Farooq", None)),
+                       ("उमर फारूक", ("उमर फारूक", None)), ("Umar, age 30", ("Umar", 30)), ("मेरा नाम उमर है", ("उमर", None)),
+                       ("Umar", ("Umar", None)), ("बाईस साल उमर रोहन", ("रोहन", 22)), ("Rohan umar twenty two", ("Rohan", 22))):
+        got = V.name_and_age(said)
+        check(f"age word: {said!r} -> {want}", got == (*want, False), got)
+    CV = f"conv_bk_{uuid.uuid4().hex[:6]}"
+    redis_conn.delete(key(uid_a, T3))
+    s3("hotel book karwana hai"); s3("budget"); s3("ek kamra")
+    r = s3("Umar Farooq")
+    check("flow: 'Umar Farooq' -> name 'Umar Farooq', the age asked next", st3().travellers[0] == {"name": "Umar Farooq", "age": None}
+          and r.reply_text == "Umar Farooq ki umar?", r.reply_text)
+    BF.cancel(redis_conn, uid_a, T3)
+
 logs = log_buf.getvalue()
 check("logs: [BOOKING FLOW] lines with flags", "[BOOKING FLOW] event=answer" in logs and "skipped=true" in logs)
-leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "Roshan", "रोशन", "संज", "Mahesh", "Rohan", "Vistara", "हिंदी", "राहुल", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
+leaks = [w for w in ("Rahul", "Priya", "Aryan", "Asha", "Roshan", "रोशन", "रौशन", "Jaipur", "hazaar", "संज", "Mahesh", "Rohan", "Vistara", "हिंदी", "राहुल", "रोहन", "Mohan", "उमर", "Farooq", "इंडिया", "98765", "9876543210", "91234", "chautees", "Sharma") if w in logs]
 check("logs: no names, numbers or words", not leaks, leaks)
 check("database: nothing but booking_requests changed by the whole booking flow", db_snapshot() == BEFORE)
 check("redis: no booking keys left for these users", not list(redis_conn.scan_iter(f"booking:flow:{uid_a}:*"))

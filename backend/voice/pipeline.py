@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from voice import debug_store, error_log
 from voice.messages import ErrorCode
-from voice.stt import STTError, STTRateLimited, get_stt, pcm_duration_ms
+from voice.stt import STTError, STTRateLimited, get_stt, is_prompt_echo, pcm_duration_ms
 from voice.agent import TripInfo, run_agent
 from voice.lang import detect_lang
 from voice.tts import REPLY_MIME, synthesize_reply
@@ -115,6 +115,10 @@ def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
 def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
     """Stage 2a: the agent (one LLM call). Empty transcript -> a fixed reply, no LLM call."""
     text = (result.text or "").strip()
+    if text and is_prompt_echo(text):
+        # a short / silent clip transcribed as the STT hint itself: nothing was said (never an answer)
+        logger.info("[VOICE] turn=%s prompt_echo=true", getattr(ctx, "turn_id", "?"))
+        text = ""
     if not text:
         result.reply_text, result.ui_actions, result.action, result.llm_ms = EMPTY_TRANSCRIPT_REPLY, [], "unclear", 0
         return
