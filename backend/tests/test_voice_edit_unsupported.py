@@ -236,8 +236,11 @@ with mock.patch.object(openai_client, "chat_tools", fake), mock.patch.object(pla
 
     print("\n== 8. the system prompt has the new line")
     prompt = agent.build_system_prompt("/trip", trip)
-    check("prompt: cannot edit an existing itinerary", "You cannot edit, add to or optimise an existing itinerary. Never say "
-          "you are updating or changing a trip. If the user asks for that, say it cannot be done by voice yet." in prompt)
+    check("prompt: cannot add places to an existing itinerary", "You cannot add new places to an existing itinerary or "
+          "rebuild it around a new place or purpose. Never say you are updating the trip yourself. Only the available tools "
+          "(optimize day, weather replan, swap activity) can change it. If the user asks for something else, say it cannot "
+          "be done by voice yet." in prompt)
+    check("prompt: the old wording is gone", "You cannot edit, add to or optimise" not in prompt)
 
     for conv_key in redis_conn.scan_iter(f"voice:*:{USER}:*"):
         redis_conn.delete(conv_key)
