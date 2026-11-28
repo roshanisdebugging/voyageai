@@ -8,6 +8,7 @@ import { loadTs } from './tsload.mjs';
 const src = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const U = await loadTs(join(src, 'voice', 'uiActions.ts'));
 const W = await loadTs(join(src, 'features', 'trip', 'wizardState.ts'));
+const P = await loadTs(join(src, 'features', 'trip', 'tripPurpose.ts'));
 let failed = 0, total = 0;
 const check = (name, ok, detail = '') => { total++; if (!ok) failed++; console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail !== '' && !ok ? `  [${detail}]` : ''}`); };
 
@@ -42,6 +43,20 @@ check('payload keys', JSON.stringify(Object.keys(payload).sort()) === JSON.strin
   'childrenCount', 'destination', 'endDate', 'origin', 'purposeText', 'purposeType', 'startDate', 'tripStyle'].sort()), Object.keys(payload).join(','));
 check('the rest of the draft as before', payload.destination.name === 'Bengaluru' && payload.origin.name === 'Kolkata'
   && payload.startDate === '2026-12-11' && payload.endDate === '2026-12-14' && payload.adultsCount === 1 && payload.budgetAmount === 12000);
+
+// The review checklist's Purpose row (UI-fixes merge): visible when collapsed, right after Places.
+const row = P.purposeReviewRow(st.purposeType, st.baseArea, st.purposeText);
+check('review Purpose row after the voice prefill: "Event / Hackathon · near Electronic City", the words as detail',
+  row.value === 'Event / Hackathon · near Electronic City' && row.detail === 'hackathon ke liye', JSON.stringify(row));
+check('review Purpose row with no purpose: "Not set", "Optional"',
+  JSON.stringify(P.purposeReviewRow(null, null, '')) === JSON.stringify({ value: 'Not set', detail: 'Optional' }));
+check('review Purpose row for leisure: no area, no detail', JSON.stringify(P.purposeReviewRow('leisure', EC, ''))
+  === JSON.stringify({ value: P.purposeSummary('leisure', null) }), JSON.stringify(P.purposeReviewRow('leisure', EC, '')));
+// The voice 'submit review' event runs the same handleProceed as the Proceed button: the payload is built from the
+// wizard state by buildCreateTripPayload, so the state after a prefill gives the purpose keys (checked above).
+const viaVoice = W.buildCreateTripPayload({ ...st, destination: st.destination });
+check('voice submit (same handleProceed): purposeType / purposeText / baseArea sent', viaVoice.purposeType === 'event'
+  && viaVoice.purposeText === 'hackathon ke liye' && viaVoice.baseArea?.name === 'Electronic City');
 
 const kept = W.applyDraftToState({ ...initial(), purposeType: 'business', purposeText: 'client visit', baseArea: EC },
   { destination: BLR }, TODAY);

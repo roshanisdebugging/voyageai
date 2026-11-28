@@ -66,3 +66,13 @@ export function purposeSummary(type: PurposeType | null | undefined, area: Desti
   if (!opt) return null;
   return showsBaseArea(type) && area?.name ? `${opt.label} · near ${area.name}` : opt.label;
 }
+
+/** The review checklist's Purpose row: value = purposeSummary (shown when the row is collapsed) or "Not set";
+ *  detail = the user's own words when given, "Optional" when no purpose was chosen. */
+export function purposeReviewRow(type: PurposeType | null | undefined, area: DestinationReference | null | undefined,
+  text: string | null | undefined): { value: string; detail?: string } {
+  const summary = purposeSummary(type, area);
+  if (!summary) return { value: 'Not set', detail: 'Optional' };
+  const words = (text || '').trim();
+  return words ? { value: summary, detail: words } : { value: summary };
+}

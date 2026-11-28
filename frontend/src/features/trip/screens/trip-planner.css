@@ -1,0 +1,92 @@
+.trip-planner {
+  color-scheme: light;
+  --preference-text: var(--color-text-primary);
+  --preference-muted: var(--itinerary-muted);
+  --preference-option: var(--color-surface-elevated);
+  --preference-elevated: var(--color-surface-elevated);
+  --preference-border: var(--itinerary-control-border);
+  --preference-accent: var(--itinerary-accent);
+  --preference-on-accent: #fff;
+  --preference-selected: var(--itinerary-accent-surface);
+  --preference-progress-done: var(--color-primary-light);
+  --preference-progress-future: var(--itinerary-border);
+  --preference-action: var(--color-primary);
+  --preference-action-hover: var(--color-primary);
+  --preference-action-active: var(--color-primary);
+  --preference-action-disabled: var(--color-surface-elevated);
+  --preference-disabled-text: var(--itinerary-muted);
+  --preference-disabled-opacity: 1;
+  --preference-action-shadow: none;
+}
+
+.dark .trip-planner {
+  color-scheme: dark;
+  --preference-on-accent: #09090b;
+}
+
+.trip-planner :is(button, input):focus-visible {
+  outline: 2px solid var(--itinerary-accent);
+  outline-offset: 2px;
+}
+
+.trip-planner input {
+  caret-color: var(--itinerary-accent);
+}
+
+.trip-planner input::placeholder {
+  color: var(--itinerary-muted);
+}
+
+.trip-planner [data-preference-option] {
+  min-height: 52px;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+  box-shadow: none;
+}
+
+.trip-planner [data-preference-footer] {
+  padding-top: 4px;
+}
+
+.trip-planner [data-preference-footer] button:enabled:hover {
+  filter: brightness(0.94);
+}
+
+.trip-planner [data-preference-footer] button:disabled {
+  border: 1px solid var(--itinerary-border);
+}
+
+/* Leave space to scroll the last controls clear of the floating voice button. */
+@media (max-width: 740px) {
+  .trip-planner {
+    padding-bottom: calc(10rem + var(--safe-bottom));
+  }
+}
+
+.trip-review-edit {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--itinerary-accent);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.trip-review-edit:hover,
+.trip-review-edit[aria-expanded="true"] {
+  border-color: var(--itinerary-accent);
+  background: var(--itinerary-accent-surface);
+}
+
+.trip-review-done {
+  border-color: var(--itinerary-control-border);
+}
