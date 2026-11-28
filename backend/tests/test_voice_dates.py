@@ -31,6 +31,7 @@ import openai_client  # noqa: E402
 import places  # noqa: E402
 from redis_client import redis_conn  # noqa: E402
 from voice import agent, draft as D, pending as P  # noqa: E402
+from tests.purpose_helper import past_purpose  # noqa: E402  (feat/trip-purpose)
 
 results = []
 
@@ -134,7 +135,9 @@ def ra(text, args=None, today=N27, conv=None):
     CONVS.append(conv)
     FakeTools.queue = [args] if args is not None else []
     with mock.patch.object(agent, "_draft_today", lambda: today):
-        return agent.run_agent(text, "hi", user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn), conv
+        r = agent.run_agent(text, "hi", user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn)
+        return past_purpose(r, conv, lambda: D.load(redis_conn, USER, conv), lambda t: agent.run_agent(
+            t, "hi", user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn)), conv
 
 
 with mock.patch.object(openai_client, "chat_tools", FakeTools()), \

@@ -31,6 +31,7 @@ MAX_DAYS_AHEAD = 366
 REQUIRED = ["destination", "start_date", "end_date", "adults", "children", "budget_inr"]  # the order we ask in
 MAX_QUESTIONS = 2        # questions per turn (the date pair counts once); the optional origin only fills a free slot
 MAX_ORIGIN_ASKS = 2      # the origin question plus one retry after a failed lookup: never a third time
+MAX_AREA_ASKS = 2        # the base area question plus one retry after a failed lookup, like the origin
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December"]
@@ -76,6 +77,18 @@ class TripDraftState:
                                                    # "<name> se? Sahi hai?" (asked once) before it becomes the origin
     origin_checked: bool = False                   # that check was asked once already: never a second time
     skip_hint: bool = False                        # this turn's words said "don't know where from" (set by code)
+    # The optional purpose ("Kis kaam se ja rahe hain?") and, for business / event / other, the base area
+    # ("Kis area mein zyada rehna ya kaam hai?"). Same discipline as the origin: asked once, after it, in a free slot.
+    purpose_type: Optional[str] = None             # trip_purpose.PURPOSE_TYPES, set ONLY by code from the words
+    purpose_text: Optional[str] = None             # the user's words (business / event / other), checked by code
+    purpose_asked: int = 0
+    purpose_pending: bool = False                  # our last question asked for it
+    purpose_skipped: bool = False                  # "pata nahi" / not given when asked
+    base_area: Optional[Dict[str, Any]] = None     # {id, name, city, region, latitude, longitude}, near the destination
+    area_asked: int = 0                            # question or retry, at most MAX_AREA_ASKS
+    area_pending: bool = False
+    area_failed: int = 0
+    area_skipped: bool = False
 
     def missing_fields(self) -> List[str]:
         return [f for f in REQUIRED if getattr(self, f) is None and not (f == "end_date" and self.days)]
@@ -84,11 +97,22 @@ class TripDraftState:
         """Ask for the starting city? Only once, and never after a skip."""
         return self.origin_city is None and not self.origin_skipped and self.origin_asked == 0
 
+    def wants_purpose(self) -> bool:
+        """Ask why? Once, after the origin question, never after a skip, never for a checked plan (a pilgrimage)."""
+        return (self.purpose_type is None and not self.purpose_skipped and self.purpose_asked == 0
+                and not self.wants_origin() and not self.plan_card_id)
+
+    def wants_area(self) -> bool:
+        """Ask where they will mostly be? Only for business / event / other, once (plus one retry after a miss)."""
+        from trip_purpose import is_focused
+        return (is_focused(self.purpose_type) and self.base_area is None and not self.area_skipped
+                and self.area_asked == 0)
+
     def origin_is_destination(self) -> bool:
         return (not self.origin_same_ok) and same_place(self.origin_city, self.destination)
 
     def next_step(self) -> str:
-        if self.missing_fields() or self.wants_origin():
+        if self.missing_fields() or self.wants_origin() or self.wants_purpose() or self.wants_area():
             return "ask"
         if not self.dates_confirmed:
             return "confirm_date"
@@ -301,6 +325,51 @@ class UpdateResult:
     date_rolled_forward: bool = False                    # a day (and month) without a year/month became a future date
     date_fields_missing: bool = False                    # the model sent only an ISO date (no as-spoken fields)
     origin_unsure: bool = False                          # found, but the name doesn't match what was said
+    purpose_skip: bool = False                           # "pata nahi" / "kuch nahi" as the purpose
+    area_not_found: Optional[str] = None                 # a valid area name not found near the destination
+    area_invalid: bool = False                           # not a place name / "pata nahi": not given
+
+
+def apply_purpose(draft: TripDraftState, said: Any, out: UpdateResult) -> None:
+    """The words about WHY -> a type by CODE (trip_purpose word lists). A skip says "not given"; a new type after the
+    read-back needs a new read-back (it names the purpose). Leisure / pilgrimage drop a base area."""
+    from trip_purpose import classify_purpose, is_focused
+    ptype, ptext, skipped = classify_purpose(said)
+    if skipped:
+        out.purpose_skip = True
+        if draft.purpose_type is None:
+            draft.purpose_skipped = True
+        return
+    if ptype is None:
+        return
+    if (ptype, ptext) != (draft.purpose_type, draft.purpose_text):
+        draft.dates_confirmed = False
+        out.changed.append("purpose")
+    draft.purpose_type, draft.purpose_text, draft.purpose_skipped = ptype, ptext, False
+    if not is_focused(ptype):
+        draft.base_area = None
+
+
+def apply_base_area(draft: TripDraftState, said: Any, out: UpdateResult, find_place_fn) -> None:
+    """The area the user will mostly be in: the same name rule and Google look-up as the origin, searched next to the
+    destination, kept only within the place-verify sanity radius of it."""
+    from trip_purpose import area_ref, base_area_ok
+    name = clean_place_name(said)
+    if not name or is_not_a_city(name):
+        out.area_invalid = True
+        return
+    dest = draft.destination or {}
+    city = str(dest.get("city") or dest.get("name") or "").split(",")[0].strip()
+    query = f"{name}, {city}" if city and city.lower() not in name.lower() else name
+    hit = find_place_fn(query)
+    ref = area_ref(hit, name) if hit else None
+    if ref is None or not base_area_ok(ref, dest):
+        out.area_not_found = name
+        return
+    if (draft.base_area or {}).get("id") != ref.get("id"):
+        draft.dates_confirmed = False
+        out.changed.append("base_area")
+    draft.base_area, draft.area_skipped = ref, False
 
 
 def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: date, find_place_fn=None) -> UpdateResult:
@@ -354,6 +423,11 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             out.origin_not_found = name
         else:
             out.origin_invalid = True
+
+    if args.get("purpose") not in (None, ""):
+        apply_purpose(draft, args["purpose"], out)
+    if args.get("base_area") not in (None, ""):
+        apply_base_area(draft, args["base_area"], out, find_place_fn)
 
     # Dates as spoken: the model passes only the parts the user said; CODE picks the month / year (rolling forward).
     # Without these fields the model's ISO date is used as before (a past one is refused; code never guesses).
@@ -467,7 +541,26 @@ QUESTIONS = {
     "children": {"hi": "Koi bachcha bhi saath hai?", "en": "Any children coming along?"},
     "budget_inr": {"hi": "Kul budget kitna hai?", "en": "What's the total budget?"},
     "origin_city": {"hi": "Kahan se jaana hai?", "en": "Where are you starting from?"},
+    "purpose": {"hi": "Kis kaam se ja rahe hain? Ghoomna, kaam ya business, event ya hackathon, teerth, ya kuch aur?",
+                "en": "What's the trip for? A holiday, work or business, an event like a hackathon, a pilgrimage, "
+                      "or something else?"},
+    "base_area": {"hi": "Kis area mein zyada rehna ya kaam hai? Jaise Electronic City.",
+                  "en": "Which area will you mostly be in? For example Electronic City."},
 }
+AREA_RETRY = {"hi": "{name} {city} ke paas nahi mila, area ka naam phir se bolenge ya skip karein?",
+              "en": "I couldn't find {name} near {city}. Say the area again, or say skip?"}
+AREA_GIVE_UP = {"hi": "{name} bhi nahi mila, area ke bina aage badhte hain.",
+                "en": "I couldn't find {name} either, so we'll go on without an area."}
+PURPOSE_SKIPPED = {"hi": "", "en": ""}   # "pata nahi" to the purpose / area question: straight on (the read-back follows)
+# How the read-back says the purpose ("kaam ke liye"); "other" says the user's words when they are short.
+PURPOSE_WORDS = {
+    "leisure": {"hi": "ghoomne ke liye", "en": "for a holiday"},
+    "business": {"hi": "kaam ke liye", "en": "for work"},
+    "event": {"hi": "event ke liye", "en": "for an event"},
+    "pilgrimage": {"hi": "teerth ke liye", "en": "for a pilgrimage"},
+    "other": {"hi": "aapke bataye kaam ke liye", "en": "for the reason you gave"},
+}
+_SAY_TEXT_MAX = 30
 ORIGIN_RETRY = {"hi": "{name} nahi mila, phir se bolenge ya skip karein?",
                 "en": "I couldn't find {name}. Say it again, or say skip?"}
 ORIGIN_GIVE_UP = {"hi": "{name} bhi nahi mila, starting city ke bina aage badhte hain.",
@@ -476,19 +569,21 @@ ORIGIN_CHECK = {"hi": "{name} se? Sahi hai?", "en": "Starting from {name}? Is th
 ORIGIN_SAME = {"hi": "{name} se {name} hi jaana hai? Sahi hai?", "en": "Starting from {name} and going to {name}? Is that right?"}
 
 
-def ask_fields(missing: List[str], ask_origin: bool = False) -> List[str]:
+def ask_fields(missing: List[str], ask_origin: bool = False, ask_purpose: bool = False, ask_area: bool = False) -> List[str]:
     """What one question asks for: at most MAX_QUESTIONS missing fields (the date pair counts once), in the
-    fixed order; the optional origin goes after them, only if there is a free slot."""
+    fixed order; the optional origin, then the purpose, then the base area go after them, only into a free slot."""
     fields = [f for f in missing if not (f == "end_date" and "start_date" in missing)][:MAX_QUESTIONS]
-    if ask_origin and len(fields) < MAX_QUESTIONS:
-        fields.append("origin_city")
+    for wanted, name in ((ask_origin, "origin_city"), (ask_purpose, "purpose"), (ask_area, "base_area")):
+        if wanted and len(fields) < MAX_QUESTIONS:
+            fields.append(name)
     return fields
 
 
-def question_for(missing: List[str], lang: str, days_known: bool = False, ask_origin: bool = False) -> str:
+def question_for(missing: List[str], lang: str, days_known: bool = False, ask_origin: bool = False,
+                 ask_purpose: bool = False, ask_area: bool = False) -> str:
     """At most 2 things per question; the date pair counts as one."""
     lang = "en" if lang == "en" else "hi"
-    fields = ask_fields(missing, ask_origin)
+    fields = ask_fields(missing, ask_origin, ask_purpose, ask_area)
     parts = []
     for f in fields:
         if f == "start_date" and days_known:
@@ -510,19 +605,35 @@ def people_words(adults: int, children: int, lang: str) -> str:
     return out
 
 
+def purpose_words(draft: TripDraftState, lang: str) -> str:
+    """", kaam ke liye, Electronic City ke paas" / ", for work, near Electronic City"; "" when no purpose was given."""
+    lang = "en" if lang == "en" else "hi"
+    if not draft.purpose_type:
+        return ""
+    said = PURPOSE_WORDS.get(draft.purpose_type, {}).get(lang, "")
+    if draft.purpose_type == "other" and draft.purpose_text and len(draft.purpose_text) <= _SAY_TEXT_MAX:
+        said = f"{draft.purpose_text} ke liye" if lang == "hi" else f"for {draft.purpose_text}"
+    area = (draft.base_area or {}).get("name")
+    if area:
+        said += f", {area} ke paas" if lang == "hi" else f", near {area}"
+    return f", {said}" if said else ""
+
+
 def readback(draft: TripDraftState, lang: str) -> str:
-    """Without an origin: the dates only (unchanged). With one: origin se destination, dates, nights, people."""
+    """Without an origin: the dates only (unchanged). With one: origin se destination, dates, nights, people.
+    The purpose and base area are added only when given ("kaam ke liye, Electronic City ke paas")."""
     s, e = parse_date(draft.start_date), parse_date(draft.end_date)
     nights = max((e - s).days, 0)
+    why = purpose_words(draft, lang)
     if draft.origin_city:
         frm, to = (draft.origin_city or {}).get("name", ""), (draft.destination or {}).get("name", "")
         who = people_words(draft.adults or 0, draft.children or 0, "en" if lang == "en" else "hi")
         if lang == "en":
-            return f"{frm} to {to}, {say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}, {who}. Is that right?"
-        return f"{frm} se {to}, {say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}, {who}. Sahi hai?"
+            return f"{frm} to {to}, {say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}, {who}{why}. Is that right?"
+        return f"{frm} se {to}, {say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}, {who}{why}. Sahi hai?"
     if lang == "en":
-        return f"{say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}. Is that right?"
-    return f"{say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}. Sahi hai?"
+        return f"{say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}{why}. Is that right?"
+    return f"{say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}{why}. Sahi hai?"
 
 
 def summary(draft: TripDraftState, lang: str) -> str:
@@ -535,6 +646,7 @@ def summary(draft: TripDraftState, lang: str) -> str:
         import pilgrimage
         card = pilgrimage.get_card(draft.plan_card_id)
         dest = f"{dest} ({card.short_name}, checked plan)" if card else dest
+    origin += purpose_words(draft, lang)
     if lang == "en":
         return (f"{dest}{origin}, {say_date(s)} to {say_date(e)}, {who}, budget ₹{draft.budget_inr:,}. "
                 "Confirm saves what's on the review page. A trip can't be undone by voice.")
@@ -553,4 +665,15 @@ def prefill(draft: TripDraftState) -> Dict[str, Any]:
         "childrenCount": draft.children,
         "customBudgetAmount": draft.budget_inr,
         **({"planCardId": draft.plan_card_id} if draft.plan_card_id else {}),
+        **_purpose_prefill(draft),
     }
+
+
+def _purpose_prefill(draft: TripDraftState) -> Dict[str, Any]:
+    """purposeType / purposeText / baseArea, only when a purpose was given (older prefills stay as they were)."""
+    from trip_purpose import is_focused
+    if not draft.purpose_type:
+        return {}
+    focused = is_focused(draft.purpose_type)
+    return {"purposeType": draft.purpose_type, "purposeText": draft.purpose_text if focused else None,
+            "baseArea": draft.base_area if focused else None}

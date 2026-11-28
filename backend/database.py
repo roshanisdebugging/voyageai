@@ -189,6 +189,12 @@ def init_db():
 
                 ALTER TABLE trips ADD COLUMN IF NOT EXISTS origin_city_id VARCHAR REFERENCES cities(id);
 
+                ALTER TABLE trips ADD COLUMN IF NOT EXISTS purpose_type VARCHAR;
+
+                ALTER TABLE trips ADD COLUMN IF NOT EXISTS purpose_text VARCHAR(120);
+
+                ALTER TABLE trips ADD COLUMN IF NOT EXISTS base_area_json TEXT;
+
                 ALTER TABLE itinerary_activities ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT FALSE;
 
                 ALTER TABLE itinerary_activities ADD COLUMN IF NOT EXISTS place_id VARCHAR;

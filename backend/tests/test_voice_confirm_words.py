@@ -41,6 +41,7 @@ from models_trip import TripModel  # noqa: E402
 from redis_client import redis_conn  # noqa: E402
 from trip_lifecycle import today_ist  # noqa: E402
 from voice import agent, draft as D, pending as P  # noqa: E402
+from tests.purpose_helper import past_purpose  # noqa: E402  (feat/trip-purpose)
 
 main.SessionLocal = database.SessionLocal
 database.Base.metadata.create_all(bind=database.engine)
@@ -86,7 +87,9 @@ fake = FakeTools()
 def ra(text, user, conv, screen="/home", queue=None):
     if queue is not None:
         FakeTools.queue = list(queue)
-    return agent.run_agent(text, "hi", user_id=user, conversation_id=conv, screen=screen, trip=None, redis_conn=redis_conn)
+    r = agent.run_agent(text, "hi", user_id=user, conversation_id=conv, screen=screen, trip=None, redis_conn=redis_conn)
+    return past_purpose(r, conv, lambda: D.load(redis_conn, user, conv), lambda t: agent.run_agent(
+        t, "hi", user_id=user, conversation_id=conv, screen=screen, trip=None, redis_conn=redis_conn))
 
 
 def trips_of(user):

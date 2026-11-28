@@ -105,6 +105,10 @@ Call exactly one tool when it fits:
   name is the origin_city. A correction at the read-back like "nahi, Patna se" -> origin_city=Patna only.
   "पता" / "pata" alone is NOT a city: it means the user does not know (no origin_city). Never pass "pata",
   "nahi", "kuch", "koi" or "kahin" as origin_city. "pata nahi, Delhi se" -> origin_city=Delhi.
+  purpose = WHY they travel, in the user's own words exactly as said ("hackathon ke liye", "kaam se", "bas ghoomna"),
+  only when said; our code decides the type. base_area = the area or locality at the destination they will mostly be
+  in ("Electronic City mein hackathon hai" -> base_area=Electronic City), only when said. If our last question asked
+  for purpose or base_area, the answer is that field.
   start_new=true only when the
   user starts a different new trip while one is being planned. Never ask for details yourself: our code asks.
   A destination alone counts as a detail ("plan a trip to Manali" -> update_trip_draft).
@@ -322,6 +326,10 @@ UPDATE_DRAFT_TOOL: Dict[str, Any] = {
                 "adults": {"type": _nullable("integer")},
                 "children": {"type": _nullable("integer")},
                 "budget_inr": {"type": _nullable("number"), "description": "Total budget in rupees."},
+                "purpose": {"type": _nullable("string"), "description": "WHY the user travels, in their own words as "
+                            "said (e.g. 'hackathon ke liye', 'kaam se', 'bas ghoomna'). Only if said."},
+                "base_area": {"type": _nullable("string"), "description": "The area or locality at the destination the "
+                              "user will mostly be in (e.g. 'Electronic City'). Only if said."},
                 "start_new": {"type": _nullable("boolean"), "description": "true only for a different new trip while one is being planned."},
             },
         },
@@ -483,7 +491,8 @@ def _draft_line(d) -> str:
     have = {k: v for k, v in {
         "destination": (d.destination or {}).get("name"), "origin_city": (d.origin_city or {}).get("name"),
         "start_date": d.start_date, "end_date": d.end_date, "days": d.days, "adults": d.adults,
-        "children": d.children, "budget_inr": d.budget_inr}.items() if v is not None}
+        "children": d.children, "budget_inr": d.budget_inr, "purpose": getattr(d, "purpose_type", None),
+        "base_area": (getattr(d, "base_area", None) or {}).get("name")}.items() if v is not None}
     asked = f"; our last question asked for {d.last_asked}" if getattr(d, "last_asked", None) else ""
     return f"have {json.dumps(have)}; still missing {d.missing_fields()} (our code asks for them){asked}"
 
@@ -746,6 +755,36 @@ def _log_origin(d, conversation_id: str, event: str, **flags: bool) -> None:
           f"same_as_dest_ok={'true' if d.origin_same_ok else 'false'}{extra} source=voice draft={conversation_id}", flush=True)
 
 
+def _log_purpose(d, conversation_id: str, event: str, **flags: bool) -> None:
+    """The type, counts and flags only, never the user's words or the area's name."""
+    extra = "".join(f" {k}=true" for k, v in flags.items() if v)
+    print(f"[TRIP DRAFT] event=purpose_{event} purpose={d.purpose_type or 'none'} purpose_asked={d.purpose_asked} "
+          f"purpose_skipped={'true' if d.purpose_skipped else 'false'} area_set={'true' if d.base_area else 'false'} "
+          f"area_asked={d.area_asked} area_failed={d.area_failed} area_skipped={'true' if d.area_skipped else 'false'}"
+          f"{extra} source=voice draft={conversation_id}", flush=True)
+
+
+_PURPOSE_SKIP_MAX_WORDS = 6
+
+
+def is_purpose_area_skip(text: str) -> bool:
+    """A short "pata nahi" / "kuch nahi" / "skip" answer to the purpose or area question (no model call)."""
+    from trip_purpose import is_purpose_skip
+    return 0 < len(tu_words(text)) <= _PURPOSE_SKIP_MAX_WORDS and is_purpose_skip(text)
+
+
+def skip_purpose_area(redis_conn, user_id: str, conversation_id: str, d, lang: str) -> AgentResult:
+    """"pata nahi" to "Kis kaam se ja rahe hain?" (no area question then) or to "Kis area mein ...?": go on without it."""
+    from voice import draft as D
+    if d.purpose_pending:
+        d.purpose_skipped = d.purpose_type is None or d.purpose_skipped
+    if d.area_pending:
+        d.area_skipped = True
+    d.purpose_pending = d.area_pending = False
+    _log_purpose(d, conversation_id, "skipped")
+    return draft_next(redis_conn, user_id, conversation_id, d, lang, D.PURPOSE_SKIPPED[lang])
+
+
 def draft_next(redis_conn, user_id: str, conversation_id: str, d, lang: str, prefix: str = "") -> AgentResult:
     """What to say next for a draft. CODE decides: origin = destination? / ask (<= 2 things) / read back / ready."""
     from voice import draft as D, pending as P
@@ -765,12 +804,21 @@ def draft_next(redis_conn, user_id: str, conversation_id: str, d, lang: str, pre
     missing = d.missing_fields()
     if step == "ask":
         d.awaiting = None
-        d.last_asked = D.ask_fields(missing, ask_origin=d.wants_origin())
+        d.last_asked = D.ask_fields(missing, ask_origin=d.wants_origin(), ask_purpose=d.wants_purpose(),
+                                    ask_area=d.wants_area())
         if "origin_city" in d.last_asked:
             d.origin_asked += 1
             d.origin_pending = True
+        if "purpose" in d.last_asked:
+            d.purpose_asked += 1
+            d.purpose_pending = True
+        if "base_area" in d.last_asked:
+            d.area_asked += 1
+            d.area_pending = True
         D.save(redis_conn, user_id, conversation_id, d)
-        text = f"{prefix} {D.question_for(missing, lang, days_known=bool(d.days), ask_origin='origin_city' in d.last_asked)}".strip()
+        if {"purpose", "base_area"} & set(d.last_asked):
+            _log_purpose(d, conversation_id, "ask")
+        text = f"{prefix} {D.question_for(missing, lang, days_known=bool(d.days), ask_origin='origin_city' in d.last_asked, ask_purpose='purpose' in d.last_asked, ask_area='base_area' in d.last_asked)}".strip()
         return AgentResult(text, action="trip_draft", step="ask", missing_count=len(missing))
     if step == "confirm_date":
         d.awaiting, d.last_asked = "date", []
@@ -800,6 +848,8 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
     d = d or D.TripDraftState()
     prev_dest_id = (d.destination or {}).get("id")
     origin_was_asked, d.origin_pending = d.origin_pending, False
+    purpose_was_asked, d.purpose_pending = d.purpose_pending, False
+    area_was_asked, d.area_pending = d.area_pending, False
     skip_hint, d.skip_hint = d.skip_hint, False
     was_skipped = d.origin_skipped
     res = D.apply_update(d, {k: v for k, v in args.items() if k != "start_new"}, lang, _draft_today())
@@ -829,14 +879,38 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
             or skip_hint:
         _log_origin(d, conversation_id, "update", origin_discarded_stopword=res.origin_stopword,
                     origin_cleared_by_skip=cleared, origin_name_mismatch=res.origin_unsure)
+    # The purpose and base area: like the origin. Asked and not given -> never asked again; an area not found near the
+    # destination -> one retry, then go on without it.
+    area_retry, area_note = "", ""
+    if purpose_was_asked and "purpose" not in res.changed and d.purpose_type is None:
+        d.purpose_skipped = True
+    if res.area_not_found:
+        d.area_failed += 1
+        city = str((d.destination or {}).get("city") or (d.destination or {}).get("name") or "").split(",")[0]
+        if d.area_failed >= 2 or d.area_asked >= D.MAX_AREA_ASKS:
+            d.area_skipped = True
+            area_note = D.AREA_GIVE_UP[lang].format(name=res.area_not_found)
+        else:
+            d.area_asked += 1
+            d.area_pending, d.last_asked = True, ["base_area"]
+            area_retry = D.AREA_RETRY[lang].format(name=res.area_not_found, city=city)
+    elif area_was_asked and "base_area" not in res.changed:
+        d.area_skipped = True
+    if purpose_was_asked or area_was_asked or "purpose" in res.changed or "base_area" in res.changed \
+            or res.area_not_found or res.purpose_skip:
+        _log_purpose(d, conversation_id, "update", area_not_found=bool(res.area_not_found), area_invalid=res.area_invalid)
     if res.problems:
         D.save(redis_conn, user_id, conversation_id, res.draft)
-        r = AgentResult(" ".join(res.problems[:2] + ([origin_retry] if origin_retry else [])), action="trip_draft",
+        retries = [x for x in (origin_retry, area_retry) if x]
+        r = AgentResult(" ".join(res.problems[:2] + retries), action="trip_draft",
                         step="ask", missing_count=len(res.draft.missing_fields()), error_code="refused_value")
         return r
     if origin_retry:
         D.save(redis_conn, user_id, conversation_id, res.draft)
         return AgentResult(origin_retry, action="trip_draft", step="ask_origin", missing_count=len(res.draft.missing_fields()))
+    if area_retry:
+        D.save(redis_conn, user_id, conversation_id, res.draft)
+        return AgentResult(area_retry, action="trip_draft", step="ask_area", missing_count=len(res.draft.missing_fields()))
     if "destination" in res.changed and (res.draft.destination or {}).get("id") != prev_dest_id:
         offer = _plan_offer(res.draft, args.get("destination"))
         if offer is not None:
@@ -853,7 +927,7 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
         name = (res.draft.destination or {}).get("name", "")
         length = f", {res.draft.days} din" if res.draft.days and lang != "en" else (f", {res.draft.days} days" if res.draft.days else "")
         prefix = f"{name}{length}."
-    prefix = f"{prefix} {origin_note}".strip()
+    prefix = f"{prefix} {origin_note} {area_note}".strip()
     return draft_next(redis_conn, user_id, conversation_id, res.draft, lang, prefix)
 
 
@@ -870,6 +944,10 @@ def skip_origin(redis_conn, user_id: str, conversation_id: str, d, lang: str) ->
         P.clear(redis_conn, user_id, conversation_id)  # and a Confirm card made with it must not be confirmed
     d.origin_city, d.origin_candidate = None, None
     d.origin_pending, d.origin_skipped, d.skip_hint = False, True, False
+    if d.purpose_pending or d.area_pending:    # one "pata nahi" to a question that asked both
+        d.purpose_skipped = d.purpose_skipped or (d.purpose_pending and d.purpose_type is None)
+        d.area_skipped = d.area_skipped or d.area_pending
+        d.purpose_pending = d.area_pending = False
     if d.awaiting in ("origin_check", "origin_same"):
         d.awaiting = None
     _log_origin(d, conversation_id, "skipped", origin_cleared_by_skip=cleared)
@@ -1389,6 +1467,9 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
         result = answer_origin_same(redis_conn, user_id, conversation_id, draft_state, said, lang)
         if result is None:
             draft_state = D.load(redis_conn, user_id, conversation_id)
+    elif (draft_state is not None and (draft_state.purpose_pending or draft_state.area_pending)
+          and not draft_state.origin_pending and is_purpose_area_skip(transcript)):
+        result = skip_purpose_area(redis_conn, user_id, conversation_id, draft_state, lang)   # no model call
     elif (booking_result := _booking_turn(transcript, lang, user_id, conversation_id, trip, redis_conn)) is not None:
         result = booking_result      # booking stage 2: "book karwana hai" / an answer to the last booking question
 

@@ -47,6 +47,7 @@ from models_place import CityModel  # noqa: E402
 from redis_client import redis_conn  # noqa: E402
 from trip_lifecycle import TripValidationError, clean_place_name, today_ist  # noqa: E402
 from voice import agent, draft as D, pending as P, pipeline  # noqa: E402
+from tests.purpose_helper import past_purpose  # noqa: E402  (feat/trip-purpose)
 
 results = []
 
@@ -110,7 +111,9 @@ def new_conv():
 def ra(text, conv, args=None, lang="hi"):
     """One voice turn. args = what the model extracts from `text` (None = the model is not reached / says text)."""
     FakeTools.queue = [("tool", args)] if args is not None else []
-    return agent.run_agent(text, lang, user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn)
+    r = agent.run_agent(text, lang, user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn)
+    return past_purpose(r, conv, lambda: dr(conv), lambda t: agent.run_agent(
+        t, lang, user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn))
 
 
 def no_llm(fn):
@@ -197,7 +200,8 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
     check("[en] 1-by-1: budget + origin asked", r.reply_text == "What's the total budget? Where are you starting from?", r.reply_text)
     r, quiet = no_llm(lambda: ra("I don't know", c, lang="en"))
     check("[en] 'I don't know' (both asked) -> origin skipped, budget asked again, no LLM call",
-          quiet and dr(c).origin_skipped and r.reply_text == "Okay, without a starting city. What's the total budget?", r.reply_text)
+          quiet and dr(c).origin_skipped and r.reply_text == "Okay, without a starting city. What's the total budget? "
+          + D.QUESTIONS["purpose"]["en"], r.reply_text)   # feat/trip-purpose: the purpose fills the free slot
     r = ra("50 thousand", c, {"budget_inr": 50000}, "en")
     check("[en] then the read-back stays exactly as today (no origin)", r.reply_text == RB_EN, r.reply_text)
 
@@ -481,6 +485,8 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
     FakeTools.queue = [("text", "Theek hai.")]
     r = agent.run_agent("pata nahi kahan se, sochna padega", "hi", user_id=USER, conversation_id=c, screen="/home", trip=None,
                         redis_conn=redis_conn)
+    r = past_purpose(r, c, lambda: dr(c), lambda t: agent.run_agent(t, "hi", user_id=USER, conversation_id=c, screen="/home",
+                                                                    trip=None, redis_conn=redis_conn))
     check("long skip and the model didn't update the draft -> still skipped, read back", dr(c).origin_skipped
           and r.reply_text == SKIPPED_HI, r.reply_text)
 

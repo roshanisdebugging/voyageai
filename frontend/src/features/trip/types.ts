@@ -1,4 +1,5 @@
 import type { TravelStyle, TransportPreference, DietaryPreference, ActivityInterest, BudgetLevel } from '../../auth/types';
+import type { PurposeType } from './tripPurpose';
 
 export type TripStatus = 'PLANNING' | 'UPCOMING' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED' | 'ARCHIVED';
 export type ItineraryStatus = 'GENERATING' | 'READY' | 'FAILED';
@@ -119,6 +120,10 @@ export interface Trip {
   adultsCount?: number;
   childrenCount?: number;
   budget?: TripBudget;
+  /** Why the trip is made and where the traveller will mostly be (null on older trips). See tripPurpose.ts. */
+  purposeType?: PurposeType | null;
+  purposeText?: string | null;
+  baseArea?: DestinationReference | null;
   status: TripStatus;
   itineraryStatus?: ItineraryStatus;
   tripStyle: TravelStyle[];
@@ -150,6 +155,9 @@ export interface TripDraft {
   customBudgetAmount?: number;
   /** A checked plan accepted by voice ("haan"); the server checks it against the destination. */
   planCardId?: string;
+  purposeType?: PurposeType | null;
+  purposeText?: string | null;
+  baseArea?: DestinationReference | null;
   currentStep?: number;
   updatedAt?: string;
 }
@@ -166,6 +174,9 @@ export interface CreateTripPayload {
   tripStyle?: TravelStyle[];
   budgetAmount: number;
   planCardId?: string;
+  purposeType?: PurposeType | null;
+  purposeText?: string | null;
+  baseArea?: DestinationReference | null;
 }
 
 export type PackageItemStatus = 'RECOMMENDED' | 'SELECTED' | 'PENDING' | 'CONFIRMED' | 'CANCELLED';

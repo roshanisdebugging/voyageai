@@ -9,7 +9,8 @@ import { PreferenceProgress } from '../../../components/preferences/PreferencePr
 import { PreferenceFooter } from '../../../components/preferences/PreferenceFooter';
 import { PlaceSearchField, placeSubtitle } from '../components/PlaceSearchField';
 import { cleanOriginName, ORIGIN_MAX_CHARS } from '../originName';
-import { MapPin, Calendar, Sparkles, ArrowLeft, RefreshCw, AlertCircle, Wallet, Baby, User, Pencil } from 'lucide-react';
+import { isPurposeType, PURPOSE_OPTIONS, PURPOSE_TEXT_MAX, purposePayload, purposeSummary, purposeTextProblem, showsBaseArea, type PurposeType } from '../tripPurpose';
+import { MapPin, Calendar, Sparkles, ArrowLeft, RefreshCw, AlertCircle, Wallet, Baby, User, Pencil, Briefcase } from 'lucide-react';
 import { announceTripCreated, setReviewShowing, VOICE_SUBMIT_REVIEW } from '../../../voice/reviewState';
 
 /**
@@ -125,6 +126,10 @@ export const TripCreationWizard: React.FC = () => {
   const [budgetAmount, setBudgetAmount] = useState<number>(30000);
   // A checked plan accepted by voice; sent with the trip, the server keeps it only if it fits the destination.
   const [planCardId, setPlanCardId] = useState<string | undefined>(undefined);
+  // Optional: why the trip is made, the user's own words, and (Business / Event / Other) the area they'll mostly be in.
+  const [purposeType, setPurposeType] = useState<PurposeType | null>(null);
+  const [purposeText, setPurposeText] = useState('');
+  const [baseArea, setBaseArea] = useState<DestinationReference | null>(null);
 
   const [dateError, setDateError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -142,6 +147,9 @@ export const TripCreationWizard: React.FC = () => {
     if (d.tripStyle) setStyles(d.tripStyle);
     if (d.customBudgetAmount) setBudgetAmount(d.customBudgetAmount);
     setPlanCardId(d.planCardId);
+    if (d.purposeType !== undefined) setPurposeType(isPurposeType(d.purposeType) ? d.purposeType : null);
+    if (d.purposeText !== undefined) setPurposeText(d.purposeText || '');
+    if (d.baseArea !== undefined) setBaseArea(d.baseArea || null);
   };
 
   // First render: a prefill (e.g. from voice) wins, then an unfinished draft, then saved preferences.
@@ -170,6 +178,9 @@ export const TripCreationWizard: React.FC = () => {
     tripStyle: styles,
     customBudgetAmount: budgetAmount,
     planCardId,
+    purposeType,
+    purposeText,
+    baseArea,
     currentStep: nextStep,
   });
 
@@ -197,6 +208,9 @@ export const TripCreationWizard: React.FC = () => {
     setStyles(userPreferences?.travelStyles || []);
     setBudgetAmount(30000);
     setPlanCardId(undefined);
+    setPurposeType(null);
+    setPurposeText('');
+    setBaseArea(null);
     setStep(1);
     setShowResumePrompt(false);
   };
@@ -234,6 +248,10 @@ export const TripCreationWizard: React.FC = () => {
     if (totalTravelers > MAX_TRAVELERS) return `A trip can have at most ${MAX_TRAVELERS} travelers.`;
     if (!budgetAmount || budgetAmount < MIN_BUDGET) return `Enter a budget of at least ${formatInr(MIN_BUDGET)}.`;
     if (origin && !cleanOriginName(origin.name)) return `Kahan se: choose a city name (letters only, at most ${ORIGIN_MAX_CHARS} characters), or clear it.`;
+    if (showsBaseArea(purposeType)) {
+      const textProblem = purposeTextProblem(purposeText);
+      if (textProblem) return textProblem;
+    }
     return null;
   };
 
@@ -258,6 +276,7 @@ export const TripCreationWizard: React.FC = () => {
         tripStyle: styles,
         budgetAmount,
         ...(planCardId ? { planCardId } : {}),
+        ...(purposeType ? purposePayload(purposeType, purposeText, baseArea) : {}),
       });
       discardDraft();
       announceTripCreated(); // voice: the draft for this trip can go
@@ -414,6 +433,54 @@ export const TripCreationWizard: React.FC = () => {
     </div>
   );
 
+  const purposeEditor = (idPrefix: string) => (
+    <div className="space-y-3">
+      <div role="group" aria-label="Trip purpose (optional)" className="flex flex-wrap gap-2">
+        {PURPOSE_OPTIONS.map(opt => (
+          <button
+            key={opt.id}
+            type="button"
+            aria-pressed={purposeType === opt.id}
+            onClick={() => setPurposeType(prev => (prev === opt.id ? null : opt.id))}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all ${
+              purposeType === opt.id
+                ? 'bg-teal-500/15 border-teal-500 text-teal-300'
+                : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      {showsBaseArea(purposeType) && (
+        <>
+          <div>
+            <label htmlFor={`${idPrefix}-purpose-text`} className="text-xs font-semibold text-slate-400 block mb-1.5">
+              In your words <span className="text-slate-500 font-normal">(optional)</span>
+            </label>
+            <input
+              id={`${idPrefix}-purpose-text`}
+              type="text"
+              maxLength={PURPOSE_TEXT_MAX}
+              value={purposeText}
+              onChange={e => setPurposeText(e.target.value)}
+              placeholder="e.g. Hackathon at a tech park"
+              className="w-full bg-slate-950 border border-slate-800 rounded-2xl py-3 px-3 text-slate-100 text-sm focus:outline-none focus:border-teal-500"
+            />
+          </div>
+          <PlaceSearchField
+            id={`${idPrefix}-base-area`}
+            label="Where will you mostly be?"
+            placeholder="Area or locality (e.g. Electronic City)"
+            value={baseArea}
+            onChange={setBaseArea}
+            optional
+          />
+        </>
+      )}
+    </div>
+  );
+
   const sectionCard = (title: string, icon: React.ReactNode, body: React.ReactNode) => (
     <section className="bg-slate-900/70 border border-slate-800 rounded-3xl p-4 space-y-3">
       <h3 className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-slate-300">
@@ -528,6 +595,13 @@ export const TripCreationWizard: React.FC = () => {
                 Add your starting city and we'll suggest trains, flights or buses that fit your budget.
               </p>
 
+              <div className="space-y-2">
+                <span className="text-xs font-semibold text-slate-400">
+                  Why are you going? <span className="text-slate-500 font-normal">(optional)</span>
+                </span>
+                {purposeEditor('trip')}
+              </div>
+
               <PreferenceFooter onContinue={() => goToStep(2)} disabled={!destination} />
             </div>
           )}
@@ -628,6 +702,7 @@ export const TripCreationWizard: React.FC = () => {
                 </div>
               ))}
 
+              {sectionCard('Purpose (optional)', <Briefcase className="w-4 h-4 text-teal-400" />, purposeEditor('review'))}
               {sectionCard('Dates', <Calendar className="w-4 h-4 text-teal-400" />, datesEditor)}
               {sectionCard('Travelers', <User className="w-4 h-4 text-teal-400" />, travelersEditor)}
               {sectionCard('Budget', <Wallet className="w-4 h-4 text-teal-400" />, budgetInput)}
@@ -639,6 +714,7 @@ export const TripCreationWizard: React.FC = () => {
                   {origin && <span className="text-slate-400 font-semibold"> · from {origin.name}</span>}
                 </div>
                 <div>{startDate} → {endDate} · {days} day{days > 1 ? 's' : ''}</div>
+                {purposeSummary(purposeType, baseArea) && <div>{purposeSummary(purposeType, baseArea)}</div>}
                 <div>
                   {adults} adult{adults > 1 ? 's' : ''}{children > 0 && `, ${children} child${children > 1 ? 'ren' : ''}`}
                   {' · '}{budgetAmount ? formatInr(budgetAmount) : 'no budget'}

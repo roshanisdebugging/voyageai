@@ -104,6 +104,9 @@ def serialize_trip(trip: TripModel, db: Optional[Session] = None) -> Dict[str, A
         "childrenCount": sum(1 for t in travelers if t.get("type") == "CHILD"),
         "preferencesSnapshot": trip.preferences_snapshot,
         "budget": trip.budget,
+        "purposeType": getattr(trip, "purpose_type", None),
+        "purposeText": getattr(trip, "purpose_text", None),
+        "baseArea": getattr(trip, "base_area", None),
         "progress": trip.progress,
         "createdAt": trip.created_at,
         "updatedAt": trip.updated_at,
@@ -191,6 +194,36 @@ def _parse_origin(raw: Any) -> Optional[Dict[str, Any]]:
     return {**place, "name": name}
 
 
+def _parse_purpose(trip_data: Dict[str, Any], destination: Dict[str, Any]) -> tuple:
+    """The optional purpose (purposeType, purposeText) and base area (baseArea): checked like the origin. Text and
+    area are kept only for business / event / other; leisure, pilgrimage and no purpose store none (planned as today).
+    Older clients send none of these: (None, None, None)."""
+    from trip_purpose import PURPOSE_TEXT_MAX, PURPOSE_TYPES, base_area_ok, clean_purpose_text, is_focused
+    ptype = trip_data.get("purposeType")
+    if ptype in (None, ""):
+        return None, None, None
+    if ptype not in PURPOSE_TYPES:
+        raise TripValidationError("Purpose: choose one of the listed options.")
+    if not is_focused(ptype):
+        return ptype, None, None
+    raw_text = trip_data.get("purposeText")
+    text = None
+    if raw_text not in (None, ""):
+        text = clean_purpose_text(raw_text)
+        if text is None:
+            raise TripValidationError(f"Purpose: one line of at most {PURPOSE_TEXT_MAX} letters, digits and common punctuation.")
+    area = None
+    raw_area = trip_data.get("baseArea")
+    if raw_area:
+        place = _parse_place(raw_area, "Base area")
+        name = clean_place_name(place.get("name"))
+        if name is None or not base_area_ok(place, destination):
+            raise TripValidationError(f"Base area: choose a place near {destination.get('name') or 'the destination'}.")
+        area = {"id": place.get("id"), "name": name, "city": place.get("city"), "region": place.get("region"),
+                "latitude": float(place["latitude"]), "longitude": float(place["longitude"])}
+    return ptype, text, area
+
+
 def _parse_budget_amount(raw: Any) -> Optional[int]:
     if raw in (None, ""):
         return None
@@ -270,6 +303,7 @@ def create_trip_for_user(
     dest_name = destination["name"].strip()
 
     origin = _parse_origin(trip_data.get("origin"))
+    purpose_type, purpose_text, base_area = _parse_purpose(trip_data, destination)
     origin_city = get_or_create_city(db, origin) if origin else None
 
     start_date, end_date, total_days = _parse_dates(trip_data)
@@ -334,6 +368,9 @@ def create_trip_for_user(
         travelers_json=json.dumps(travelers),
         preferences_snapshot_json=json.dumps(pref_snapshot),
         budget_json=json.dumps(budget),
+        purpose_type=purpose_type,
+        purpose_text=purpose_text,
+        base_area_json=json.dumps(base_area) if base_area else None,
         progress_json=json.dumps({
             "totalDays": total_days,
             "currentDay": 1,
@@ -346,7 +383,8 @@ def create_trip_for_user(
     db.add(trip)
     db.commit()
     print(f"[TRIP CREATED] {trip.id} '{trip.title}' ({total_days} days) for user {auth_user.id}", flush=True)
-    print(f"[TRIP DRAFT] trip={trip.id} origin_set={'true' if origin_city else 'false'} source=create", flush=True)
+    print(f"[TRIP DRAFT] trip={trip.id} origin_set={'true' if origin_city else 'false'} purpose={purpose_type or 'none'} "
+          f"area_set={'true' if base_area else 'false'} source=create", flush=True)
 
     if plan_card and _build_from_card_now(db, trip, plan_card["id"], total_days):
         return serialize_trip(trip, db)   # no AI needed: built from the card, no itinerary job queued

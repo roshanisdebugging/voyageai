@@ -22,6 +22,10 @@ class TripModel(Base):
     preferences_snapshot_json = Column(Text, default="{}")       # Immutable UserPreferences Snapshot
     budget_json = Column(Text, default="{}")                     # BudgetModel (level, target_amount, currency)
     progress_json = Column(Text, default="{}")
+    # Why the trip is made and where the traveller will mostly be (trip_purpose.py); all optional, NULL on older trips.
+    purpose_type = Column(String, nullable=True)                 # leisure | business | event | pilgrimage | other
+    purpose_text = Column(String(120), nullable=True)            # the user's own words (business / event / other)
+    base_area_json = Column(Text, nullable=True)                 # {id, name, city, region, latitude, longitude}
     created_at = Column(String, nullable=False)
     updated_at = Column(String, nullable=False)
 
@@ -64,6 +68,14 @@ class TripModel(Base):
     @budget.setter
     def budget(self, val):
         self.budget_json = json.dumps(val or {})
+
+    @property
+    def base_area(self):
+        return json.loads(self.base_area_json) if self.base_area_json else None
+
+    @base_area.setter
+    def base_area(self, val):
+        self.base_area_json = json.dumps(val) if val else None
 
     @property
     def progress(self):

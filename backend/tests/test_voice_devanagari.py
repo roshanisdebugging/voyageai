@@ -29,6 +29,7 @@ import places  # noqa: E402
 from redis_client import redis_conn  # noqa: E402
 from trip_lifecycle import today_ist  # noqa: E402
 from voice import agent, draft as D, pending as P  # noqa: E402
+from tests.purpose_helper import past_purpose  # noqa: E402  (feat/trip-purpose)
 from voice import text_utils as T  # noqa: E402
 
 results = []
@@ -82,7 +83,9 @@ class FakeTools:
 def ra(text, conv, queue=None):
     if queue is not None:
         FakeTools.queue = list(queue)
-    return agent.run_agent(text, "hi", user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn)
+    r = agent.run_agent(text, "hi", user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn)
+    return past_purpose(r, conv, lambda: D.load(redis_conn, USER, conv), lambda t: agent.run_agent(
+        t, "hi", user_id=USER, conversation_id=conv, screen="/home", trip=None, redis_conn=redis_conn))
 
 
 FULL_DRAFT = [("tool", ("update_trip_draft", {"destination": "Goa", "start_date": d(20), "end_date": d(23),

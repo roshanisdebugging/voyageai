@@ -48,6 +48,7 @@ from models_trip import TripModel  # noqa: E402
 from redis_client import redis_conn  # noqa: E402
 from trip_lifecycle import today_ist  # noqa: E402
 from voice import agent, draft as D, pending as P, pipeline  # noqa: E402
+from tests.purpose_helper import PURPOSE_QUESTIONS, past_purpose  # noqa: E402  (feat/trip-purpose)
 from voice.stt import STTResult  # noqa: E402
 
 main.SessionLocal = database.SessionLocal
@@ -93,7 +94,9 @@ fake = FakeTools()
 def ra(text, user, conv, screen="/home", queue=None):
     if queue is not None:
         FakeTools.queue = list(queue)
-    return agent.run_agent(text, "hi", user_id=user, conversation_id=conv, screen=screen, trip=None, redis_conn=redis_conn)
+    r = agent.run_agent(text, "hi", user_id=user, conversation_id=conv, screen=screen, trip=None, redis_conn=redis_conn)
+    return past_purpose(r, conv, lambda: D.load(redis_conn, user, conv), lambda t: agent.run_agent(
+        t, "hi", user_id=user, conversation_id=conv, screen=screen, trip=None, redis_conn=redis_conn))
 
 
 def trips_of(user):
@@ -118,7 +121,8 @@ check("people words", [D.parse_int(x) for x in ("do", "teen", "koi nahi", 2)] ==
 res = D.apply_update(D.TripDraftState(), {"budget_inr": 500}, "hi", TODAY, None)
 check("budget under ₹1,000 refused", res.problems and res.draft.budget_inr is None)
 dd = D.TripDraftState(destination={"name": "Goa"}, start_date=d(28), end_date=d(31), adults=2, children=0, budget_inr=40000,
-                      origin_skipped=True)   # booking step 1: the optional origin is asked once; skipped here
+                      origin_skipped=True, purpose_skipped=True)   # booking step 1: the optional origin is asked
+                                                                                # once; skipped here (and the purpose)
 check("all fields but no read-back -> confirm_date, never ready", dd.next_step() == "confirm_date")
 dd.dates_confirmed = True
 check("after the read-back -> ready", dd.next_step() == "ready")
@@ -264,7 +268,10 @@ def voice_turn(ws, conv, text):
     ws.send_bytes(pcm(0.5))
     ws.send_json({"type": "stop"})
     recv_until(ws, {"transcript"})
-    return recv_until(ws, {"reply"})
+    rep = recv_until(ws, {"reply"})
+    if any((rep.get("reply_text") or "").endswith(q) for q in PURPOSE_QUESTIONS):
+        return voice_turn(ws, conv, "pata nahi")   # feat/trip-purpose: the purpose question, not tested here (code, no model)
+    return rep
 
 
 uid_a, uid_b = toks["A"][1], toks["B"][1]
