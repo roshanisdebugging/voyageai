@@ -12,6 +12,9 @@ class ActivitySchema(BaseModel):
     estimatedCostInr: int = 0
     bookingRequired: bool = False
     isConfirmed: bool = False  # Strictly forced to False for recommendations
+    # Work / event trips only (itinerary_service PURPOSE RULES): "STAY" = the stay line (our code puts in the real
+    # hotel near the base area), "EVENT" = the event itself (our code writes it, no invented venue or time).
+    planSlot: Optional[str] = None
 
 class DaySchema(BaseModel):
     dayNumber: int

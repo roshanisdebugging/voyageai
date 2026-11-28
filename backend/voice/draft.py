@@ -552,7 +552,7 @@ AREA_RETRY = {"hi": "{name} {city} ke paas nahi mila, area ka naam phir se bolen
 AREA_GIVE_UP = {"hi": "{name} bhi nahi mila, area ke bina aage badhte hain.",
                 "en": "I couldn't find {name} either, so we'll go on without an area."}
 PURPOSE_SKIPPED = {"hi": "", "en": ""}   # "pata nahi" to the purpose / area question: straight on (the read-back follows)
-# How the read-back says the purpose ("kaam ke liye"); "other" says the user's words when they are short.
+# How the read-back says the purpose when the user's own word isn't known ("kaam ke liye"); with it, the word.
 PURPOSE_WORDS = {
     "leisure": {"hi": "ghoomne ke liye", "en": "for a holiday"},
     "business": {"hi": "kaam ke liye", "en": "for work"},
@@ -611,8 +611,9 @@ def purpose_words(draft: TripDraftState, lang: str) -> str:
     if not draft.purpose_type:
         return ""
     said = PURPOSE_WORDS.get(draft.purpose_type, {}).get(lang, "")
-    if draft.purpose_type == "other" and draft.purpose_text and len(draft.purpose_text) <= _SAY_TEXT_MAX:
-        said = f"{draft.purpose_text} ke liye" if lang == "hi" else f"for {draft.purpose_text}"
+    # The user's own word ("हैकथन" -> "hackathon ke liye"); the type word only when there is none (or it is long).
+    if draft.purpose_type in ("business", "event", "other") and draft.purpose_text             and len(draft.purpose_text) <= _SAY_TEXT_MAX:
+        said = f"{draft.purpose_text} ke liye" if lang == "hi" else f"for your {draft.purpose_text}"
     area = (draft.base_area or {}).get("name")
     if area:
         said += f", {area} ke paas" if lang == "hi" else f", near {area}"

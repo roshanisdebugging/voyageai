@@ -190,7 +190,7 @@ def assert_event_trip(label, trip_id, want_text):
     check(f"[{label}] (b) prompt: account style preferences do not apply", "saved account style preferences" in prompt
           and "do not apply to this trip" in prompt)
     key = CACHE_ASKED[-1]
-    check(f"[{label}] (c) cache key has the purpose and the area", key.endswith(":purpose_event:area_ChIJec"), key)
+    check(f"[{label}] (c) cache key has the purpose and the area", key.endswith(":purpose_event:area_ChIJec:pv2"), key)
     check(f"[{label}] (c) cache key differs from the leisure key", key != LEISURE_KEY, f"{key} vs {LEISURE_KEY}")
     check(f"[{label}] (c) no old cached plan used (the model made it, cached under the purpose key)",
           CACHE_SET[-1] == key and not any(k == LEISURE_KEY for k in CACHE_ASKED[-1:]))
@@ -215,11 +215,12 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
     ra("12 hazaar, Kolkata se", conv, {"budget_inr": 12000, "origin_city": "Kolkata"})
     ra("hackathon ke liye", conv, {"purpose": "hackathon ke liye"})
     r = ra("Electronic City mein", conv, {"base_area": "Electronic City"})
-    check("voice read-back as in the evidence", "event ke liye, Electronic City ke paas. Sahi hai?" in r.reply_text, r.reply_text)
+    check("voice read-back says the word said ('hackathon', not 'event')",
+          "hackathon ke liye, Electronic City ke paas. Sahi hai?" in r.reply_text, r.reply_text)
     r = ra("हाँ, ठीक है", conv)
     prefill = next((a["prefill"] for a in r.ui_actions if a.get("type") == "open_review"), None)
     check("voice prefill (backend) carries the three fields", prefill and prefill.get("purposeType") == "event"
-          and prefill.get("purposeText") == "hackathon ke liye" and (prefill.get("baseArea") or {}).get("name") == "Electronic City",
+          and prefill.get("purposeText") == "hackathon" and (prefill.get("baseArea") or {}).get("name") == "Electronic City",
           prefill)
     payload = bridge("voice", prefill)
     print(f"   wizard payload keys (voice): {sorted(payload)}")
@@ -230,7 +231,7 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
         created = asyncio.run(main.process_ws_action("trips:create", payload, db, None, session=SESSION))
     check("WS trips:create response carries the fields", created["purposeType"] == "event" and created["baseArea"]["name"]
           == "Electronic City")
-    _, budget = assert_event_trip("voice", created["id"], "hackathon ke liye")
+    _, budget = assert_event_trip("voice", created["id"], "hackathon")
     print(f"   budget level for Rs 12,000, 1 adult, 4 days: {budget.get('level')} (per person per day {12000 // 4})")
     check("budget 12,000 for 1 person, 4 days -> MODERATE, not PREMIUM (from the amount, not the account)",
           budget.get("level") == "MODERATE", budget)

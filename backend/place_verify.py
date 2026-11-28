@@ -14,6 +14,8 @@ proximity and name matching) and gives each activity a verify_status:
 Storage policy = plan_card_itinerary's for resolved stops: only Google's place_id and coordinates are kept
 (verified and far). Google's name, rating, photos or any other content are never stored. Title, description,
 time and cost are never changed, and no activity is ever removed.
+One exception, by the owner's decision (28 Nov 2026): the stay line of a work / event trip (planSlot "STAY",
+purpose_plan.py) stores the chosen hotel's name and address too, and its title / location are written by code.
 
 Limits: MAX_GOOGLE_CALLS per trip (repeated venues are looked up once), MAX_WORKERS threads, TIME_LIMIT_S for
 the whole step. Never raises: the trip becomes READY whatever happens here.
@@ -76,8 +78,11 @@ def _words(text: str) -> List[str]:
 
 
 def venue_of(activity: Any, dest_name: str) -> Optional[str]:
-    """The venue to look up, or None: TRANSIT, or nothing left once generic words and the destination are removed."""
+    """The venue to look up, or None: TRANSIT, a work / event trip's planSlot line (the stay and the event are made
+    by purpose_plan.py), or nothing left once generic words and the destination are removed."""
     if str(getattr(activity, "activityType", "") or "").upper() == "TRANSIT":
+        return None
+    if str(getattr(activity, "planSlot", None) or "").strip():
         return None
     dest = set(_words(dest_name))
     for text in (getattr(activity, "locationName", None), getattr(activity, "title", None)):
@@ -87,14 +92,17 @@ def venue_of(activity: Any, dest_name: str) -> Optional[str]:
 
 
 def verify_itinerary(schema, trip, search_fn: Callable = None, *, time_limit_s: float = TIME_LIMIT_S,
-                     max_calls: int = MAX_GOOGLE_CALLS) -> Dict[Tuple[int, int], Dict[str, Any]]:
+                     max_calls: int = MAX_GOOGLE_CALLS, hotel_search_fn: Callable = None) -> Dict[Tuple[int, int], Dict[str, Any]]:
     """{(day_index, activity_index): {"status", "place_id", "latitude", "longitude"}} for the activities checked.
     Activities missing from the result stay unverified. Never raises. `schema` is not modified (the itinerary
-    cache keeps the model's plan as it was)."""
+    cache keeps the model's plan as it was).
+    A work / event trip's planSlot "STAY" lines get {"status": "verified" | None, "stay": hotel | None, ...}: ONE
+    hotel search (purpose_plan.find_stay_hotel), counted in MAX_GOOGLE_CALLS, the same hotel on every stay line."""
     started = time.perf_counter()
     budget = _Budget(max_calls)
     out: Dict[Tuple[int, int], Dict[str, Any]] = {}
     stopped = None
+    stay_note = None
     trip_id = getattr(trip, "id", "?")
     total = sum(len(d.activities) for d in schema.days)
     try:
@@ -108,6 +116,20 @@ def verify_itinerary(schema, trip, search_fn: Callable = None, *, time_limit_s: 
             return (search_fn or PCI._default_search)(query)
 
         centre = PCI.destination_centre(trip, city, counted_search)
+
+        import purpose_plan as PP
+        stays = [(di, ai) for di, day in enumerate(schema.days) for ai, act in enumerate(day.activities)
+                 if PP.slot_of(act) == PP.STAY] if PP.applies(trip) else []
+        if stays:
+            hotel = PP.find_stay_hotel(trip, hotel_search_fn) if budget.take() else None
+            rec = ({"status": VERIFIED, "place_id": hotel["place_id"], "latitude": hotel["latitude"],
+                    "longitude": hotel["longitude"], "stay": hotel} if hotel else
+                   {"status": None, "place_id": None, "latitude": None, "longitude": None, "stay": None})
+            for pos in stays:
+                out[pos] = dict(rec)
+            stay_note = "found" if hotel else "generic"
+        else:
+            stay_note = None
 
         venues: Dict[str, List[Tuple[int, int]]] = {}
         for di, day in enumerate(schema.days):
@@ -184,7 +206,7 @@ def verify_itinerary(schema, trip, search_fn: Callable = None, *, time_limit_s: 
     counts = {s: sum(1 for r in out.values() if r["status"] == s) for s in (VERIFIED, NOT_FOUND, FAR)}
     print(f"[PLACE VERIFY] trip={trip_id} activities={total} verified={counts[VERIFIED]} not_found={counts[NOT_FOUND]} "
           f"far={counts[FAR]} google_calls={budget.used} ms={int((time.perf_counter() - started) * 1000)}"
-          + (f" stopped={stopped}" if stopped else ""), flush=True)
+          + (f" stay={stay_note}" if stay_note else "") + (f" stopped={stopped}" if stopped else ""), flush=True)
     return out
 
 

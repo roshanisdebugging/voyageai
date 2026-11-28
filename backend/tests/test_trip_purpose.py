@@ -4,7 +4,7 @@ Trip purpose and base area, ask and save (feat/trip-purpose commit 2). Planning 
 Checks: the word lists map what was said to a type by CODE (Hindi, Hinglish, English); the free text rule; by voice the
 full hackathon conversation (destination, dates, people, budget, starting city, then "hackathon ke liye", then
 "Electronic City") fills purpose_type event and the base area, each asked once, and the read-back says
-"event ke liye, Electronic City ke paas"; "bas ghoomna" -> leisure, no area question; "pata nahi" skips both (no model
+"hackathon ke liye, Electronic City ke paas" (the word said, not "event"); "bas ghoomna" -> leisure, no area question; "pata nahi" skips both (no model
 call); a purpose said in the first sentence is not asked; an area not found near the destination is asked once more,
 then dropped; trip creation keeps / checks the three fields and the response carries them (camelCase); old trips and
 old clients without them behave as before.
@@ -148,9 +148,22 @@ for said in ("pata nahi", "kuch nahi", "पता नहीं", "कुछ न�
     check(f"'{said}' -> skipped", TP.classify_purpose(said) == (None, None, True), TP.classify_purpose(said))
 check("other keeps the user's words", TP.classify_purpose("dost se milne")[1] == "dost se milne")
 check("business / event keep the words, leisure / pilgrimage don't",
-      TP.classify_purpose("hackathon ke liye")[1] == "hackathon ke liye" and TP.classify_purpose("kaam se")[1] == "kaam se"
+      TP.classify_purpose("hackathon ke liye")[1] == "hackathon" and TP.classify_purpose("kaam se")[1] == "kaam"
       and TP.classify_purpose("bas ghoomna")[1] is None and TP.classify_purpose("darshan karne")[1] is None)
 check("an empty answer is not a purpose", TP.classify_purpose("") == (None, None, False))
+for said, want in [("हैकथन", ("event", "hackathon")), ("हैकथन के लिए जा रहा हूँ", ("event", "hackathon")),
+                   ("business meeting hai", ("business", "business meeting")), ("client meeting", ("business", "client meeting")),
+                   ("event hai", ("event", "event")), ("kaam se", ("business", "kaam")), ("office ka kaam", ("business", "office ka kaam")),
+                   ("शादी में जा रहे हैं", ("event", "shaadi")), ("conference ke liye", ("event", "conference"))]:
+    got = TP.classify_purpose(said)[:2]
+    check(f"spoken word kept: {said!r} -> {want}", got == want, got)
+for ptype, text, hi, en in [("event", "hackathon", "hackathon ke liye", "for your hackathon"),
+                            ("business", "business meeting", "business meeting ke liye", "for your business meeting"),
+                            ("event", "event", "event ke liye", "for your event"),
+                            ("event", None, "event ke liye", "for an event")]:
+    dd = D.TripDraftState(purpose_type=ptype, purpose_text=text)
+    check(f"read-back words for {ptype}/{text}: {hi!r} / {en!r}", D.purpose_words(dd, "hi") == f", {hi}"
+          and D.purpose_words(dd, "en") == f", {en}", (D.purpose_words(dd, "hi"), D.purpose_words(dd, "en")))
 
 print("\n== 2. the free text rule (one line, 120 characters, letters / digits / common punctuation)")
 for raw, want in [("hackathon ke liye", "hackathon ke liye"), ("  Team   offsite, day 2 ", "Team offsite, day 2"),
@@ -175,7 +188,7 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
           and dr(c).purpose_pending and r.step == "ask", r.reply_text)
     r = ra("hackathon ke liye", c, {"purpose": "hackathon ke liye"})
     check("'hackathon ke liye' -> event (code), the words kept", dr(c).purpose_type == "event"
-          and dr(c).purpose_text == "hackathon ke liye")
+          and dr(c).purpose_text == "hackathon")
     check("event -> the area question, once", r.reply_text == Q_AREA["hi"] and dr(c).area_asked == 1 and dr(c).area_pending,
           r.reply_text)
     GOOGLE.clear()
@@ -186,14 +199,14 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
           and area.get("name") == "Electronic City" and area.get("city") == "Bengaluru"
           and area.get("latitude") == 12.845 and area.get("longitude") == 77.66, area)
     check("read-back adds the purpose and the area",
-          r.reply_text == f"Kolkata se Bengaluru, {say(20)} se {say(22)}, do raat, ek bada, event ke liye, Electronic City ke paas. Sahi hai?",
+          r.reply_text == f"Kolkata se Bengaluru, {say(20)} se {say(22)}, do raat, ek bada, hackathon ke liye, Electronic City ke paas. Sahi hai?",
           r.reply_text)
     r, quiet = no_llm(lambda: ra("haan", c))
     pre = next((a["prefill"] for a in r.ui_actions if a.get("type") == "open_review"), {})
     check("'haan' -> ready, prefill carries purposeType / purposeText / baseArea", quiet and r.step == "ready"
-          and pre.get("purposeType") == "event" and pre.get("purposeText") == "hackathon ke liye"
+          and pre.get("purposeType") == "event" and pre.get("purposeText") == "hackathon"
           and (pre.get("baseArea") or {}).get("name") == "Electronic City", pre)
-    check("the confirm card names the purpose", "event ke liye, Electronic City ke paas" in (r.pending_confirmation or {}).get("summary", ""),
+    check("the confirm card names the purpose", "hackathon ke liye, Electronic City ke paas" in (r.pending_confirmation or {}).get("summary", ""),
           (r.pending_confirmation or {}).get("summary"))
     check("each asked once only", dr(c).purpose_asked == 1 and dr(c).area_asked == 1)
 
@@ -207,8 +220,8 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
     check("[en] 'for work' -> business -> the area question", dr(c).purpose_type == "business" and r.reply_text == Q_AREA["en"],
           r.reply_text)
     r = ra("Electronic City", c, {"base_area": "Electronic City"}, "en")
-    check("[en] read-back: for work, near Electronic City",
-          r.reply_text == f"{say(20)} to {say(22)}, 2 nights, for work, near Electronic City. Is that right?", r.reply_text)
+    check("[en] read-back: for your work, near Electronic City",
+          r.reply_text == f"{say(20)} to {say(22)}, 2 nights, for your work, near Electronic City. Is that right?", r.reply_text)
 
     print("\n== 5. 'bas ghoomna' -> leisure, no area question; planning as today")
     c = new_conv()
@@ -241,8 +254,8 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
                            "budget_inr": 40000, "origin_city": "Kolkata"})
     ra("client meeting hai", c, {"purpose": "client meeting hai"})
     r, quiet = no_llm(lambda: ra("pata nahi", c))
-    check("area 'pata nahi' -> no model call, no area, read-back with 'kaam ke liye'", quiet and dr(c).area_skipped
-          and dr(c).base_area is None and r.reply_text.endswith("do bade log, kaam ke liye. Sahi hai?"), r.reply_text)
+    check("area 'pata nahi' -> no model call, no area, read-back with the word said ('client meeting ke liye')", quiet and dr(c).area_skipped
+          and dr(c).base_area is None and r.reply_text.endswith("do bade log, client meeting ke liye. Sahi hai?"), r.reply_text)
     c = new_conv()   # asked, answered with something else: never asked again
     ra("Goa jaana hai", c, {"destination": "Goa", "start_date": iso(20), "end_date": iso(22), "adults": 2, "children": 0,
                            "budget_inr": 40000, "origin_city": "Kolkata"})
@@ -256,7 +269,7 @@ with mock.patch.object(openai_client, "chat_tools", FakeTools()), mock.patch.obj
         "destination": "Bengaluru", "origin_city": "Kolkata", "purpose": "hackathon ke liye", "base_area": "Electronic City",
         "start_date": iso(20), "end_date": iso(22), "adults": 1, "children": 0, "budget_inr": 40000})
     check("first sentence with purpose + area -> straight to the read-back", r.step == "confirm_date"
-          and dr(c).purpose_asked == 0 and dr(c).area_asked == 0 and "event ke liye, Electronic City ke paas" in r.reply_text,
+          and dr(c).purpose_asked == 0 and dr(c).area_asked == 0 and "hackathon ke liye, Electronic City ke paas" in r.reply_text,
           r.reply_text)
     c = new_conv()
     r = ra("Bengaluru jaana hai kaam se", c, {"destination": "Bengaluru", "purpose": "kaam se"})

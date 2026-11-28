@@ -25,10 +25,10 @@ _TEXT_PUNCT = set(" .,'-()&/!?:;+#@%")
 # Word lists, Hindi (Devanagari), Hinglish and English. Matched on whole words (voice.text_utils.words), so nukta
 # and chandrabindu variants line up. The first type that matches wins, in this order.
 _TYPE_WORDS = (
-    ("event", ("hackathon", "hackthon", "event", "events", "conference", "seminar", "wedding", "shaadi", "shadi",
-               "workshop", "interview", "exam", "exams", "summit", "expo", "convention",
-               "हैकाथॉन", "हैकथॉन", "हैकाथन", "इवेंट", "कॉन्फ्रेंस", "कांफ्रेंस", "सेमिनार", "शादी", "वर्कशॉप", "इंटरव्यू",
-               "एग्जाम", "परीक्षा")),
+    ("event", ("hackathon", "hackthon", "hakathon", "event", "events", "conference", "seminar", "wedding", "shaadi",
+               "shadi", "workshop", "interview", "exam", "exams", "summit", "expo", "convention",
+               "हैकाथॉन", "हैकथॉन", "हैकाथन", "हैकथन", "हेकथॉन", "इवेंट", "कॉन्फ्रेंस", "कांफ्रेंस", "सेमिनार", "शादी", "वर्कशॉप",
+               "इंटरव्यू", "एग्जाम", "परीक्षा")),
     ("business", ("kaam", "work", "business", "meeting", "meetings", "office", "client", "clients", "official",
                   "काम", "बिज़नेस", "बिजनेस", "मीटिंग", "ऑफिस", "क्लाइंट", "वर्क")),
     ("pilgrimage", ("teerth", "tirth", "yatra", "darshan", "pilgrimage", "puja", "pooja",
@@ -38,6 +38,20 @@ _TYPE_WORDS = (
                  "घूमना", "घूमने", "घुमना", "घुमने", "घूम", "छुट्टी", "छुट्टियां", "हॉलिडे", "वेकेशन")),
 )
 _TYPE_PHRASES = (("leisure", ("family trip", "bas ghoomna", "fun trip")),)
+# The word the user said, as the read-back says it and purpose_text keeps it (business / event): "हैकथन" ->
+# "hackathon", "client meeting" -> "client meeting". Phrases first, then single words; anything else keeps its word.
+_LABEL_PHRASES = (("business meeting", "business meeting"), ("client meeting", "client meeting"),
+                  ("team meeting", "team meeting"), ("office ka kaam", "office ka kaam"), ("office work", "office work"))
+_LABELS = {
+    "hackathon": ("hackathon", "hackthon", "hakathon", "हैकाथॉन", "हैकथॉन", "हैकाथन", "हैकथन", "हेकथॉन"),
+    "conference": ("conference", "कॉन्फ्रेंस", "कांफ्रेंस"), "seminar": ("seminar", "सेमिनार"),
+    "shaadi": ("shaadi", "shadi", "शादी"), "wedding": ("wedding",), "workshop": ("workshop", "वर्कशॉप"),
+    "interview": ("interview", "इंटरव्यू"), "exam": ("exam", "exams", "एग्जाम", "परीक्षा"), "summit": ("summit",),
+    "expo": ("expo",), "convention": ("convention",), "event": ("event", "events", "इवेंट"),
+    "kaam": ("kaam", "काम"), "work": ("work", "वर्क"), "business": ("business", "बिज़नेस", "बिजनेस"),
+    "meeting": ("meeting", "meetings", "मीटिंग"), "office": ("office", "ऑफिस"), "client": ("client", "clients", "क्लाइंट"),
+    "official": ("official",),
+}
 _SKIP_PHRASES = ("pata nahi", "pata nahin", "nahi pata", "kuch nahi", "kuchh nahi", "koi nahi", "koi khas nahi",
                  "skip", "chhodo", "chodo", "chhod do", "baad mein", "don't know", "dont know", "no idea", "nothing",
                  "not sure", "पता नहीं", "नहीं पता", "कुछ नहीं", "कोई नहीं", "छोड़ो", "छोड़ दो", "बाद में", "स्किप")
@@ -82,9 +96,11 @@ def clean_purpose_text(raw: Any) -> Optional[str]:
 
 def classify_purpose(raw: Any) -> Tuple[Optional[str], Optional[str], bool]:
     """What the user said about why they travel -> (purpose_type, purpose_text, skipped).
-    "pata nahi" / "kuch nahi" -> (None, None, True); "bas ghoomna" -> leisure; "hackathon ke liye" -> event;
-    anything else that is valid text -> other with the words kept; empty / invalid -> (None, None, False).
-    purpose_text is kept for business, event and other only."""
+    "pata nahi" / "kuch nahi" -> (None, None, True); "bas ghoomna" -> leisure; "हैकथन के लिए" -> (event,
+    "hackathon"); "client meeting hai" -> (business, "client meeting"); anything else that is valid text -> other
+    with the user's words kept; empty / invalid -> (None, None, False).
+    purpose_text: for business / event the word the user said (purpose_label), for other the user's words; none for
+    leisure / pilgrimage."""
     text = " ".join(str(raw or "").split())
     words = _words(text)
     if not words:
@@ -104,7 +120,21 @@ def classify_purpose(raw: Any) -> Tuple[Optional[str], Optional[str], bool]:
     if found is None:
         cleaned = clean_purpose_text(text)
         return ("other", cleaned, False) if cleaned else (None, None, False)
-    return found, (clean_purpose_text(text) if found in FOCUSED_PURPOSES else None), False
+    if found in ("business", "event"):
+        return found, purpose_label(words), False
+    return found, None, False
+
+
+def purpose_label(words) -> Optional[str]:
+    """The purpose word the user said, in the form the read-back speaks ("हैकथन" -> "hackathon"), or None."""
+    for phrase, label in _LABEL_PHRASES:
+        if _phrase_in(words, phrase):
+            return label
+    for w in words:
+        for label, items in _LABELS.items():
+            if w in _canon_set(items):
+                return label
+    return None
 
 
 def is_purpose_skip(raw: Any) -> bool:

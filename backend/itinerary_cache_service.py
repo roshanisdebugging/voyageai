@@ -7,6 +7,11 @@ logger = logging.getLogger(__name__)
 # 7 Days in seconds (604,800s)
 ITINERARY_CACHE_TTL = 7 * 24 * 60 * 60
 
+# Bumped when the purpose planner rules change, so plans cached under older rules are not served again
+# (v2: no invented event, venue or hotel; the stay and the event are marked with planSlot). Leisure keys: unchanged.
+PURPOSE_PLAN_VERSION = 2
+
+
 def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "standard", pace: str = "moderate", origin: str = None,
                               purpose_type: str = None, base_area_id: str = None, purpose_text: str = None) -> str:
     """Creates a normalized, deterministic cache key with sorted style tags.
@@ -20,7 +25,7 @@ def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "
     import hashlib
     import re
     area = re.sub(r"[^A-Za-z0-9_-]", "", str(base_area_id or ""))[:128] or "none"
-    key += f":purpose_{purpose_type}:area_{area}"
+    key += f":purpose_{purpose_type}:area_{area}:pv{PURPOSE_PLAN_VERSION}"
     if purpose_type == "other":
         digest = hashlib.sha256(" ".join(str(purpose_text or "").lower().split()).encode("utf-8")).hexdigest()[:16]
         key += f":text_{digest}"
