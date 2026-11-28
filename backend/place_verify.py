@@ -9,7 +9,8 @@ proximity and name matching) and gives each activity a verify_status:
   far        found, but more than MAX_DAY_SPREAD_KM from the median position of that day's found stops
              (only checked when the day has at least 2 found stops); a trip with a base area (trip_purpose.py):
              more than BASE_AREA_RADIUS_KM from the base area instead, on every day;
-  None       not checked: TRANSIT, a generic item with no named venue, or the step stopped (quota / paused /
+  None       not checked: TRANSIT, a generic item with no named venue, a work / event trip's planSlot block (the
+             event, a hotel-room session; purpose_plan.py), or the step stopped (quota / paused /
              error / time limit / call cap). Nothing is stored for these.
 Storage policy = plan_card_itinerary's for resolved stops: only Google's place_id and coordinates are kept
 (verified and far). Google's name, rating, photos or any other content are never stored. Title, description,
@@ -97,7 +98,9 @@ def verify_itinerary(schema, trip, search_fn: Callable = None, *, time_limit_s: 
     Activities missing from the result stay unverified. Never raises. `schema` is not modified (the itinerary
     cache keeps the model's plan as it was).
     A work / event trip's planSlot "STAY" lines get {"status": "verified" | None, "stay": hotel | None, ...}: ONE
-    hotel search (purpose_plan.find_stay_hotel), counted in MAX_GOOGLE_CALLS, the same hotel on every stay line."""
+    hotel search (purpose_plan.find_stay_hotel), counted in MAX_GOOGLE_CALLS, the same hotel on every stay line.
+    Its planSlot "WORK" lines (hotel-room sessions) get {"status": None, "stay": hotel | None}: no look-up, no label.
+    planSlot "EVENT" lines: nothing (no look-up, no label)."""
     started = time.perf_counter()
     budget = _Budget(max_calls)
     out: Dict[Tuple[int, int], Dict[str, Any]] = {}
@@ -118,18 +121,17 @@ def verify_itinerary(schema, trip, search_fn: Callable = None, *, time_limit_s: 
         centre = PCI.destination_centre(trip, city, counted_search)
 
         import purpose_plan as PP
-        stays = [(di, ai) for di, day in enumerate(schema.days) for ai, act in enumerate(day.activities)
-                 if PP.slot_of(act) == PP.STAY] if PP.applies(trip) else []
-        if stays:
+        slots = {(di, ai): PP.slot_of(act) for di, day in enumerate(schema.days) for ai, act in enumerate(day.activities)
+                 if PP.slot_of(act) in (PP.STAY, PP.WORK)} if PP.applies(trip) else {}
+        if slots:
             hotel = PP.find_stay_hotel(trip, hotel_search_fn) if budget.take() else None
-            rec = ({"status": VERIFIED, "place_id": hotel["place_id"], "latitude": hotel["latitude"],
-                    "longitude": hotel["longitude"], "stay": hotel} if hotel else
-                   {"status": None, "place_id": None, "latitude": None, "longitude": None, "stay": None})
-            for pos in stays:
-                out[pos] = dict(rec)
+            for pos, slot in slots.items():
+                if slot == PP.STAY and hotel:
+                    out[pos] = {"status": VERIFIED, "place_id": hotel["place_id"], "latitude": hotel["latitude"],
+                                "longitude": hotel["longitude"], "stay": hotel}
+                else:            # a WORK line (never a status: not checked) or a stay line without a hotel
+                    out[pos] = {"status": None, "place_id": None, "latitude": None, "longitude": None, "stay": hotel}
             stay_note = "found" if hotel else "generic"
-        else:
-            stay_note = None
 
         venues: Dict[str, List[Tuple[int, int]]] = {}
         for di, day in enumerate(schema.days):

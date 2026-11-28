@@ -8,8 +8,9 @@ logger = logging.getLogger(__name__)
 ITINERARY_CACHE_TTL = 7 * 24 * 60 * 60
 
 # Bumped when the purpose planner rules change, so plans cached under older rules are not served again
-# (v2: no invented event, venue or hotel; the stay and the event are marked with planSlot). Leisure keys: unchanged.
-PURPOSE_PLAN_VERSION = 2
+# (v2: no invented event, venue or hotel; the stay and the event are marked with planSlot. v3: the hotel-room work
+# block is marked too (planSlot WORK), day-specific titles, and no travel-style part in the key). Leisure: unchanged.
+PURPOSE_PLAN_VERSION = 3
 
 
 def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "standard", pace: str = "moderate", origin: str = None,
@@ -17,11 +18,15 @@ def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "
     """Creates a normalized, deterministic cache key with sorted style tags.
     Leisure, pilgrimage and no purpose: exactly the key from before (cached plans stay valid). Business / event /
     other add the purpose type and the base area's place id ("other" also a hash of the user's words), so a hackathon
-    trip never gets the tourist plan from the cache."""
-    key = _base_cache_key(destination, days, travel_style, pace, origin)
+    trip never gets the tourist plan from the cache. Their key has no travel-style part: the account's styles
+    (luxury, nightlife, ...) are not in their prompt ("not applicable, follow the purpose rules")."""
     from trip_purpose import is_focused
     if not is_focused(purpose_type):
-        return key
+        return _base_cache_key(destination, days, travel_style, pace, origin)
+    norm_dest = str(destination or "india").strip().lower().replace(" ", "_")
+    norm_pace = str(pace or "moderate").strip().lower().replace(" ", "_")
+    norm_origin = str(origin).strip().lower().replace(" ", "_") if origin else "noorigin"
+    key = f"itinerary:{norm_dest}:{days}d:{norm_pace}:from_{norm_origin}"
     import hashlib
     import re
     area = re.sub(r"[^A-Za-z0-9_-]", "", str(base_area_id or ""))[:128] or "none"

@@ -190,7 +190,7 @@ def assert_event_trip(label, trip_id, want_text):
     check(f"[{label}] (b) prompt: account style preferences do not apply", "saved account style preferences" in prompt
           and "do not apply to this trip" in prompt)
     key = CACHE_ASKED[-1]
-    check(f"[{label}] (c) cache key has the purpose and the area", key.endswith(":purpose_event:area_ChIJec:pv2"), key)
+    check(f"[{label}] (c) cache key has the purpose and the area", key.endswith(":purpose_event:area_ChIJec:pv3") and "luxury" not in key and "nightlife" not in key, key)
     check(f"[{label}] (c) cache key differs from the leisure key", key != LEISURE_KEY, f"{key} vs {LEISURE_KEY}")
     check(f"[{label}] (c) no old cached plan used (the model made it, cached under the purpose key)",
           CACHE_SET[-1] == key and not any(k == LEISURE_KEY for k in CACHE_ASKED[-1:]))

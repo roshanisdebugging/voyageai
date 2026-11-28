@@ -1,6 +1,8 @@
 """
-Work / event / other trips (trip_purpose.FOCUSED_PURPOSES): the two activities the model marks with planSlot, made
-real by code after the plan is generated (itinerary_service PURPOSE RULES C and F).
+Work / event / other trips (trip_purpose.FOCUSED_PURPOSES): the generic activities the model marks with planSlot,
+made real by code after the plan is generated (itinerary_service PURPOSE RULES C, D and F). These three are meant to
+repeat across days, so itinerary_service.validate_and_sanitize_itinerary exempts them (and only them, and only on
+these purposes) from the cross-day duplicate and coordinate-reuse checks, and place_verify never looks them up.
 
   planSlot "STAY":  the model never names a hotel; it writes "Hotel near <base area>". Our code finds ONE real hotel
                     with ONE Google Places text search ("hotel near <base area>, <city>", type lodging, a circle of
@@ -11,6 +13,9 @@ real by code after the plan is generated (itinerary_service PURPOSE RULES C and 
   planSlot "EVENT": the event itself. Our code writes it as "Your <word>, in the <base area> area", "Venue and
                     timings as per your <word>", no clock time, no coordinates, no place id (the model's wording,
                     venue and time are never kept).
+  planSlot "WORK":  a preparation / work / rest session in the hotel room. The model's (day-specific) title and
+                    description are kept; the location is written by code: the stay hotel's name and coordinates
+                    when one was found, else "Hotel near <base area>". Never a place id or verify_status.
 
 Storing the hotel: place_id, coordinates, its name and its address are written into the activity (the owner's
 decision, 28 Nov 2026; an exception to place_verify's place_id + coordinates-only rule, for this one hotel line).
@@ -21,7 +26,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-STAY, EVENT = "STAY", "EVENT"
+STAY, EVENT, WORK = "STAY", "EVENT", "WORK"
+GENERIC_SLOTS = (STAY, EVENT, WORK)
 STAY_RADIUS_KM = 3.0            # the hotel must be this close to the base area (not BASE_AREA_RADIUS_KM)
 STAY_SEARCH_RADIUS_M = 3000     # the Google locationBias circle
 STAY_MIN_REVIEWS = 20
@@ -32,12 +38,19 @@ _LABEL_MAX = 30
 
 def slot_of(act: Any) -> Optional[str]:
     slot = str(getattr(act, "planSlot", None) or "").strip().upper()
-    return slot if slot in (STAY, EVENT) else None
+    return slot if slot in GENERIC_SLOTS else None
 
 
 def applies(trip: Any) -> bool:
     from trip_purpose import is_focused
     return is_focused(getattr(trip, "purpose_type", None))
+
+
+def is_generic_block(act: Any, purpose_type: Any) -> bool:
+    """True for a planSlot activity (STAY / EVENT / WORK) of a business / event / other trip: a block meant to repeat
+    across days. Always False for leisure, pilgrimage and no purpose (their checks stay strict)."""
+    from trip_purpose import is_focused
+    return is_focused(purpose_type) and slot_of(act) is not None
 
 
 def area_of(trip: Any) -> Tuple[str, Optional[Tuple[float, float]], str]:
@@ -106,7 +119,7 @@ def _label(trip: Any) -> str:
 
 def slot_override(act: Any, trip: Any, check: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The activity columns our code writes for a planSlot activity of a work / event trip, or None (no change).
-    check: place_verify's record for this activity ({"stay": hotel or None, ...} for a STAY line)."""
+    check: place_verify's record for this activity ({"stay": hotel or None, ...} for a STAY / WORK line)."""
     slot = slot_of(act)
     if slot is None or not applies(trip):
         return None
@@ -117,6 +130,10 @@ def slot_override(act: Any, trip: Any, check: Dict[str, Any]) -> Optional[Dict[s
                 "location_name": f"{area} area", "time_slot": "As per your event", "latitude": None, "longitude": None,
                 "estimated_cost_inr": 0, "place_id": None, "verify_status": None}
     hotel = (check or {}).get("stay")
+    if slot == WORK:
+        return {"location_name": f"Your room at {hotel['name']}" if hotel else f"Hotel near {area}",
+                "latitude": hotel["latitude"] if hotel else None, "longitude": hotel["longitude"] if hotel else None,
+                "estimated_cost_inr": 0, "place_id": None, "verify_status": None}
     prefix = "Check in" if str(getattr(act, "title", "") or "").strip().lower().startswith("check") else "Stay"
     if hotel:
         return {"title": f"{prefix}: {hotel['name']}", "description": f"A hotel within {STAY_RADIUS_KM:g} km of {area}.",

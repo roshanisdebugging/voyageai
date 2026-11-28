@@ -93,12 +93,19 @@ for ptype in ("business", "event", "other"):
     # A. the event itself: never invented
     check(f"{ptype}: A. never name an event, organiser, venue or event time",
           "Never name any event, organiser, venue or event time, even one you know of." in p)
-    check(f"{ptype}: A. the event only as a flexible block, marked EVENT",
-          'title "Your event, in the Electronic City area", description "Venue and timings as per your event"' in p
-          and '"planSlot": "EVENT"' in p)
+    kind = "work" if ptype == "business" else "event"
+    check(f"{ptype}: A. the event only as a flexible block with a day-specific title, marked EVENT",
+          f'with a title that names the day: "Your {kind}, day <N>, in the Electronic City area"' in p
+          and f'description "Venue and timings as per your {kind}"' in p and '"planSlot": "EVENT"' in p)
     check(f"{ptype}: A. around it: prep / work sessions in the hotel room (Wi-Fi), breaks, rest, real nearby food",
-          "working with teammates in the hotel room, which has high-speed Wi-Fi" in p and "short breaks, rest" in p
+          "working with teammates; the room has high-speed Wi-Fi" in p and "short breaks, rest" in p
           and "a known food court or a chain outlet located there" in p and "At most 2 to 3 activities per day plus meals" in p)
+    check(f"{ptype}: the hotel-room session: day-specific title, fixed location, marked WORK",
+          f'"{kind.capitalize()} day 1 preparation", "{kind.capitalize()} day 2 wrap-up and rest"; never the same title on two days' in p
+          and 'locationName "Hotel near Electronic City", activityType "RELAXATION", estimatedCostInr 0 and "planSlot": "WORK"' in p)
+    check(f"{ptype}: never the same restaurant on two days", "Never repeat the same restaurant or cafe on two days." in p)
+    check(f"{ptype}: later stay lines name their night", '"Stay, night 2: Hotel near Electronic City"' in p)
+    check(f"{ptype}: planSlot only on C, D and F", "only on the activities named in C, D and F" in p)
     # B. the stay: never a named hotel, a marked line our code fills
     check(f"{ptype}: B. the stay line is fixed text, marked STAY",
           'title "Check in: Hotel near Electronic City", locationName "Hotel near Electronic City"' in p
@@ -154,10 +161,11 @@ check("leisure -> exactly today's key", build_itinerary_cache_key(**kw, purpose_
 check("pilgrimage -> exactly today's key", build_itinerary_cache_key(**kw, purpose_type="pilgrimage") == OLD)
 ev = build_itinerary_cache_key(**kw, purpose_type="event", base_area_id="ChIJec")
 check("event -> a different key with the type, the area id and the planner version",
-      ev != OLD and ev == OLD + ":purpose_event:area_ChIJec:pv2", ev)
+      ev == "itinerary:bengaluru:3d:premium:from_kolkata:purpose_event:area_ChIJec:pv3", ev)
+check("event: no travel-style part (luxury_nightlife is not in its prompt)", "luxury" not in ev and "nightlife" not in ev)
 check("two base areas -> two keys", ev != build_itinerary_cache_key(**kw, purpose_type="event", base_area_id="ChIJwf"))
 check("event vs business -> two keys", ev != build_itinerary_cache_key(**kw, purpose_type="business", base_area_id="ChIJec"))
-check("no area -> area_none", build_itinerary_cache_key(**kw, purpose_type="event").endswith(":purpose_event:area_none:pv2"))
+check("no area -> area_none", build_itinerary_cache_key(**kw, purpose_type="event").endswith(":purpose_event:area_none:pv3"))
 o1 = build_itinerary_cache_key(**kw, purpose_type="other", purpose_text="dost ki shaadi")
 o2 = build_itinerary_cache_key(**kw, purpose_type="other", purpose_text="college admission")
 check("other: a hash of the words, two texts -> two keys", o1 != o2 and ":text_" in o1 and "shaadi" not in o1, o1)
@@ -221,7 +229,7 @@ with mock.patch.object(I, "get_cached_itinerary", lambda key: None), \
     check("event trip: the prompt sent to the model has the block and the words as data",
           "TRIP PURPOSE (" in PROMPTS[-1] and '<traveller_words>"hackathon ke liye"</traveller_words>' in PROMPTS[-1]
           and '"Electronic City" (latitude 12.845' in PROMPTS[-1])
-    check("event trip: cached under a purpose key", KEYS[-1].endswith(":purpose_event:area_ChIJec:pv2"), KEYS[-1])
+    check("event trip: cached under a purpose key", KEYS[-1].endswith(":purpose_event:area_ChIJec:pv3"), KEYS[-1])
     with database.SessionLocal() as db:
         legs = db.query(TripTransportModel).filter(TripTransportModel.trip_id == t_ev).all()
     check("event trip without a starting city: the arrival leg is saved", len(legs) == 1 and legs[0].transport_type == "CAB"
