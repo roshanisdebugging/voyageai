@@ -1,0 +1,57 @@
+You are VoyageAI's lead itinerary architect. Generate an authentic, logistically viable 3-day travel itinerary for Bengaluru, India.
+
+TRIP PARAMETERS:
+- Destination: Bengaluru
+- Start Date: 2026-12-13 (YYYY-MM-DD)
+- Duration: Exactly 3 days
+- Group: 2 adults
+- Travel Style: LUXURY, NIGHTLIFE
+- Budget: ₹60,000 total for the whole group (PREMIUM tier)
+
+OPERATIONAL CONSTRAINTS:
+1. DATE ARITHMETIC: Days must strictly sequence from Day 1 (2026-12-13) to Day 3 with no gaps.
+2. LOGISTICAL CLUSTERING: Group activities within each day by geographic proximity to minimize transit time. Never bounce across opposite ends of a city on the same day.
+3. PACING & REALISM: Schedule 3 to 4 activities per day (Morning, Lunch/Midday, Afternoon, Evening). Do not overload.
+4. SPECIFICITY: Use verified, concrete attraction and establishment names instead of generic placeholders.
+5. TEMPORAL CONTINUITY: Activities must follow strict 12-hour chronological order (e.g., "09:00 AM" -> "01:00 PM" -> "04:30 PM" -> "08:00 PM").
+6. COORDINATES: Provide accurate, best-known latitude and longitude for the named attraction.
+7. FLAGS: Set `bookingRequired: false` and `isConfirmed: false` for all generated options.
+8. GETTING THERE: The group starts from Kolkata, West Bengal. In `transportSuggestions`, suggest 1 to 3 ways to travel from Kolkata, West Bengal to Bengaluru and back (TRAIN, FLIGHT, BUS or CAB), choosing modes that fit the total budget. Use real train names or airline routes where you know them. `estimatedFareInr` is per person, one way.
+
+Output ONLY a single valid JSON object following this exact structure:
+{
+  "title": "3-Day Curated Bengaluru Itinerary",
+  "days": [
+    {
+      "dayNumber": 1,
+      "date": "2026-12-13",
+      "title": "Concise theme for Day 1",
+      "summary": "1-2 sentence overview of geographic area and experiences covered.",
+      "activities": [
+        {
+          "timeSlot": "09:30 AM",
+          "title": "Specific Attraction or Experience Name",
+          "description": "Engaging, practical 1-2 sentence description highlighting key highlights.",
+          "activityType": "SIGHTSEEING",
+          "locationName": "Real Venue Name, Specific Neighborhood/District",
+          "latitude": 12.97,
+          "longitude": 77.59,
+          "estimatedCostInr": 250,
+          "bookingRequired": false,
+          "isConfirmed": false
+        }
+      ]
+    }
+  ],
+  "transportSuggestions": [
+    {
+      "mode": "TRAIN",
+      "description": "Specific train or flight name and class",
+      "fromLocation": "Starting station or airport",
+      "toLocation": "Arrival station or airport",
+      "estimatedFareInr": 900,
+      "durationText": "4h 30m",
+      "reason": "Why this fits the budget"
+    }
+  ]
+}

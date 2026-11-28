@@ -7,8 +7,28 @@ logger = logging.getLogger(__name__)
 # 7 Days in seconds (604,800s)
 ITINERARY_CACHE_TTL = 7 * 24 * 60 * 60
 
-def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "standard", pace: str = "moderate", origin: str = None) -> str:
-    """Creates a normalized, deterministic cache key with sorted style tags."""
+def build_itinerary_cache_key(destination: str, days: int, travel_style: str = "standard", pace: str = "moderate", origin: str = None,
+                              purpose_type: str = None, base_area_id: str = None, purpose_text: str = None) -> str:
+    """Creates a normalized, deterministic cache key with sorted style tags.
+    Leisure, pilgrimage and no purpose: exactly the key from before (cached plans stay valid). Business / event /
+    other add the purpose type and the base area's place id ("other" also a hash of the user's words), so a hackathon
+    trip never gets the tourist plan from the cache."""
+    key = _base_cache_key(destination, days, travel_style, pace, origin)
+    from trip_purpose import is_focused
+    if not is_focused(purpose_type):
+        return key
+    import hashlib
+    import re
+    area = re.sub(r"[^A-Za-z0-9_-]", "", str(base_area_id or ""))[:128] or "none"
+    key += f":purpose_{purpose_type}:area_{area}"
+    if purpose_type == "other":
+        digest = hashlib.sha256(" ".join(str(purpose_text or "").lower().split()).encode("utf-8")).hexdigest()[:16]
+        key += f":text_{digest}"
+    return key
+
+
+def _base_cache_key(destination: str, days: int, travel_style: str = "standard", pace: str = "moderate", origin: str = None) -> str:
+    """The key as it was before trip purposes (do not change: existing cache entries use it)."""
     norm_dest = str(destination or "india").strip().lower().replace(" ", "_")
     norm_pace = str(pace or "moderate").strip().lower().replace(" ", "_")
 
