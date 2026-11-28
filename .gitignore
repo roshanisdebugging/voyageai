@@ -51,7 +51,7 @@ AGENTS.override.md
 /CLAUDE.md
 /setup-voyageai-codex.sh
 
-# Voice test recordings (testing.md), local only
+# Voice test recordings, local only
 test_audio_folder/
 backend/logs/
 
@@ -67,3 +67,25 @@ opencode.exe
 opencode.json
 # Claude Code local config
 /.claude/
+
+# Local tool output, databases and caches
+prompt_lab_runs/
+*.db
+*.sqlite
+*.sqlite3
+.venv/
+.pytest_cache/
+.mypy_cache/
+frontend/.vite/
+coverage/
+*.tsbuildinfo
+Thumbs.db
+
+# Keys and credentials
+*.pem
+*.key
+*.p12
+credentials*.json
+
+# Local AI tool config
+.claudeignore

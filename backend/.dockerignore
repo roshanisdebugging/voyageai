@@ -22,5 +22,5 @@ coverage.xml
 .pytest_cache
 .env
 
-# Voice test recordings (testing.md), local only
+# Voice test recordings, local only
 test_audio_folder/
