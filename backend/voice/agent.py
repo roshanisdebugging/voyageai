@@ -35,6 +35,10 @@ MEMORY_TTL_SECONDS = 30 * 60
 PENDING_TTL_SECONDS = 120
 LLM_TIMEOUT_SECONDS = 8
 FALLBACK_REPLY = "Abhi samajh nahi paaya, phir se boliye."
+# The Hinglish-only lines (FALLBACK_REPLY, UNCLEAR_REPLY) in English, used only when the user chose English as the
+# voice language (voice/languages.py). "auto" keeps them in Hinglish as before.
+FALLBACK_REPLY_EN = "Sorry, I didn't get that. Please say it again."
+UNCLEAR_REPLY_EN = "Sorry, I didn't catch that. Please say it again."
 # The AI service is limited or down: say "try again later" (not "I didn't understand"), in the user's language.
 TRY_LATER_REPLY = {"hi": "Abhi jawab nahi de paa raha, thodi der baad phir try karein.",
                    "en": "I can't answer right now, please try again in a little while."}
@@ -473,15 +477,21 @@ def template_language(stt_language: Optional[str], text: Optional[str] = None) -
     return "en" if lang == "en" else "hi"
 
 
+REPLY_LANGUAGE_LINE = "- Reply in the language the user spoke: Hinglish in Roman script, Hindi, or English."
+
+
 def build_system_prompt(screen: Optional[str], trip: Optional[TripInfo], today: Optional[str] = None,
-                        draft_line: str = "none", trip_context: str = "none") -> str:
+                        draft_line: str = "none", trip_context: str = "none", reply_rule: Optional[str] = None) -> str:
+    """reply_rule: the chosen voice language's line (voice/languages.reply_rule) in place of REPLY_LANGUAGE_LINE;
+    None (auto) = the prompt exactly as before."""
     trip_line = (f"{trip.title} ({trip.start_date or '?'} to {trip.end_date or '?'})" if trip else "none")
     if today is None:
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         today = f"{now.strftime('%A %d %B %Y')} ({now.date().isoformat()})"
-    return SYSTEM_PROMPT.format(screen=(screen or "unknown")[:120], trip_line=trip_line, today=today, draft_line=draft_line,
-                                trip_context=trip_context)
+    prompt = SYSTEM_PROMPT.format(screen=(screen or "unknown")[:120], trip_line=trip_line, today=today,
+                                  draft_line=draft_line, trip_context=trip_context)
+    return prompt.replace(REPLY_LANGUAGE_LINE, reply_rule, 1) if reply_rule else prompt
 
 
 def _draft_line(d) -> str:
@@ -1405,11 +1415,15 @@ def _booking_turn(transcript: str, lang: str, user_id: str, conversation_id: str
 def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, conversation_id: str,
               screen: Optional[str], trip: Optional[TripInfo], redis_conn=None,
               screen_place: Optional[Dict[str, Any]] = None,
-              location: Optional[Tuple[float, float]] = None) -> AgentResult:
-    """Blocking (HTTP): call from a threadpool. Never raises."""
+              location: Optional[Tuple[float, float]] = None, language: Optional[str] = None) -> AgentResult:
+    """Blocking (HTTP): call from a threadpool. Never raises.
+    language: the user's voice language (voice/languages.py). None / "auto" = as before (templates from the user's
+    words, the model replies in the language spoken); a code = that language's templates and reply rule."""
     from openai_client import LLMError, LLMRateLimited, LLMTransient, chat_tools
+    from voice import languages as L
 
-    lang = template_language(stt_language, transcript)
+    forced = L.template_lang(language, conversation_id)
+    lang = forced or template_language(stt_language, transcript)
     if redis_conn is None:
         from redis_client import redis_conn as _r
         redis_conn = _r
@@ -1503,7 +1517,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
             D.save(redis_conn, user_id, conversation_id, draft_state)
         trip_ctx = trip_context.load(user_id, trip.id) if trip is not None and trip.id else None
         messages: List[Dict[str, Any]] = [{"role": "system", "content": build_system_prompt(
-            screen, trip, draft_line=_draft_line(draft_state), trip_context=trip_context.prompt_text(trip_ctx))}]
+            screen, trip, draft_line=_draft_line(draft_state), trip_context=trip_context.prompt_text(trip_ctx),
+            reply_rule=L.reply_rule(language))}]
         messages += load_memory(redis_conn, user_id, conversation_id)
         messages.append({"role": "user", "content": transcript})
         used_llm = True
@@ -1540,6 +1555,9 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
             # Unexpected (a bug, or a tool/lookup failing): the full traceback goes to the server log only.
             logger.exception("[VOICE AGENT] turn crashed in the agent")
             result = _failed(type(err).__name__, crash_error_info(err, tool_name))
+    if forced == "en":    # the Hinglish-only lines, in English for a user who chose English
+        result.reply_text = {FALLBACK_REPLY: FALLBACK_REPLY_EN, UNCLEAR_REPLY["en"]: UNCLEAR_REPLY_EN}.get(
+            result.reply_text, result.reply_text)
     ended = time.perf_counter()
     result.llm_ms = int(((llm_done or ended) - started) * 1000) if used_llm else 0
     result.tool_ms = int((ended - llm_done) * 1000) if llm_done else (0 if used_llm else int((ended - started) * 1000))

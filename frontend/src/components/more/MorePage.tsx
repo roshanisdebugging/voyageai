@@ -5,6 +5,7 @@ import { useApp } from '../../context/AppContext';
 import { useTheme } from '../../context/ThemeContext';
 import { PreferenceEditModal } from '../preferences/PreferenceEditModal';
 import { Heart, ShieldAlert, SlidersHorizontal, LogOut, ChevronRight, HelpCircle, PhoneCall, Sparkles } from 'lucide-react';
+import { VoiceLanguageSegmented } from '../../voice/VoiceLanguageSelect';
 
 export const MorePage: React.FC = () => {
   const navigate = useNavigate();
@@ -143,6 +144,15 @@ export const MorePage: React.FC = () => {
                 Dark
               </button>
             </div>
+          </div>
+
+          {/* Voice language (Appearance section): what the voice assistant speaks; the screens stay in English. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-2xl border border-(--itinerary-border) bg-(--color-surface) min-h-[60px] shadow-xs">
+            <div className="min-w-0">
+              <h3 id="voice-language-label" className="text-base font-bold text-(--color-text-primary)">Voice language</h3>
+              <p className="text-xs text-(--itinerary-muted) font-medium">The assistant speaks in this. Auto: the language you speak.</p>
+            </div>
+            <VoiceLanguageSegmented id="voice-language" />
           </div>
 
           {/* Action 4: Emergency Assistance */}

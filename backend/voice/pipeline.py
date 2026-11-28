@@ -22,8 +22,11 @@ from voice.stt import STTError, STTRateLimited, get_stt, is_prompt_echo, pcm_dur
 from voice.agent import TripInfo, run_agent
 from voice.lang import detect_lang
 from voice.tts import REPLY_MIME, synthesize_reply
+from voice import languages as L
 
 EMPTY_TRANSCRIPT_REPLY = "Mujhe kuch sunai nahi diya, phir se boliye."
+# Only when the user chose English (voice/languages.py); "auto" keeps the Hinglish line above.
+EMPTY_TRANSCRIPT_REPLY_EN = "I didn't hear anything. Please say it again."
 
 logger = logging.getLogger("voice")
 
@@ -44,6 +47,7 @@ class TurnContext:
     screen_place: Optional[dict] = None  # step 5: {place_id, name, address} of the place page on screen (checked shape)
     truncated: bool = False          # cut at 30 s
     turn_number: int = 0             # n-th recording on this connection (error log)
+    language: str = L.AUTO           # the user's voice language: "auto" (as before) or a code (voice/languages.py)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -86,7 +90,8 @@ def run_turn(pcm: bytes, ctx: TurnContext) -> TurnResult:
     duration_ms = pcm_duration_ms(pcm)
     try:
         stt = get_stt()
-        res = stt.transcribe(pcm)
+        pin = L.stt_languages(getattr(ctx, "language", L.AUTO))
+        res = stt.transcribe(pcm, languages=pin) if pin else stt.transcribe(pcm)   # auto: the call as before
         result = TurnResult(
             turn_id=ctx.turn_id, ok=True, text=res.text, language=res.language,
             duration_ms=res.duration_ms, stt_ms=res.latency_ms,
@@ -119,17 +124,23 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
         # a short / silent clip transcribed as the STT hint itself: nothing was said (never an answer)
         logger.info("[VOICE] turn=%s prompt_echo=true", getattr(ctx, "turn_id", "?"))
         text = ""
+    choice = getattr(ctx, "language", L.AUTO)
+    forced = L.template_lang(choice, ctx.conversation_id or ctx.session_id)    # None = auto
     if not text:
-        result.reply_text, result.ui_actions, result.action, result.llm_ms = EMPTY_TRANSCRIPT_REPLY, [], "unclear", 0
+        result.reply_text, result.ui_actions, result.action, result.llm_ms = (
+            EMPTY_TRANSCRIPT_REPLY_EN if forced == "en" else EMPTY_TRANSCRIPT_REPLY), [], "unclear", 0
         return
     try:
+        extra = {"language": choice} if forced else {}     # auto: run_agent is called exactly as before
         agent = run_agent(text, result.language, user_id=ctx.user_id,
                           conversation_id=ctx.conversation_id or ctx.session_id,
-                          screen=ctx.screen, trip=ctx.trip, location=ctx.location, screen_place=ctx.screen_place)
+                          screen=ctx.screen, trip=ctx.trip, location=ctx.location, screen_place=ctx.screen_place,
+                          **extra)
     except Exception as exc:  # run_agent doesn't raise, but a turn must never crash here
-        from voice.agent import FALLBACK_REPLY, crash_error_info
+        from voice.agent import FALLBACK_REPLY, FALLBACK_REPLY_EN, crash_error_info
         logger.exception("[VOICE] turn=%s agent crashed", ctx.turn_id)   # server log only: full traceback
-        result.reply_text, result.ui_actions, result.action, result.llm_ms = FALLBACK_REPLY, [], "error", 0
+        result.reply_text, result.ui_actions, result.action, result.llm_ms = (
+            FALLBACK_REPLY_EN if forced == "en" else FALLBACK_REPLY), [], "error", 0
         result.agent_error_info = crash_error_info(exc)
         result.agent_error_code, result.agent_error_detail = "agent_crashed", result.agent_error_info["detail"]
         return
@@ -149,8 +160,10 @@ def make_reply(ctx: TurnContext, result: TurnResult) -> TurnResult:
         attempt = f"{info['attempt']}/{info.get('attempts') or 2}" if info.get("attempt") else "-"
         logger.warning("[VOICE] turn=%s agent_error=%s status=%s attempt=%s action=%s", ctx.turn_id,
                        result.agent_error_code or "-", info.get("status") or "-", attempt, result.action)
-    # The voice follows the reply's own words (Hinglish -> hi-IN, plain English -> en-IN), not Whisper's tag.
-    result.reply_language = detect_lang(result.reply_text, result.language)
+    # The voice follows the reply's own words (Hinglish -> hi-IN, plain English -> en-IN), not Whisper's tag;
+    # a chosen voice language (voice/languages.py) decides it instead.
+    chosen = L.chosen(getattr(ctx, "language", L.AUTO))
+    result.reply_language = chosen.code if chosen is not None else detect_lang(result.reply_text, result.language)
     try:
         audio, mime, tts_ms, err = synthesize_reply(result.reply_text, result.reply_language)
     except Exception as exc:  # synthesize_reply doesn't raise, but a turn must never crash here

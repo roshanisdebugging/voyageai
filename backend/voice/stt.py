@@ -93,7 +93,7 @@ class SpeechToText(Protocol):
     provider: str
     model: str
 
-    def transcribe(self, pcm: bytes) -> STTResult: ...
+    def transcribe(self, pcm: bytes, languages: Optional[List[str]] = None) -> STTResult: ...
 
 
 def pcm_to_wav(pcm: bytes) -> bytes:
@@ -123,7 +123,9 @@ class OpenAITranscribeSTT:
         self.model = (model or os.getenv("VOICE_STT_MODEL") or DEFAULT_STT_MODEL).strip()
         self.timeout = timeout
 
-    def transcribe(self, pcm: bytes) -> STTResult:
+    def transcribe(self, pcm: bytes, languages: Optional[List[str]] = None) -> STTResult:
+        """languages: the user's chosen voice language (voice/languages.py) pins the STT; None = as before
+        (VOICE_STT_LANGUAGES or auto-detect)."""
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         if not api_key:
             raise STTError("OPENAI_API_KEY is not set")
@@ -132,7 +134,7 @@ class OpenAITranscribeSTT:
         data = [("model", self.model)]
         if prompt:
             data.append(("prompt", prompt))
-        data += [("languages[]", code) for code in _pinned_languages()]
+        data += [("languages[]", code) for code in (languages or _pinned_languages())]
 
         started = time.perf_counter()
         try:

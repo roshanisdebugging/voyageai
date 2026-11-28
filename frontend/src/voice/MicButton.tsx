@@ -21,6 +21,7 @@ import { fetchSavedPlaces } from '../store/reducers/savedPlacesSlice';
 import { fetchUserTrips } from '../store/reducers/tripsSlice';
 import { wsClient } from '../services/wsClient';
 import { getScreenPlace, SAVED_PLACES_CHANGED } from './screenPlace';
+import { VoiceLanguageChip } from './VoiceLanguageSelect';
 
 const SHOW_TEST_PANEL = import.meta.env.VITE_VOICE_TEST_TRANSCRIPT === 'true';
 const REPLY_TIMEOUT_MS = 30_000; // covers STT + TTS: only times out if no "reply" arrives
@@ -445,6 +446,13 @@ const MicButtonInner: React.FC<{ raised: boolean; inlineTarget: HTMLElement | nu
           {note}
           {noteAttribution && <GoogleMapsAttribution className="block mt-0.5" />}
         </p>
+      )}
+      {/* The voice language (Auto / हिन्दी / English), left of the floating mic; also in More > Voice language. */}
+      {!inline && (
+        <VoiceLanguageChip
+          className="fixed z-[var(--z-floating)]"
+          style={{ right: 'calc(1rem + 3.5rem + 0.5rem)', bottom: `calc(${micBottom} + 0.375rem)` }}
+        />
       )}
       {inlineTarget ? createPortal(button, inlineTarget) : button}
     </>

@@ -1,4 +1,5 @@
 import { getAuthToken, getWsBaseUrl } from '../config/apiConfig';
+import { getVoiceLanguage } from './voiceLanguage';
 
 /** Messages from /ws/voice (see backend/voice/messages.py). */
 export type VoiceServerMessage =
@@ -161,8 +162,9 @@ class VoiceSocket {
     const loc = location && Number.isFinite(location.lat) && Number.isFinite(location.lng) && Number.isFinite(location.accuracy_m)
       ? { lat: Math.round(location.lat * 1e5) / 1e5, lng: Math.round(location.lng * 1e5) / 1e5, accuracy_m: Math.round(location.accuracy_m) }
       : undefined;
+    // language: the user's voice language (voiceLanguage.ts), read at every turn so a change applies to the next one.
     return this.sendJson({ type: 'start', conversation_id: conversationId, screen, trip_id: tripId, location: loc,
-      screen_place: screenPlace });
+      screen_place: screenPlace, language: getVoiceLanguage() });
   }
 
   sendAudio(chunk: ArrayBuffer) {
@@ -176,11 +178,13 @@ class VoiceSocket {
   /** Step 4: the Confirm card's buttons (Confirm runs the same action as saying "haan"). */
   /** tripId: the trip open now; a pending made for the open trip is refused if another trip is open (server-checked). */
   confirm(conversationId: string, pendingId: string, tripId: string | null = null): boolean {
-    return this.sendJson({ type: 'confirm', conversation_id: conversationId, pending_id: pendingId, trip_id: tripId });
+    return this.sendJson({ type: 'confirm', conversation_id: conversationId, pending_id: pendingId, trip_id: tripId,
+      language: getVoiceLanguage() });
   }
 
   cancel(conversationId: string, pendingId: string): boolean {
-    return this.sendJson({ type: 'cancel', conversation_id: conversationId, pending_id: pendingId });
+    return this.sendJson({ type: 'cancel', conversation_id: conversationId, pending_id: pendingId,
+      language: getVoiceLanguage() });
   }
 
   /** The wizard created the trip (e.g. Proceed tapped): the voice draft can go. */

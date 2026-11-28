@@ -3,11 +3,13 @@ Message shapes for /ws/voice, in one place.
 
 App -> server (text frames, JSON):
   {"type": "auth", "token": "..."}                       only when the login cookie isn't sent
-  {"type": "start", "conversation_id": "...", "screen": "/trip", "trip_id": "..." | null}
+  {"type": "start", "conversation_id": "...", "screen": "/trip", "trip_id": "..." | null,
+   "language": "auto" | "hi" | "en"}   the user's voice language (voice/languages.py; unknown -> "auto")
                                                           trip_id is ownership-checked; not yours = none
   {"type": "stop"}
   {"type": "end_session"}
-  {"type": "confirm", "conversation_id", "pending_id"}  the Confirm card's button (same action as voice "haan")
+  {"type": "confirm", "conversation_id", "pending_id", "language"?}  the Confirm card's button (same action as voice
+                                                          "haan"); "language" as in start (also on "cancel")
   {"type": "cancel", "conversation_id", "pending_id"}   the Cancel button: the draft is dropped, nothing saved
   {"type": "draft_done", "conversation_id"}            the wizard created the trip (e.g. Proceed tapped): clear the draft
 App -> server (binary frames): raw PCM, 16 kHz, 16-bit little-endian, mono, ~100 ms per frame.

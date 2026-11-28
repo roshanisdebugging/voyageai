@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from starlette.concurrency import run_in_threadpool
 
 from voice import debug_store, messages as m, pipeline
+from voice import languages as voice_languages
 
 logger = logging.getLogger("voice")
 
@@ -223,6 +224,8 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
             trip=trip,
             location=_parse_location(msg.get("location")),
             screen_place=_screen_place(msg.get("screen_place"), screen),
+            # the user's voice language (voice/languages.py); unknown / missing -> "auto" (as before)
+            language=voice_languages.normalize_choice(msg.get("language")),
         )
         conn.conversation_ids.add(conn.ctx.conversation_id or conn.session_id)
         conn.recording = True
@@ -254,7 +257,8 @@ async def _handle_text(ws: WebSocket, conn: _Conn, raw: str) -> bool:
         from voice import agent as voice_agent
         from voice.lang import detect_lang
         from redis_client import redis_conn as rc
-        lang = detect_lang(str(msg.get("lang_hint") or ""), "hi")
+        lang = (voice_languages.template_lang(msg.get("language"), conversation_id)
+                or detect_lang(str(msg.get("lang_hint") or ""), "hi"))   # a chosen voice language first
         if kind == "confirm":
             # One confirm for every pending item: create_trip (step 4), trip_actions (step 5), smart actions (step 6).
             # The app's open trip (if any): a pending made for the open trip is refused if another trip is open now.

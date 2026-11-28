@@ -25,7 +25,13 @@ DEFAULT_SARVAM_LANGUAGE = "hi-IN"
 
 
 def sarvam_language(stt_language: Optional[str]) -> str:
-    return LANGUAGE_TO_SARVAM.get((stt_language or "").strip().lower(), DEFAULT_SARVAM_LANGUAGE)
+    """hi / ur / en as before; any other code from the voice language table (voice/languages.py) -> its TTS code."""
+    code = (stt_language or "").strip().lower()
+    if code in LANGUAGE_TO_SARVAM:
+        return LANGUAGE_TO_SARVAM[code]
+    from voice.languages import LANGUAGES
+    lang = LANGUAGES.get(code)
+    return lang.tts_code if lang is not None else DEFAULT_SARVAM_LANGUAGE
 
 
 def tts_enabled() -> bool:
