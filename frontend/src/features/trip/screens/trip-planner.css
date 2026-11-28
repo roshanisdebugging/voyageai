@@ -64,3 +64,29 @@
     padding-bottom: calc(10rem + var(--safe-bottom));
   }
 }
+
+.trip-review-edit {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--itinerary-accent);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.trip-review-edit:hover,
+.trip-review-edit[aria-expanded="true"] {
+  border-color: var(--itinerary-accent);
+  background: var(--itinerary-accent-surface);
+}
+
+.trip-review-done {
+  border-color: var(--itinerary-control-border);
+}

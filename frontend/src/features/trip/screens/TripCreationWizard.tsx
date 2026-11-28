@@ -7,9 +7,10 @@ import type { TravelStyle } from '../../../auth/types';
 import { PreferenceOption } from '../../../components/preferences/PreferenceOption';
 import { PreferenceProgress } from '../../../components/preferences/PreferenceProgress';
 import { PreferenceFooter } from '../../../components/preferences/PreferenceFooter';
-import { PlaceSearchField, placeSubtitle } from '../components/PlaceSearchField';
+import { PlaceSearchField } from '../components/PlaceSearchField';
 import { cleanOriginName, ORIGIN_MAX_CHARS } from '../originName';
-import { MapPin, Calendar, Sparkles, ArrowLeft, RefreshCw, AlertCircle, Wallet, Baby, User, Pencil } from 'lucide-react';
+import { MapPin, Calendar, Sparkles, ArrowLeft, RefreshCw, AlertCircle, Wallet, Baby, User, Users } from 'lucide-react';
+import { TripReviewChecklist } from './TripReviewChecklist';
 import './trip-planner.css';
 import { announceTripCreated, setReviewShowing, VOICE_SUBMIT_REVIEW } from '../../../voice/reviewState';
 
@@ -61,6 +62,11 @@ const tripDays = (start: string, end: string) => {
   return Math.max(1, Math.round(ms / 86400000) + 1);
 };
 const formatInr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+const reviewDateFormat = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+const formatReviewDate = (value: string) => {
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? 'Check date' : reviewDateFormat.format(date);
+};
 
 const Stepper: React.FC<{
   label: string;
@@ -426,16 +432,6 @@ export const TripCreationWizard: React.FC = () => {
     </div>
   );
 
-  const sectionCard = (title: string, icon: React.ReactNode, body: React.ReactNode) => (
-    <section className="space-y-3 rounded-2xl border border-(--itinerary-border) bg-(--color-surface-elevated) p-4">
-      <h3 className="flex items-center gap-2 text-sm font-extrabold">
-        {icon}
-        {title}
-      </h3>
-      {body}
-    </section>
-  );
-
   return (
     <main className="trip-planner min-h-dvh bg-(--color-background) px-3.5 pt-3.5 pb-12 text-(--color-text-primary) sm:px-5 sm:pt-8">
 
@@ -604,48 +600,74 @@ export const TripCreationWizard: React.FC = () => {
             <div className="mt-3 space-y-4 sm:space-y-[18px]">
               <div className="space-y-1">
                 <h2 ref={headingRef} tabIndex={-1} className="text-[23px] font-extrabold leading-tight sm:text-[26px]">Check your trip</h2>
-                <p className="text-sm text-(--itinerary-muted) flex items-center gap-1.5">
-                  <Pencil className="w-3.5 h-3.5" /> Change anything here, then tap Proceed.
-                </p>
+                <p className="text-sm text-(--itinerary-muted)">Check the details, then tap Proceed.</p>
               </div>
 
-              {sectionCard('Places', <MapPin className="w-4 h-4 text-(--itinerary-accent)" />, (
-                <div className="space-y-3">
-                  <PlaceSearchField
-                    id="review-destination"
-                    label="Destination"
-                    placeholder="Search a city or region"
-                    value={destination}
-                    onChange={setDestination}
-                  />
-                  <PlaceSearchField
-                    id="review-origin"
-                    label="Kahan se"
-                    placeholder="Your starting city"
-                    value={origin}
-                    onChange={setOrigin}
-                    optional
-                  />
-                </div>
-              ))}
+              <TripReviewChecklist items={[
+                {
+                  id: 'places',
+                  label: 'Places',
+                  icon: MapPin,
+                  value: destination?.name || 'Choose a destination',
+                  detail: origin ? `From ${origin.name}` : 'Starting city optional',
+                  editor: (
+                    <div className="space-y-3">
+                      <PlaceSearchField
+                        id="review-destination"
+                        label="Destination"
+                        placeholder="Search a city or region"
+                        value={destination}
+                        onChange={setDestination}
+                      />
+                      <PlaceSearchField
+                        id="review-origin"
+                        label="Kahan se"
+                        placeholder="Your starting city"
+                        value={origin}
+                        onChange={setOrigin}
+                        optional
+                      />
+                    </div>
+                  ),
+                },
+                {
+                  id: 'dates',
+                  label: 'Dates',
+                  icon: Calendar,
+                  value: startDate === endDate
+                    ? formatReviewDate(startDate)
+                    : `${formatReviewDate(startDate)} – ${formatReviewDate(endDate)}`,
+                  detail: `${days} day${days === 1 ? '' : 's'}`,
+                  editor: datesEditor,
+                },
+                {
+                  id: 'travelers',
+                  label: 'Travelers',
+                  icon: Users,
+                  value: `${adults} adult${adults === 1 ? '' : 's'}` +
+                    (children ? ` · ${children} ${children === 1 ? 'child' : 'children'}` : ''),
+                  editor: travelersEditor,
+                },
+                {
+                  id: 'budget',
+                  label: 'Budget',
+                  icon: Wallet,
+                  value: budgetAmount ? formatInr(budgetAmount) : 'Enter a budget',
+                  detail: 'Total for the group',
+                  editor: budgetInput,
+                },
+                {
+                  id: 'style',
+                  label: 'Trip style',
+                  icon: Sparkles,
+                  value: TRAVEL_STYLES.filter(item => styles.includes(item.id)).map(item => item.label).join(' · ') || 'Any style',
+                  editor: stylesEditor,
+                },
+              ]} />
 
-              {sectionCard('Dates', <Calendar className="w-4 h-4 text-(--itinerary-accent)" />, datesEditor)}
-              {sectionCard('Travelers', <User className="w-4 h-4 text-(--itinerary-accent)" />, travelersEditor)}
-              {sectionCard('Budget', <Wallet className="w-4 h-4 text-(--itinerary-accent)" />, budgetInput)}
-              {sectionCard('Trip style', <Sparkles className="w-4 h-4 text-(--itinerary-accent)" />, stylesEditor)}
-
-              <div className="space-y-1 break-words rounded-2xl border border-(--itinerary-accent) bg-(--itinerary-accent-surface) p-4 text-xs">
-                <div className="font-extrabold text-sm text-(--color-text-primary)">
-                  {destination?.name || 'No destination yet'}
-                  {origin && <span className="text-(--itinerary-muted) font-semibold"> · from {origin.name}</span>}
-                </div>
-                <div>{startDate} → {endDate} · {days} day{days > 1 ? 's' : ''}</div>
-                <div>
-                  {adults} adult{adults > 1 ? 's' : ''}{children > 0 && `, ${children} child${children > 1 ? 'ren' : ''}`}
-                  {' · '}{budgetAmount ? formatInr(budgetAmount) : 'no budget'}
-                </div>
-                {destination && <div className="text-(--itinerary-muted)">{placeSubtitle(destination)}</div>}
-              </div>
+              {!destination && (
+                <p className="text-sm text-(--itinerary-muted)">Choose a destination to proceed.</p>
+              )}
 
               {submitError && (
                 <div role="alert" className="flex items-center gap-2 rounded-2xl border border-(--itinerary-error) bg-(--itinerary-error-surface) p-3 text-(--itinerary-error) text-xs font-semibold">
