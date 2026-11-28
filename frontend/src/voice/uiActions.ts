@@ -6,7 +6,8 @@
  * - map_results {title, places: [{name, lat, lng, place_id?, rating?, address?, category?}]} (max 6, India only):
  *   voice "Hawa Mahal ke paas restaurant": the map shows them as its place markers and cards
  * - open_trip {trip_id}: only an ID from the user's own loaded trip list (checked by the handler)
- * - open_review {prefill}: open the trip wizard's review page with the voice draft (checked shape, India only)
+ * - open_review {prefill}: open the trip wizard's review page with the voice draft (checked shape, India only),
+ *   including the purpose (purposeType / purposeText / baseArea, checked like the wizard's own fields)
  * - submit_review: press Proceed on the wizard's review page (the wizard ignores it on any other step)
  * - open_swap {activity_id, activity_name, day_number}: the existing swap sheet (its own Confirm applies the swap)
  * - refresh {what}: reload itinerary | expenses | saved_places after a change made by voice (steps 5, 6),
@@ -14,6 +15,7 @@
  * - undo_toast {message, undo: {action, payload}}: 5 s toast; Undo (tap only) runs an allowlisted /ws/app action
  */
 import type { TripDraft } from '../features/trip/types';
+import { cleanPurposeText, isPurposeType, showsBaseArea } from '../features/trip/tripPurpose';
 
 export interface UiAction {
   type: string;
@@ -128,6 +130,19 @@ export function sanitizePrefill(raw: unknown): TripDraft | null {
     childrenCount: isInt(p.childrenCount, 0, 19) ? (p.childrenCount as number) : undefined,
     customBudgetAmount: isInt(p.customBudgetAmount, 1000, 100_000_000) ? (p.customBudgetAmount as number) : undefined,
     planCardId: typeof p.planCardId === 'string' && /^[a-z0-9][a-z0-9-]{0,79}$/.test(p.planCardId) ? p.planCardId : undefined,
+    ...prefillPurpose(p),
+  };
+}
+
+/** The voice draft's purpose -> the wizard's fields. Only keys the draft sent (an older prefill keeps the wizard's
+ *  own values); the text and the base area only for Business / Event / Other, like the wizard sends them. */
+function prefillPurpose(p: Record<string, unknown>): Pick<TripDraft, 'purposeType' | 'purposeText' | 'baseArea'> {
+  if (!isPurposeType(p.purposeType)) return {};
+  const focused = showsBaseArea(p.purposeType);
+  return {
+    purposeType: p.purposeType,
+    purposeText: focused ? cleanPurposeText(p.purposeText) : null,
+    baseArea: focused ? placeRef(p.baseArea) : null,
   };
 }
 

@@ -9,7 +9,8 @@ import { PreferenceProgress } from '../../../components/preferences/PreferencePr
 import { PreferenceFooter } from '../../../components/preferences/PreferenceFooter';
 import { PlaceSearchField, placeSubtitle } from '../components/PlaceSearchField';
 import { cleanOriginName, ORIGIN_MAX_CHARS } from '../originName';
-import { isPurposeType, PURPOSE_OPTIONS, PURPOSE_TEXT_MAX, purposePayload, purposeSummary, purposeTextProblem, showsBaseArea, type PurposeType } from '../tripPurpose';
+import { PURPOSE_OPTIONS, PURPOSE_TEXT_MAX, purposeSummary, purposeTextProblem, showsBaseArea, type PurposeType } from '../tripPurpose';
+import { applyDraftToState, buildCreateTripPayload, type WizardState } from '../wizardState';
 import { MapPin, Calendar, Sparkles, ArrowLeft, RefreshCw, AlertCircle, Wallet, Baby, User, Pencil, Briefcase } from 'lucide-react';
 import { announceTripCreated, setReviewShowing, VOICE_SUBMIT_REVIEW } from '../../../voice/reviewState';
 
@@ -134,22 +135,26 @@ export const TripCreationWizard: React.FC = () => {
   const [dateError, setDateError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // All the wizard's values as one object (wizardState.ts holds the pure steps, shared with the tests).
+  const wizardState = (): WizardState => ({
+    destination, origin, startDate, endDate, adults, children, styles, budgetAmount, planCardId,
+    purposeType, purposeText, baseArea,
+  });
+
   const applyDraft = (d: TripDraft) => {
-    if (d.destination) setDestination(d.destination);
-    if (d.origin !== undefined) setOrigin(d.origin || null);
-    if (d.startDate && d.startDate >= todayStr) {
-      setStartDate(d.startDate);
-      setEndDate(d.endDate && d.endDate >= d.startDate ? d.endDate : addDays(d.startDate, 3));
-    }
-    if (d.adultsCount != null) setAdults(Math.max(1, d.adultsCount));
-    else if (d.travelersCount != null) setAdults(Math.max(1, d.travelersCount));
-    if (d.childrenCount != null) setChildren(Math.max(0, d.childrenCount));
-    if (d.tripStyle) setStyles(d.tripStyle);
-    if (d.customBudgetAmount) setBudgetAmount(d.customBudgetAmount);
-    setPlanCardId(d.planCardId);
-    if (d.purposeType !== undefined) setPurposeType(isPurposeType(d.purposeType) ? d.purposeType : null);
-    if (d.purposeText !== undefined) setPurposeText(d.purposeText || '');
-    if (d.baseArea !== undefined) setBaseArea(d.baseArea || null);
+    const next = applyDraftToState(wizardState(), d, todayStr);
+    setDestination(next.destination);
+    setOrigin(next.origin);
+    setStartDate(next.startDate);
+    setEndDate(next.endDate);
+    setAdults(next.adults);
+    setChildren(next.children);
+    setStyles(next.styles);
+    setBudgetAmount(next.budgetAmount);
+    setPlanCardId(next.planCardId);
+    setPurposeType(next.purposeType);
+    setPurposeText(next.purposeText);
+    setBaseArea(next.baseArea);
   };
 
   // First render: a prefill (e.g. from voice) wins, then an unfinished draft, then saved preferences.
@@ -266,18 +271,7 @@ export const TripCreationWizard: React.FC = () => {
     setSubmitError(null);
     submittingRef.current = true;
     try {
-      await createTrip({
-        destination,
-        origin,
-        startDate,
-        endDate,
-        adultsCount: adults,
-        childrenCount: children,
-        tripStyle: styles,
-        budgetAmount,
-        ...(planCardId ? { planCardId } : {}),
-        ...(purposeType ? purposePayload(purposeType, purposeText, baseArea) : {}),
-      });
+      await createTrip(buildCreateTripPayload({ ...wizardState(), destination }));
       discardDraft();
       announceTripCreated(); // voice: the draft for this trip can go
       navigate('/trip/itinerary');
