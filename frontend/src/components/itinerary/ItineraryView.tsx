@@ -543,7 +543,7 @@ export const ItineraryView: React.FC = () => {
                             <span className="truncate">{act.locationName || destName}</span>
                           </p>
                           <UnresolvedStopNote meta={planCard} activityId={act.id} />
-                          <PlaceVerifyLabel status={act.verifyStatus} />
+                          <PlaceVerifyLabel status={act.verifyStatus} hasBaseArea={Boolean(currentTrip?.baseArea)} />
                           {/* Travel time from the device's current location (never from the previous activity) */}
                           <TravelFromHere dest={act} routeAllowed={coordRank < MAX_LEGS_PER_DAY} />
                         </div>

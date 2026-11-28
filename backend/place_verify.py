@@ -7,7 +7,8 @@ proximity and name matching) and gives each activity a verify_status:
   verified   Google found it and the name matches;
   not_found  no result, no name match, or outside VERIFY_RADIUS_KM of the destination;
   far        found, but more than MAX_DAY_SPREAD_KM from the median position of that day's found stops
-             (only checked when the day has at least 2 found stops);
+             (only checked when the day has at least 2 found stops); a trip with a base area (trip_purpose.py):
+             more than BASE_AREA_RADIUS_KM from the base area instead, on every day;
   None       not checked: TRANSIT, a generic item with no named venue, or the step stopped (quota / paused /
              error / time limit / call cap). Nothing is stored for these.
 Storage policy = plan_card_itinerary's for resolved stops: only Google's place_id and coordinates are kept
@@ -160,7 +161,15 @@ def verify_itinerary(schema, trip, search_fn: Callable = None, *, time_limit_s: 
             for pos in venues[key]:
                 out[pos] = dict(rec)
 
-        for di, day in enumerate(schema.days):           # the distance check, per day
+        from trip_purpose import BASE_AREA_RADIUS_KM, base_area_coords
+        base = base_area_coords(trip)
+        if base is not None:
+            # A work / event trip with a base area: a stop is "far" when it is more than BASE_AREA_RADIUS_KM from the
+            # base area (instead of the day-median rule), on every day, even a day with one found stop.
+            for r in out.values():
+                if r["status"] == VERIFIED and PCI._km(base[0], base[1], r["latitude"], r["longitude"]) > BASE_AREA_RADIUS_KM:
+                    r["status"] = FAR
+        for di, day in enumerate(schema.days if base is None else []):   # the distance check, per day
             mine = [(pos, r) for pos, r in out.items() if pos[0] == di and r["status"] == VERIFIED]
             if len(mine) < 2:
                 continue

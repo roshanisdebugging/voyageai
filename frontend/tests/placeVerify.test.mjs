@@ -15,6 +15,11 @@ check('far -> "Far from the rest of this day"', V.placeVerifyLabel('far')?.text 
 check('not checked (null / missing / older trips) -> no label', [null, undefined, '', 'other'].every((s) => V.placeVerifyLabel(s) === null));
 check('not_found and far are warnings, verified is not', V.placeVerifyLabel('not_found').tone === 'warn'
   && V.placeVerifyLabel('far').tone === 'warn' && V.placeVerifyLabel('verified').tone === 'ok');
+check('far on a trip with a base area -> "Far from your base area"', V.placeVerifyLabel('far', true)?.text === 'Far from your base area'
+  && V.placeVerifyLabel('far', true).tone === 'warn');
+check('a base area changes only the far label', V.placeVerifyLabel('verified', true)?.text === 'Found on Google'
+  && V.placeVerifyLabel('not_found', true)?.text === 'Not found on Google' && V.placeVerifyLabel(null, true) === null);
+check('no base area (old trips) -> the existing far label', V.placeVerifyLabel('far', false)?.text === 'Far from the rest of this day');
 
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
