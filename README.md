@@ -259,7 +259,7 @@ print("Database cleared successfully.")
 ## 🔧 Environment Variables Summary
 
 Concierge intent routing uses a structured Flash-Lite classifier before paid
-answer generation. See [cost guard configuration, tests and measured limitations](docs/COST_GUARD.md).
+answer generation.
 
 ### Backend (`backend/.env`)
 ```env
@@ -281,7 +281,7 @@ VITE_GOOGLE_MAPS_BROWSER_KEY=<google-maps-browser-key>   # the map (Maps JavaScr
 
 The map uses two Google keys: a **server** key (`GOOGLE_MAPS_SERVER_KEY`, backend only) and a **browser** key
 (`VITE_GOOGLE_MAPS_BROWSER_KEY`, built into the frontend, visible to anyone). Keep them separate and restrict
-both before real users (see `mapusecase.md`). For Docker, pass the browser key at build time
+both before real users. For Docker, pass the browser key at build time
 (`VITE_GOOGLE_MAPS_BROWSER_KEY` in the root `.env`); on Netlify, set it in the site's environment variables.
 The old names `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAP_DEMO_KEY` and `VITE_GOOGLE_MAP_DEMO_KEY` still work for one
 release and log a warning. Check the setup with `python -m scripts.check_keys` from `backend/`
