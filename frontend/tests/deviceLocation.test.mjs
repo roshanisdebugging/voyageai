@@ -43,7 +43,7 @@ function fakeWorld() {
   await w.store.read();
   const p = L.travelPlan(w.store.getState(), HAWA);
   check('permission denied -> no-location (denied)', p.kind === 'no-location' && p.reason === 'denied', JSON.stringify(p));
-  check('denied -> says why', L.noLocationReason('denied').startsWith('Location chahiye'));
+  check('denied -> says why', L.noLocationReason('denied').startsWith('Location access is blocked'));
   w.err = { code: 3 }; await w.store.read();
   check('timeout -> error timeout', w.store.getState().error === 'timeout');
   w.err = { code: 2 }; await w.store.read();
@@ -62,7 +62,7 @@ function fakeWorld() {
   await w.store.read();
   const p = L.travelPlan(w.store.getState(), HAWA);
   check('accuracy 1.5 km -> poor, straight-line distance kept', p.kind === 'poor' && p.straightM > 3000 && p.straightM < 5000, JSON.stringify(p));
-  check('poor -> "Aapki exact location nahi mili"', L.noLocationReason('poor') === 'Aapki exact location nahi mili.');
+  check('poor -> "We couldn’t determine your precise location"', L.noLocationReason('poor') === 'We couldn’t determine your precise location.');
   check('poor -> no route origin', w.store.getState().origin === null);
   w.fix = { ...ME, acc: 1000 };
   await w.store.read();

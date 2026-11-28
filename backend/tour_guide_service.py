@@ -115,8 +115,7 @@ RULES:
 """
 
 CODE_BLOCK_DEFLECTION = (
-    "Safar mein coding chhoriye dost! Main sirf travel, sightseeing aur local "
-    "experiences mein madad karta hoon. Kahan chalna hai bataiye?"
+    "I can help with travel, sightseeing, and local experiences. Where are you headed?"
 )
 
 
@@ -588,7 +587,7 @@ def detect_place_intent(message: str) -> Optional[Dict[str, Any]]:
     return {"category": category, "place_text": place_text}
 
 
-EMERGENCY_PREFIX = "Emergency ho to 112 ya 108 dial karein."
+EMERGENCY_PREFIX = "In an emergency, call 112 or 108."
 PLACES_RADIUS_M = 3000
 PLACES_WIDE_RADIUS_M = 10000
 PLACES_CACHE_SECONDS = 60
@@ -764,20 +763,20 @@ def _place_early_reply(found: Dict[str, Any]) -> Tuple[str, List[str]]:
     medical = cat in ("hospital", "pharmacy")
     status = found["status"]
     if status == "needs_location":
-        reply = (f"Aapki location nahi mili. Location on kijiye, ya jagah ka naam bataiye, "
-                 f"jaise \"Hawa Mahal ke paas {label}\".")
+        reply = (f"We couldn’t determine your location. Enable location access or name a place, "
+                 f"for example, \"{label} near Hawa Mahal\".")
         chips = []
     elif status == "unavailable":
-        reply = "Nearby places abhi check nahi ho pa rahe; Google se jawab nahi mila. Thodi der baad try kijiye."
+        reply = "Google Maps is temporarily unavailable. Please try again shortly."
         if cat == "pharmacy":
             reply += " " + EMERGENCY_PREFIX
         chips = ["Retry now"]
     elif status == "not_found":
-        reply = f"\"{found.get('place_text') or found.get('label')}\" Google Maps par nahi mila. Thoda aur detail ke saath naam bataiye."
+        reply = f"\"{found.get('place_text') or found.get('label')}\" couldn’t be found on Google Maps. Try a more specific place name."
         chips = []
     else:  # empty
-        where = f"{found['label']} ke" if found.get("source") == "named" else "Aapke"
-        reply = f"{where} 10 km ke andar Google par koi {label} nahi mila."
+        where = found["label"] if found.get("source") == "named" else "your location"
+        reply = f"Google Maps found no results for {label} within 10 km of {where}."
         if medical and cat == "pharmacy":
             reply += " " + EMERGENCY_PREFIX
         chips = []
@@ -897,6 +896,9 @@ def _prepare_turn(user_id, message, mode, trip_id, dest, eff_lat, eff_lng, recen
 
     places_block = guide_places.places_block(found) if found else ""
     prompt = f"{anchor}\n\n{places_block}{_build_history_block(recent_history)}Traveler current query: {message}"
+    if not found:
+        system_prompt = system_prompt.replace(" Natural Hinglish or English based on user query language.", "")
+        system_prompt += "\nUse clear English for chat replies and follow-up buttons. If the traveler explicitly asks for Hindi, use Devanagari."
     return {**base, "place": found, "deflection": None, "is_essential": is_essential,
             "system_prompt": system_prompt, "prompt": prompt, "temperature": 0.2 if is_essential or found else 0.4}
 
@@ -908,10 +910,10 @@ def _failure_payload(turn: Dict[str, Any]) -> Dict[str, Any]:
         reply = _with_emergency_prefix(found, guide_places.facts_reply(found, turn["message"]))
         chips = ["Retry now"]
     elif turn["is_essential"]:
-        reply = "Aapke paas ke medical store ya 24x7 pharmacy ke liye Google Maps check karein ya Blinkit/Instamart se order karein."
+        reply = "Check Google Maps for a nearby pharmacy or one open 24 hours. You can also check Blinkit or Instamart for delivery."
         chips = ["Locate nearby pharmacy", "Nearest hospital", "Retry"]
     else:
-        reply = "Connection thoda slow chal raha hai dost. Ek baar query dobara bhej kar dekho!"
+        reply = "The connection is slow. Please try sending your message again."
         chips = ["Retry now", "Nearby food", "Top sights"]
     return {
         "reply": reply,
@@ -1338,7 +1340,7 @@ VOICE_NO_FACTS = {
     "en": "I couldn't find reliable info right now.",
 }
 # Shown as small text on screen with ungrounded answers; never spoken.
-VOICE_NOTE = {"hi": "Details badal sakti hain.", "en": "Details may vary."}
+VOICE_NOTE = {"hi": "Details may vary.", "en": "Details may vary."}
 VOICE_GEMINI_TIMEOUT = 4.0
 VOICE_LLM_TIMEOUT = 4.0
 GROUNDING_COOLDOWN_SECONDS = 600  # after a quota error, don't spend ~0.5 s per question on a call that fails

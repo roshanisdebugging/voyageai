@@ -8,9 +8,9 @@
 export const MAX_ACCURACY_M = 1000;
 /** A move shorter than this keeps the same origin (no new route calls). */
 export const SAME_ORIGIN_M = 300;
-/** Farther than this from a place: no driving time, "Aap is jagah se door hain". */
+/** Farther than this from a place: no driving time, "You’re far from this place". */
 export const FAR_AWAY_M = 300_000;
-/** Closer than this: "Aap yahin hain". */
+/** Closer than this: "You’re here". */
 export const HERE_M = 150;
 
 export type LocationError = 'denied' | 'unavailable' | 'timeout' | 'unsupported';
@@ -101,21 +101,21 @@ export function originLabel(accuracyM: number | null | undefined): string {
   return `From: Your location (accuracy ${acc})`;
 }
 
-/** Why there is no usable location, in the app's Hinglish. */
+/** Why there is no usable location. */
 export function noLocationReason(reason: LocationError | 'loading' | 'idle' | 'poor'): string {
   switch (reason) {
-    case 'denied': return 'Location chahiye: location ki permission band hai.';
-    case 'timeout': return 'Location chahiye: location milne mein der ho gayi.';
-    case 'unsupported': return 'Location chahiye: is browser mein location nahi hai.';
-    case 'poor': return 'Aapki exact location nahi mili.';
-    case 'loading': return 'Aapki location dekh rahe hain…';
+    case 'denied': return 'Location access is blocked. Allow it to see directions.';
+    case 'timeout': return 'Finding your location took too long.';
+    case 'unsupported': return 'This browser does not support location access.';
+    case 'poor': return 'We couldn’t determine your precise location.';
+    case 'loading': return 'Finding your location…';
     case 'idle':
     case 'unavailable':
-    default: return 'Location chahiye: location abhi nahi mili.';
+    default: return 'Your location is currently unavailable.';
   }
 }
 
-/** "812 km" for "Aap is jagah se door hain (812 km)". */
+/** "812 km" for "You’re far from this place (812 km)". */
 export function farKm(meters: number): string {
   return `${Math.round(meters / 1000)} km`;
 }

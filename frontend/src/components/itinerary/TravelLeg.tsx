@@ -2,10 +2,10 @@
  * Travel time to each activity FROM THE DEVICE'S CURRENT LOCATION (never from the previous activity, a hotel or the
  * trip destination). One line per activity card with coordinates:
  *   "22 min by car from your location · 6.8 km"   (Google Routes; lazy, only once the card is in view, one at a time)
- *   "Aap yahin hain"                               (under 150 m, no call)
- *   "Aap is jagah se door hain (812 km)"           (over 300 km, no call)
+ *   "You’re here"                               (under 150 m, no call)
+ *   "You’re far from this place (812 km)"           (over 300 km, no call)
  *   "4.1 km straight-line"                         (poor accuracy, over the 8-a-day limit, or Routes unavailable)
- *   "Location chahiye"                             (no location; TravelOriginBar says why)
+ *   "Location needed"                             (no location; TravelOriginBar says why)
  * A time is never invented. Tapping the line opens RouteOriginSheet.
  */
 import React, { useEffect, useRef, useState } from 'react';
@@ -79,14 +79,14 @@ export const TravelFromHere: React.FC<{ dest: Dest; routeAllowed: boolean }> = (
   const mine = route && route.key === routeKey ? route : null;
   let text: string;
   switch (plan.kind) {
-    case 'no-location': text = plan.reason === 'loading' ? 'Location dekh rahe hain…' : 'Location chahiye'; break;
-    case 'poor': text = `${formatStraightLine(plan.straightM)} straight-line (exact location nahi mili)`; break;
-    case 'here': text = 'Aap yahin hain'; break;
-    case 'far': text = `Aap is jagah se door hain (${farKm(plan.straightM)})`; break;
+    case 'no-location': text = plan.reason === 'loading' ? 'Finding your location…' : 'Location needed'; break;
+    case 'poor': text = `${formatStraightLine(plan.straightM)} straight-line (precise location unavailable)`; break;
+    case 'here': text = 'You’re here'; break;
+    case 'far': text = `You’re far from this place (${farKm(plan.straightM)})`; break;
     default:
       if (!routeAllowed) text = `${formatStraightLine(plan.straightM)} straight-line`;
       else if (mine?.text) text = mine.text;
-      else if (mine?.failed) text = `${formatStraightLine(plan.straightM)} straight-line · route abhi available nahi`;
+      else if (mine?.failed) text = `${formatStraightLine(plan.straightM)} straight-line · route currently unavailable`;
       else text = '…';
   }
   const canOpen = Boolean(loc.reading) && plan.kind !== 'no-location';

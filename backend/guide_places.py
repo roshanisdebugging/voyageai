@@ -133,7 +133,7 @@ RULES:
    - crowd or timing predictions (busy hours, best time to go)
    - delivery apps, or any brand, app or website that is not in the block
    - medical advice of any kind, including about medicines
-6. 2-3 short sentences in the language of the traveler's query (Hindi, Hinglish or English): the nearest one or two
+6. 2-3 short sentences in clear English, or in Devanagari if the user asks for Hindi: the nearest one or two
    places with their distance and open status. Add nothing after that.
 7. Plain sentences only: no coordinates, no lists, no suggestions for a next question, no <<<CHIPS>>> or <<<CARD>>>,
    no markdown, no code blocks (```).
@@ -336,16 +336,14 @@ def reply_lang(message: str) -> str:
 
 _FACTS = {
     "hi": ("{n}, {d} दूर", {True: "अभी खुला है", False: "अभी बंद है", None: "खुलने का समय उपलब्ध नहीं है"}, "; ", "।", "दूसरा विकल्प: "),
-    "hinglish": ("{n}, {d} door", {True: "abhi khula hai", False: "abhi band hai", None: "hours available nahi hain"}, "; ", ".",
-                 "Doosra option: "),
     "en": ("{n}, {d} away", {True: "open now", False: "closed now", None: "hours not available"}, "; ", ".", "Another option: "),
 }
-_SHOP_NOTE = {"hi": " (मेडिकल शॉप)", "hinglish": " (medical shop)", "en": " (medical shop)"}
+_SHOP_NOTE = {"hi": " (मेडिकल शॉप)", "en": " (medical shop)"}
 
 
 def facts_reply(found: Dict[str, Any], message: str = "") -> str:
     """The first two places: name, distance, open status. '' without places."""
-    lang = reply_lang(message)
+    lang = "hi" if reply_lang(message) == "hi" else "en"
     pattern, opens, sep, end, second = _FACTS[lang]
     out = []
     for i, p in enumerate((found.get("places") or [])[:2]):

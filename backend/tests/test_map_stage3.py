@@ -190,7 +190,7 @@ with mock.patch.object(rs.httpx, "AsyncClient", FakeRoutes):
     reset()
     FakeRoutes.queue = [QUOTA]
     r = post({"origin": HAWA, "destination": AMER, "mode": "drive"})
-    check("quota -> 503 'Route abhi available nahi hai'", r.status_code == 503 and r.json()["detail"] == "Route abhi available nahi hai", r.text[:120])
+    check("quota -> 503 in English", r.status_code == 503 and r.json()["detail"] == "The route is currently unavailable", r.text[:120])
     check("quota -> Routes paused until Google's reset", gms.cache.d.get(gms.pause_key("routes")) is True
           and 60 < gms.cache.ttl.get(gms.pause_key("routes"), 0) <= 86460)
     n = len(FakeRoutes.calls)

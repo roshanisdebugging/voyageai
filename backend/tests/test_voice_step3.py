@@ -247,14 +247,14 @@ with mock.patch.object(openai_client, "chat_tools", fake_tools):
         FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
         r = ra("Amber Fort kab jaana best hai")
         check("grounding fails (429) on a general question -> plain Gemini; note on screen, not spoken",
-              r.reply_text == "Amber Fort subah jaana accha hai. Dopahar mein garmi hoti hai." and r.note == "Details badal sakti hain."
+              r.reply_text == "Amber Fort subah jaana accha hai. Dopahar mein garmi hoti hai." and r.note == "Details may vary."
               and "Details" not in r.reply_text and r.error_code == "answered_by_gemini:http_429", (r.reply_text, r.note, r.error_code))
 
         gem["plain"] = (None, "http_500")
         FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort kab jaana best hai?"}))]
         r = ra("Amber Fort kab jaana best hai")
         check("plain Gemini fails too -> OpenAI (2 sentences, note on screen)", r.reply_text == "Amber Fort subah jaaiye. Shaam ko roshni dekhiye."
-              and r.note == "Details badal sakti hain." and r.error_code.startswith("answered_by_openai"), (r.reply_text, r.error_code))
+              and r.note == "Details may vary." and r.error_code.startswith("answered_by_openai"), (r.reply_text, r.error_code))
 
         gem_calls.clear()
         FakeLLMTools.queue = [("tool", ("answer_question", {"question": "Amber Fort ki timing kya hai?", "facts": True}))]

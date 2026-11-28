@@ -845,7 +845,7 @@ export const MapView: React.FC<{ tools?: React.ReactNode }> = ({ tools }) => {
       clearRouteLine();
       setRoute({
         placeId: place.id, status: 'error',
-        message: err instanceof RouteError && err.status === 503 ? err.message : 'Route abhi available nahi hai.',
+        message: err instanceof RouteError && err.status === 503 ? err.message : 'The route is currently unavailable.',
       });
     }
   }, [clearRouteLine, drawRoute, setIsFollowMode]);
@@ -883,10 +883,10 @@ export const MapView: React.FC<{ tools?: React.ReactNode }> = ({ tools }) => {
     );
     // No Google call: near, far, or no usable location
     if (plan.kind !== 'route') {
-      const msg = plan.kind === 'here' ? 'Aap yahin hain'
-        : plan.kind === 'far' ? `Aap is jagah se door hain (${farKm(plan.straightM)})`
+      const msg = plan.kind === 'here' ? 'You’re here'
+        : plan.kind === 'far' ? `You’re far from this place (${farKm(plan.straightM)})`
         : plan.kind === 'poor' ? `${formatStraightLine(plan.straightM)} (straight-line)`
-        : 'Location chahiye';
+        : 'Location needed';
       return (
         <div className="space-y-1 pt-1 border-t border-gray-100 dark:border-zinc-800">
           {fromLine}
@@ -951,7 +951,7 @@ export const MapView: React.FC<{ tools?: React.ReactNode }> = ({ tools }) => {
             </p>
           )}
           {mine.status === 'needs_location' && (
-            <p className="text-[color:var(--color-text-secondary)]">Location chahiye: location on kijiye.</p>
+            <p className="text-[color:var(--color-text-secondary)]">Turn on location to see directions.</p>
           )}
         </div>
       </div>

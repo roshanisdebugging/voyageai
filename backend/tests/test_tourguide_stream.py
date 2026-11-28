@@ -266,7 +266,7 @@ reset(openai=raising_before_first(), gemini=lambda: (None, False))
 res, ev = stream()
 check("total failure: single error event with the friendly text, nothing saved",
       [n for n, _ in ev] == ["start", "error"] and ev[-1][1]["code"] == "LLM_TOTAL_FAILURE"
-      and ev[-1][1]["message"].startswith("Connection thoda slow") and ev[-1][1]["partial"] is False and saved == [], ev)
+      and ev[-1][1]["message"].startswith("The connection is slow.") and ev[-1][1]["partial"] is False and saved == [], ev)
 
 # ---------------------------------------------------------------- 7. off-topic deflection: no model call
 reset(openai=pieces("should not run"), guard=lambda m: (False, "BLOCKED_OFF_TOPIC", "Main sirf travel mein madad karta hoon."))
@@ -323,7 +323,7 @@ check("JSON route: off-topic deflection, no model call", data["reply"] == "Sirf 
 reset(openai=pieces("Paas mein Apollo pharmacy hai."), guard=lambda m: (True, tg.ESSENTIAL_GATE, ""))
 data = client.post("/api/tour-guide/chat", json={"message": "fever medicine", "mode": "local"}, headers=AUTH).json()
 check("emergency: EMERGENCY prompt kept, OpenAI still first",
-      fake.get("last_system") == tg.EMERGENCY_SYSTEM_PROMPT and data["provider"] == "openai"
+      fake.get("last_system", "").startswith(tg.EMERGENCY_SYSTEM_PROMPT) and data["provider"] == "openai"
       and data["chips"] == ["Locate on Map", "Quick Delivery"], data)
 
 # ---------------------------------------------------------------- 10. auth + rate limit on the stream route

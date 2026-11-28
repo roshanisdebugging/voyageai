@@ -49,8 +49,8 @@ HOSP = found("hospital", [pl("SMS Hospital", 1300, True, 4.2, 900), pl("City Car
 DIRTY = [  # (category data, reply as seen in testing, what must be gone, what must stay)
     (SHOPS, "The nearest medical shop is Chromwell Pharmacy, 50 m away and open now. If you need delivery, consider using Blinkit or Swiggy Instamart.",
      ("Blinkit", "Swiggy", "Instamart", "delivery"), "The nearest medical shop is Chromwell Pharmacy, 50 m away and open now."),
-    (HOSP, "SMS Hospital 1.3 km door hai aur abhi khula hai. Dawai quick delivery apps se order kar sakte hain.",
-     ("delivery",), "SMS Hospital 1.3 km door hai aur abhi khula hai."),
+    (HOSP, "SMS Hospital is 1.3 km away and open now. Dawai quick delivery apps se order kar sakte hain.",
+     ("delivery",), "SMS Hospital is 1.3 km away and open now."),
     (CAFES, "Jaipur Vista Cafe is 66 m away and open now. It offers a premium experience. Best to visit early morning to avoid crowds.",
      ("premium", "crowds", "Best"), "Jaipur Vista Cafe is 66 m away and open now."),
     (HOSP, "SMS Hospital 1.3 km door hai. Yahan achha treatment milta hai! City Care Hospital 450 m door hai.",
@@ -94,7 +94,7 @@ check("sentences: 'Dr.', initials, 'St.' and 1.3 don't end one", split == (["Dr.
 # ---------------------------------------------------------------- 3. everything dropped -> the plain facts
 out, n = gp.clean_places_text("SMS Hospital has the best treatment.", HOSP, "sabse paas hospital kahan hai?")
 check("hospital: facts instead, first place with distance and one more", n == 1 and out
-      == "SMS Hospital, 1.3 km door; abhi khula hai. Doosra option: City Care Hospital, 450 m door; hours available nahi hain.", out)
+      == "SMS Hospital, 1.3 km away; open now. Another option: City Care Hospital, 450 m away; hours not available.", out)
 out, _ = gp.clean_places_text("SMS Hospital is the best. City Care Hospital is 450 m away.", HOSP, "nearest hospital")
 check("hospital: the nearest open one is never lost", out.startswith("SMS Hospital, 1.3 km away; open now."), out)
 out, _ = gp.clean_places_text("एक बढ़िया कैफे है।", CAFES, "पास में कैफे कहाँ है")
@@ -123,7 +123,7 @@ for needle in ("ONLY these facts from the block: name, distance, open status, ra
                "Mention a rating only if its review count is >= 20", "price, or words like premium, cheap, luxury",
                "quality: best, good treatment, tasty", "crowd or timing predictions",
                "delivery apps, or any brand, app or website that is not in the block", "medical advice",
-               "2-3 short sentences in the language of the traveler's query", "Name ONLY places listed in the VERIFIED PLACES block",
+               "2-3 short sentences in clear English", "Name ONLY places listed in the VERIFIED PLACES block",
                "the nearest open hospital) by name and distance", "at most one more option",
                "No delivery apps, no treatment claims, no advice about medicines"):
     check(f"prompt says: {needle[:50]}", needle in flat)
@@ -238,10 +238,10 @@ def stream(msg, answers, text):
     return "".join(d["t"] for n, d in ev if n == "token"), ev[-1][1]
 
 
-BAD = ("SMS Hospital 1.3 km door hai aur abhi khula hai. Yahan achha treatment milta hai. Dawai Blinkit se mangwa lijiye."
+BAD = ("SMS Hospital is 1.3 km away and open now. Yahan achha treatment milta hai. Dawai Blinkit se mangwa lijiye."
        "<<<CHIPS:[\"Quick Delivery\"]>>>")
 H2 = [pl("City Care Hospital", 450, None), pl("SMS Hospital", 1300, True, 5.0, 2), pl("Keshav Medical Hall", 80, True, primary="pharmacy")]
-want = "Emergency ho to 112 ya 108 dial karein. SMS Hospital 1.3 km door hai aur abhi khula hai."
+want = "In an emergency, call 112 or 108. SMS Hospital is 1.3 km away and open now."
 out = ask("sabse paas hospital kahan hai?", [H2], BAD)
 check("JSON reply: 112/108 line, the facts, nothing else", out["reply"] == want, out["reply"])
 check("JSON cards: open first, pharmacy gone, one Google call", [p["name"] for p in out["places"]] == ["SMS Hospital", "City Care Hospital"]
@@ -264,7 +264,7 @@ check("pharmacy: 5 asked", google["max"] == 5)
 check("no model answered: the facts, never a delivery app", out["error"] == "LLM_TOTAL_FAILURE"
       and out["reply"] == "Chromwell Pharmacy, 50 m away; open now." and "Blinkit" not in json.dumps(out), out["reply"])
 out = ask("nearest hospital", [H2], None)
-check("no model answered, hospital: 112/108 first", out["reply"].startswith("Emergency ho to 112 ya 108 dial karein. SMS Hospital"), out["reply"])
+check("no model answered, hospital: 112/108 first", out["reply"].startswith("In an emergency, call 112 or 108. SMS Hospital"), out["reply"])
 out = ask("nearest hospital", [[H2[2]], [pl("Far Hospital", 6000, True)]], "Far Hospital is 6.0 km away.")
 check("only a medical shop in 3 km: one look at 10 km finds the hospital", google["radii"] == [3000, 10000]
       and [p["name"] for p in out["places"]] == ["Far Hospital"], out["places"])

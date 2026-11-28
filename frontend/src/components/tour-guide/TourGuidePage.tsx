@@ -175,7 +175,7 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
         {
           id: 'welcome',
           role: 'assistant',
-          content: "Namaste! I'm your Cruiser personal travel concierge. Ask me about authentic spots, street food, hacks, or itinerary planning.",
+          content: "Hello! I'm your Cruiser personal travel concierge. Ask me about authentic spots, street food, hacks, or itinerary planning.",
           metadata: {
             chips: ["Top food nearby", "What to see today?", "Hidden gems"]
           }
@@ -278,7 +278,7 @@ export const TourGuidePage: React.FC<{ micSlotRef?: React.Ref<HTMLDivElement> }>
         {
           id: `err_${Date.now()}`,
           role: 'assistant',
-          content: "Connection thoda unstable hai dost. Ek baar query dobara bhej kar dekho!",
+          content: "The connection is unstable. Please try sending your message again.",
           metadata: {
             chips: ["Retry now", "Check connection"],
             error: "LLM_FAILURE",

@@ -241,7 +241,7 @@ check("hospital: includedTypes [hospital], DISTANCE, 10 results, 3000 m around t
       and req["json"]["maxResultCount"] == 10 and req["json"]["locationRestriction"]["circle"]["radius"] == 3000.0
       and req["json"]["locationRestriction"]["circle"]["center"] == {"latitude": JAIPUR[0], "longitude": JAIPUR[1]},
       req["json"])
-check("hospital: reply starts with the 112/108 line", out["reply"].startswith("Emergency ho to 112 ya 108 dial karein."),
+check("hospital: reply starts with the 112/108 line", out["reply"].startswith("In an emergency, call 112 or 108."),
       out["reply"])
 check("hospital: emergency flag for the call strip", out["emergency"] is True and out["needs_location"] is False)
 names = [p["name"] for p in out["places"]]
@@ -315,7 +315,7 @@ reset(lambda url, body: (calls_by_radius.append(1), FakeResp(200, {}))[1])
 out = ask("cafe kahan milega")
 check("cafe: includedTypes [cafe]", http_calls and http_calls[0]["json"]["includedTypes"] == ["cafe"])
 check("nothing at 10 km either: says so, no model call, no places", llm["calls"] == 0 and out["places"] == []
-      and "10 km ke andar Google par koi cafe nahi mila" in out["reply"] and len(http_calls) == 2, out["reply"])
+      and "Google Maps found no results for cafe within 10 km" in out["reply"] and len(http_calls) == 2, out["reply"])
 
 reset(nearby_ok([gplace("Laxmi Misthan Bhandar", 0.003, 0.001)]))
 out = ask("khana kahan milega")
@@ -336,24 +336,24 @@ reset(nearby_ok([]))
 named["fn"] = lambda q: FakeSearch([])
 out = ask("cafe near Xyzabc Nagar")
 check("named place not found: says so, no nearby call, no model call",
-      http_calls == [] and llm["calls"] == 0 and "Google Maps par nahi mila" in out["reply"] and out["places"] == [], out["reply"])
+      http_calls == [] and llm["calls"] == 0 and "couldn’t be found on Google Maps" in out["reply"] and out["places"] == [], out["reply"])
 named["fn"] = lambda q: FakeSearch(unavailable=True)
 out = ask("cafe near Hawa Mahal")
-check("named lookup quota: honest unavailable, no model call", llm["calls"] == 0 and "abhi check nahi ho pa rahe" in out["reply"])
+check("named lookup quota: honest unavailable, no model call", llm["calls"] == 0 and "Google Maps is temporarily unavailable" in out["reply"])
 named["fn"] = lambda q: FakeSearch([{"name": "Hawa Mahal", "latitude": 26.9239, "longitude": 75.8267}])
 
 # ---------------------------------------------------------------- 5. Google errors -> honest, never invented
 reset(lambda url, body: FakeResp(500, {"error": {"status": "INTERNAL"}}))
 out = ask("nearest hospital")
 check("Google 500: honest unavailable message, no places, no model call",
-      out["places"] == [] and llm["calls"] == 0 and "Nearby places abhi check nahi ho pa rahe" in out["reply"], out)
-check("Google 500 + hospital: still starts with 112/108", out["reply"].startswith("Emergency ho to 112 ya 108 dial karein."))
+      out["places"] == [] and llm["calls"] == 0 and "Google Maps is temporarily unavailable" in out["reply"], out)
+check("Google 500 + hospital: still starts with 112/108", out["reply"].startswith("In an emergency, call 112 or 108."))
 check("Google 500: nothing cached", redis_conn.get(f"tg:places:hospital:{round(JAIPUR[0], 3)}:{round(JAIPUR[1], 3)}") is None)
 
 reset(lambda url, body: FakeResp(429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded per day"}}))
 out = ask("medical shop near me")
-check("Google quota: unavailable + 112/108 for a medical shop", "abhi check nahi ho pa rahe" in out["reply"]
-      and "112 ya 108" in out["reply"] and out["places"] == [], out["reply"])
+check("Google quota: unavailable + 112/108 for a medical shop", "Google Maps is temporarily unavailable" in out["reply"]
+      and "112 or 108" in out["reply"] and out["places"] == [], out["reply"])
 http_calls.clear()
 redis_conn.delete(f"tg:places:pharmacy:{round(JAIPUR[0], 3)}:{round(JAIPUR[1], 3)}")
 out = ask("pharmacy kahan hai")
@@ -363,7 +363,7 @@ clean_redis()
 reset(nearby_ok(HOSPITALS))
 gms.GOOGLE_MAPS_SERVER_KEY = ""
 out = ask("nearest hospital")
-check("no Google key: unavailable, never invented", out["places"] == [] and "abhi check nahi ho pa rahe" in out["reply"])
+check("no Google key: unavailable, never invented", out["places"] == [] and "Google Maps is temporarily unavailable" in out["reply"])
 gms.GOOGLE_MAPS_SERVER_KEY = "test-key-not-real"
 
 # ---------------------------------------------------------------- 6. missing location
@@ -371,8 +371,8 @@ reset(nearby_ok(HOSPITALS))
 out = ask("nearest hospital", lat=None, lng=None)
 check("no location: asks for it, needs_location flag, no Google, no model",
       out["needs_location"] is True and http_calls == [] and llm["calls"] == 0
-      and "Location on kijiye" in out["reply"], out)
-check("no location + hospital: still the 112/108 line first", out["reply"].startswith("Emergency ho to 112 ya 108"))
+      and "Enable location access" in out["reply"], out)
+check("no location + hospital: still the 112/108 line first", out["reply"].startswith("In an emergency, call 112 or 108"))
 reset(nearby_ok(HOSPITALS))
 out = ask("nearest hospital", mode="trip")
 check("Trip mode: the device location is still used for places", len(http_calls) == 1 and out["places"])
@@ -399,11 +399,11 @@ async def run_stream(msg, **kw):
 
 
 ev = asyncio.run(run_stream("nearest hospital"))
-check("stream: first token is the 112/108 line", ev[1] == ("token", {"t": "Emergency ho to 112 ya 108 dial karein. "}), ev[:2])
+check("stream: first token is the 112/108 line", ev[1] == ("token", {"t": "In an emergency, call 112 or 108. "}), ev[:2])
 done = ev[-1][1]
 check("stream: done has places, emergency, reply with the prefix once",
       ev[-1][0] == "done" and [p["name"] for p in done["places"]] == names and done["emergency"] is True
-      and done["reply"].count("Emergency ho to 112") == 1, done)
+      and done["reply"].count("In an emergency, call 112") == 1, done)
 
 reset(nearby_ok(HOSPITALS))
 

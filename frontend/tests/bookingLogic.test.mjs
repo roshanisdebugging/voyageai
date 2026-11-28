@@ -13,7 +13,7 @@ const check = (name, ok, detail = '') => { total++; if (!ok) failed++; console.l
 check('card: ready, upcoming, not dismissed -> shown', B.bookingCardVisible('READY', false, false) === true);
 check('card: plan still generating / failed -> hidden', !B.bookingCardVisible('GENERATING', false, false) && !B.bookingCardVisible('FAILED', false, false));
 check('card: past trip -> hidden', !B.bookingCardVisible('READY', true, false));
-check('card: "Abhi nahi" -> hidden', !B.bookingCardVisible('READY', false, true));
+check('card: "Not now" -> hidden', !B.bookingCardVisible('READY', false, true));
 check('phone field: letters dropped while typing, + and spaces kept', B.cleanPhoneInput('+91 98765abc43210') === '+91 9876543210');
 check('phone field: at most 16 characters', B.cleanPhoneInput('1'.repeat(30)).length === 16);
 check('age field: digits only, at most 3', B.cleanAgeInput('3a4x') === '34' && B.cleanAgeInput('12345') === '123');
@@ -23,7 +23,7 @@ check('name: digits / symbols / one letter / too long refused',
 check('name: Ol Chiki / Bengali / Tamil -> "script"', ['ᱩᱢᱟᱱᱟᱛᱷ', 'রাহুল', 'ராகுல்'].every((x) => B.nameProblem(x) === 'script'));
 check("name: . - ' and accents allowed", ["R. K. Singh", "D'Souza", 'Anne-Marie', 'José', 'श्री राम'].every((x) => B.nameProblem(x) === null));
 check('name: Devanagari digits refused', B.nameProblem('राम२') === 'invalid');
-check('name messages', B.NAME_MESSAGES.script === 'Naam English ya Hindi mein likhiye.');
+check('name messages', B.NAME_MESSAGES.script === 'Enter the name in English or Hindi.');
 check('services: toggle keeps the fixed order', B.toggleService(['hotel'], 'flight').join() === 'flight,hotel'
   && B.toggleService(['flight', 'hotel'], 'flight').join() === 'hotel' && B.toggleService([], 'cab').length === 0);
 
@@ -60,7 +60,7 @@ check('card: the newly answered row is highlighted', B.changedKeys({ services: '
 check('card: a row going back to "-" (Back) is not highlighted', B.changedKeys({ hotel_type: '3-star' }, rows({ hotel_type: '-' })).length === 0);
 check('card: values map', JSON.stringify(B.rowValues(rows({ a: '1', b: '-' }))) === '{"a":"1","b":"-"}');
 
-check('status line for an open request', B.requestLine({ requestNo: 'BR-1001', statusLabel: 'Save ho gayi' }) === 'Request BR-1001: Save ho gayi');
+check('status line for an open request', B.requestLine({ requestNo: 'BR-1001', statusLabel: 'Saved' }) === 'Request BR-1001: Saved');
 check('no request -> no status line', B.requestLine(null) === null && B.requestLine({}) === null);
 check('partner email: poll only while sending', B.notifyPending({ notify: 'sending' }) === true
   && ['sent', 'failed', 'off', undefined].every((n) => B.notifyPending({ notify: n }) === false) && B.notifyPending(null) === false);

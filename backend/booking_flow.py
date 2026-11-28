@@ -1,5 +1,5 @@
 """
-Booking conversation, stage 2: QUESTIONS ONLY. Nothing is written to the database and nothing is sent to anyone.
+Booking questions, review, and confirmed requests. The draft stays in Redis until confirmation.
 
 The answers live only in Redis (booking:flow:{user}:{trip}, 2 hours, renewed on every change) and are deleted on
 cancel and on finish. The screen (WS booking:* / REST /api/trips/{id}/booking*) and voice (voice/booking_voice.py)
@@ -33,6 +33,9 @@ SERVICE_QUESTIONS = {
     "hotel": ["hotel_type", "hotel_rooms"],
 }
 TIMES = ["morning", "afternoon", "evening", "night"]
+CLOCK_TIME = r"(?:[01][0-9]|2[0-3]):[0-5][0-9]"
+TIME_WINDOW = re.compile(rf"({CLOCK_TIME})–({CLOCK_TIME})")
+HOTEL_RATING = re.compile(r"rating:([1-5])")
 TRAIN_CLASSES = ["SL", "3A", "2A", "1A"]
 HOTEL_TYPES = ["budget", "3star", "4plus"]
 YES_NO = ["yes", "no"]
@@ -127,6 +130,7 @@ ERRORS = {
         "airline_invalid": "Airline ka naam sirf aksharon mein boliye.",
         "airline_script": "Airline ka naam English ya Hindi mein likhiye.",
         "airline_name_needed": "Kaunsi airline?",
+        "age_mismatch": "Trip ke adult aur child ages check karke confirm kijiye.",
         "age_invalid": "Umar 0 se 110 ke beech ek poora number boliye.",
         "rooms_invalid": "Kamre 1 se 9 tak ho sakte hain.",
         "phone_invalid": "Ye number sahi nahi lagta. 10 digit ka mobile number boliye, jo 6, 7, 8 ya 9 se shuru ho.",
@@ -144,6 +148,7 @@ ERRORS = {
         "airline_invalid": "Please say the airline's name in letters only.",
         "airline_script": "Please write the airline's name in English or Hindi.",
         "airline_name_needed": "Which airline?",
+        "age_mismatch": "Check and confirm ages that differ from the trip’s adult and child categories.",
         "age_invalid": "Please give an age as a whole number from 0 to 110.",
         "rooms_invalid": "Rooms can be 1 to 9.",
         "phone_invalid": "That number doesn't look right. Please give a 10-digit mobile number starting with 6, 7, 8 or 9.",
@@ -415,11 +420,14 @@ def older_travellers(s: BookingState) -> int:
     return sum(1 for t in s.travellers if isinstance(t.get("age"), int) and t["age"] >= ELDERLY_AGE)
 
 
-def partner_notes(s: BookingState) -> List[str]:
+def partner_notes(s: BookingState, lang: str = "hi") -> List[str]:
     """Notes for the booking partner, derived by CODE from the ages (never asked as a separate question)."""
     n = older_travellers(s)
     if not n:
         return []
+    if lang == "en":
+        traveler = "traveler is" if n == 1 else "travelers are"
+        return [f"{n} {traveler} aged {ELDERLY_AGE} or older. Please look for a ground-floor room or a hotel with an elevator."]
     return [f"{n} yatri {ELDERLY_AGE} saal ya usse upar hain; lift ya ground floor wala kamra dekhein."]
 
 
@@ -482,9 +490,54 @@ def change_part(s: BookingState, part: str) -> bool:
     return True
 
 
+def _details_question(qid: str) -> bool:
+    return qid in ("phone", "phone_ok") or _traveller(qid.removesuffix("_confirm")) is not None
+
+
+def _apply_details(s: BookingState, value: Any) -> Outcome:
+    entries = value.get("travellers")
+    if not isinstance(entries, list) or len(entries) != s.traveller_count():
+        return Outcome(False, "choice_invalid")
+    raw_phone = value.get("phone")
+    phone = normalize_phone(raw_phone) if isinstance(raw_phone, (str, int)) else None
+    if not phone:
+        return Outcome(False, "phone_invalid")
+
+    travellers = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return Outcome(False, "choice_invalid")
+        name = entry.get("name")
+        problem = name_problem(name) if isinstance(name, str) else "invalid"
+        if problem:
+            return Outcome(False, "name_script" if problem == "script" else "name_invalid")
+        age = parse_age(entry.get("age"))
+        if age is None:
+            return Outcome(False, "age_invalid")
+        if _is_child(s, index) != (age < ADULT_AGE) and value.get("confirmAgeMismatch") is not True:
+            return Outcome(False, "age_mismatch")
+        travellers.append({"name": clean_name(name), "age": age})
+
+    s.travellers = travellers
+    s.phone, s.phone_ok = phone, True
+    s.age_check = s.age_guess = None
+    return Outcome(True)
+
+
 def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
     """The ONE place answers are checked. `question` must be the current question (a stale screen is refused)."""
     qid = current_question(s)
+    if question == "traveler_details" and isinstance(value, dict):
+        if s.finished or not (_details_question(qid) or qid == "review"):
+            return Outcome(False, "stale")
+        return _apply_details(s, value)
+    if question == "traveler_details_back" and _details_question(qid):
+        previous = [key for key in question_ids(s) if key != "services" and not _details_question(key) and key != "review"]
+        if not previous:
+            return Outcome(False, "stale")
+        s.answers.pop(previous[-1], None)
+        s.age_check = s.age_guess = None
+        return Outcome(True)
     if question != qid:
         return Outcome(False, "stale")
     t = _traveller(qid)
@@ -515,6 +568,12 @@ def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
         name = clean_name(value, AIRLINE_MAX)
         s.answers[qid] = name
         return Outcome(True)
+
+    if isinstance(value, str):
+        window = TIME_WINDOW.fullmatch(value) if qid in ("flight_time", "train_time") else None
+        if (window and window[1] != window[2]) or (qid == "hotel_type" and HOTEL_RATING.fullmatch(value)):
+            s.answers[qid] = value
+            return Outcome(True)
 
     if qid in CHOICES:
         if value != ANY and value not in CHOICES[qid]:
@@ -637,6 +696,11 @@ def go_back(s: BookingState) -> bool:
 # ---------------- texts and the screen's view
 
 def _value_label(value: Any, lang: str) -> str:
+    if isinstance(value, str):
+        if rating := HOTEL_RATING.fullmatch(value):
+            return rating[1] + (" star" if rating[1] == "1" else " stars")
+        if (window := TIME_WINDOW.fullmatch(value)) and window[2] < window[1]:
+            return value + (" (agle din)" if lang == "hi" else " (+1 day)")
     if isinstance(value, int):
         return str(value)
     return LABELS[lang].get(value, str(value))
@@ -661,7 +725,7 @@ def summary_lines(s: BookingState, lang: str) -> List[Dict[str, str]]:
         hotel = {"part": "hotel", "label": L["hotel"], "text": ", ".join([
             f"{'Type' if not hi else 'Prakaar'}: {_value_label(a.get('hotel_type'), lang)}",
             f"{'Rooms' if not hi else 'Kamre'}: {_value_label(a.get('hotel_rooms'), lang)}"])}
-        notes = partner_notes(s)
+        notes = partner_notes(s, lang)
         if notes:
             hotel["note"] = " ".join(notes)     # under the hotel summary only
         lines.append(hotel)
@@ -697,7 +761,7 @@ def spoken_review(s: BookingState, lang: str) -> str:
     The screen shows the full review with names."""
     W = _SPOKEN[lang]
     a = s.answers
-    say = lambda v: W.get(v, str(v))  # noqa: E731
+    say = lambda v: W.get(v, _value_label(v, lang))  # noqa: E731
 
     def joined(*vals: Any) -> str:
         words = [say(v) for v in vals if v is not None]
@@ -892,10 +956,20 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
         out["traveller"] = {"index": t[0] + 1, "isChild": _is_child(s, t[0]), "total": s.traveller_count()}
     if qid == "t0_name" and s.account_name and s.adults > 0:
         out["accountName"] = s.account_name     # the screen's optional "Mera naam" button (filled only on tap)
+    if _details_question(qid) or qid == "review":
+        out["travelDetails"] = {
+            "travelers": [
+                {"name": entry.get("name"), "age": entry.get("age"), "isChild": _is_child(s, index)}
+                for index, entry in enumerate(s.travellers)
+            ],
+            "phone": s.phone,
+        }
+    if qid in ("flight_time", "train_time", "flight_airline", "hotel_type", "hotel_rooms"):
+        out["currentAnswer"] = s.answers.get(qid)
     if qid in ("review", "change"):
         out["summary"] = summary_lines(s, lang)
         out["consent"] = CONSENT[lang]
-        out["partnerNotes"] = partner_notes(s)
+        out["partnerNotes"] = partner_notes(s, lang)
     return out
 
 
@@ -1013,7 +1087,7 @@ def save_request(s: BookingState, user_id: str, lang: str = "hi") -> Tuple[Dict[
                 user_id=user_id, status="new", services=list(s.services),
                 preferences={q: s.answers[q] for q in chosen if q in s.answers},
                 travellers=[{"name": t.get("name"), "age": t.get("age")} for t in s.travellers],
-                phone=s.phone, partner_note=" ".join(partner_notes(s)) or None,
+                phone=s.phone, partner_note=" ".join(partner_notes(s, lang)) or None,
                 consent_text=CONSENT.get(lang, CONSENT["hi"]), consented_at=now,
                 notify_status="pending" if notify_enabled() else "off",
                 created_at=now, updated_at=now)
@@ -1057,13 +1131,13 @@ def _account_name(db, user_id: str) -> Optional[str]:
         return None
 
 
-def start(redis_conn, db, user_id: str, trip, services: Optional[List[str]] = None) -> BookingState:
+def start(redis_conn, db, user_id: str, trip, services: Optional[List[str]] = None, *, lang: str = "hi") -> BookingState:
     """Resume the flow for this trip, or start a new one. `trip` is already owner-checked by the caller."""
     s = load(redis_conn, user_id, trip.id)
     if s is not None:
         log_event("resume", s, step=current_question(s))
         return s
-    existing = current_request(db, user_id, trip.id)
+    existing = current_request(db, user_id, trip.id, lang)
     if existing and existing["open"]:
         log_event("start_blocked", None, open_request=True)
         raise RequestExists(existing)
@@ -1199,27 +1273,31 @@ SCREEN_ACTIONS = {"booking:get", "booking:start", "booking:answer", "booking:bac
 
 def screen_action(redis_conn, db, user_id: str, trip, action: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """WS booking:* and the REST routes. `trip` is the owner-checked trip; the key is always the session user's."""
+    lang = "en"
     if action == "booking:request":                # read-only: this user's latest request for this trip
-        return {"request": current_request(db, user_id, trip.id)}
+        return {"request": current_request(db, user_id, trip.id, lang)}
     if action == "booking:get":
         s = load(redis_conn, user_id, trip.id)
-        return response(s, request=None if s else current_request(db, user_id, trip.id))
+        return response(s, lang=lang, request=None if s else current_request(db, user_id, trip.id, lang))
     if action == "booking:start":
         services = data.get("services") if isinstance(data.get("services"), list) else None
         try:
-            return response(start(redis_conn, db, user_id, trip, services))
+            return response(start(redis_conn, db, user_id, trip, services, lang=lang), lang=lang)
         except RequestExists as err:
-            return {"active": False, "request": err.request, "message": already_text(err.request, "hi"),
-                    "testNote": test_note("hi")}
+            return {"active": False, "request": err.request, "message": already_text(err.request, lang),
+                    "testNote": test_note(lang)}
     if action == "booking:answer":
-        s, out = answer(redis_conn, user_id, trip.id, str(data.get("question") or "")[:40], _screen_value(data.get("value")))
-        return response(s, out)
+        question = str(data.get("question") or "")[:40]
+        raw = data.get("value")
+        value = _screen_details(raw) if question == "traveler_details" else _screen_value(raw)
+        s, out = answer(redis_conn, user_id, trip.id, question, value, lang)
+        return response(s, out, lang)
     if action == "booking:back":
-        return response(back(redis_conn, user_id, trip.id))
+        return response(back(redis_conn, user_id, trip.id), lang=lang)
     if action == "booking:cancel":
         cancel(redis_conn, user_id, trip.id)
-        return {"active": False, "cancelled": True, "message": CANCELLED["hi"], "offer": OFFER["hi"],
-                "request": current_request(db, user_id, trip.id)}
+        return {"active": False, "cancelled": True, "message": CANCELLED[lang], "offer": OFFER[lang],
+                "request": current_request(db, user_id, trip.id, lang)}
     raise ValueError("Unknown booking action")
 
 
@@ -1234,3 +1312,18 @@ def _screen_value(raw: Any) -> Any:
     if isinstance(raw, list):
         return [x[:20] for x in raw[:5] if isinstance(x, str)]
     return None
+
+
+def _screen_details(raw: Any) -> Any:
+    if not isinstance(raw, dict):
+        return None
+    entries = raw.get("travellers")
+    if not isinstance(entries, list) or len(entries) > MAX_TRAVELLERS:
+        return None
+    if any(not isinstance(entry, dict) for entry in entries):
+        return None
+    return {
+        "travellers": [{"name": _screen_value(entry.get("name")), "age": _screen_value(entry.get("age"))} for entry in entries],
+        "phone": _screen_value(raw.get("phone")),
+        "confirmAgeMismatch": raw.get("confirmAgeMismatch") is True,
+    }

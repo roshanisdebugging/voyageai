@@ -1783,7 +1783,7 @@ class RouteComputeRequest(BaseModel):
     mode: str = "drive"
 
 
-ROUTE_UNAVAILABLE_MESSAGE = "Route abhi available nahi hai"
+ROUTE_UNAVAILABLE_MESSAGE = "The route is currently unavailable"
 
 
 @app.post("/api/routes/compute", dependencies=[Depends(routes_limiter)])

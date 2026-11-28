@@ -19,6 +19,17 @@ export interface BookingRequestInfo {
   notifyText?: string;
 }
 
+export interface TravelDetails {
+  travelers: { name: string | null; age: number | null; isChild: boolean }[];
+  phone: string | null;
+}
+
+export interface TravelDetailsAnswer {
+  travellers: { name: string; age: string }[];
+  phone: string;
+  confirmAgeMismatch: boolean;
+}
+
 export interface BookingView {
   active: boolean;
   tripId?: string;
@@ -48,6 +59,8 @@ export interface BookingView {
   expired?: boolean;
   message?: string;
   offer?: string;
+  travelDetails?: TravelDetails;
+  currentAnswer?: string | number | null;
 }
 
 async function call(action: string, tripId: string, payload: Record<string, unknown>,
@@ -74,7 +87,7 @@ export const bookingApi = {
   get: (tripId: string) => call('booking:get', tripId, {}, 'GET', ''),
   start: (tripId: string, services?: string[]) =>
     call('booking:start', tripId, services?.length ? { services } : {}, 'POST', '/start'),
-  answer: (tripId: string, question: string, value: string | string[]) =>
+  answer: (tripId: string, question: string, value: string | string[] | TravelDetailsAnswer) =>
     call('booking:answer', tripId, { question, value }, 'POST', '/answer'),
   request: (tripId: string) => call('booking:request', tripId, {}, 'GET', '/request'),
   back: (tripId: string) => call('booking:back', tripId, {}, 'POST', '/back'),

@@ -1,38 +1,41 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Check, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Building2, Check, Info, Plane, RefreshCw, TrainFront } from 'lucide-react';
 import { useTrip } from '../trip/TripContext';
 import { BOOKING_CHANGED } from '../../voice/uiActions';
-import { bookingApi, type BookingView } from './bookingApi';
+import { bookingApi, type BookingView, type TravelDetailsAnswer } from './bookingApi';
+import { PreferenceProgress } from '../../components/preferences/PreferenceProgress';
+import { AirlinePreference } from './AirlinePreference';
+import { DepartureWindow, HotelRating, RoomCount, TravelerDetails } from './BookingFormControls';
 import { BookingLiveCard } from './BookingLiveCard';
-import { cleanAgeInput, cleanPhoneInput, nameProblem, notifyPending, toggleService, NAME_MAX, NAME_MESSAGES } from './bookingLogic';
+import { notifyPending, toggleService } from './bookingLogic';
+import './booking-flow.css';
 
-/**
- * Booking stage 2: one question at a time (the server decides which), large tap choices, typed names / ages / phone,
- * "2 of 5", Back and "Abhi nahi". Voice answers the same questions: a voice reply fires BOOKING_CHANGED and this
- * screen reloads (also when the window regains focus). Nothing is saved to the database and nothing is sent.
- */
-export const BookingFlowPage: React.FC = () => {
+const serviceIcons = { flight: Plane, train: TrainFront, hotel: Building2 };
+
+export function BookingFlowPage() {
+  const { currentTrip } = useTrip();
+  return <BookingFlow key={currentTrip?.id} tripId={currentTrip?.id} />;
+}
+
+function BookingFlow({ tripId }: { tripId?: string }) {
   const navigate = useNavigate();
   const { state } = useLocation() as { state?: { services?: string[] } };
-  const { currentTrip } = useTrip();
-  const tripId = currentTrip?.id;
   const [view, setView] = useState<BookingView | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
-  const [text, setText] = useState('');
-  const [localError, setLocalError] = useState<string | null>(null);
+  const [editingDetails, setEditingDetails] = useState(false);
+  const requestInProgress = useRef(false);
   const preselect = useRef<string[]>(state?.services ?? []);
   const lastQuestion = useRef<string | undefined>(undefined);
 
   const show = useCallback((v: BookingView) => {
     setView(v);
     setLoadError(null);
-    setLocalError(null);
     if (v.question !== lastQuestion.current) {
       lastQuestion.current = v.question;
-      setText('');
+      setEditingDetails(false);
       if (v.question === 'services') {
         const fromCard = preselect.current;
         preselect.current = [];
@@ -42,12 +45,15 @@ export const BookingFlowPage: React.FC = () => {
   }, []);
 
   const run = useCallback(async (fn: () => Promise<BookingView>) => {
+    if (requestInProgress.current) return;
+    requestInProgress.current = true;
     setBusy(true);
     try {
       show(await fn());
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Booking couldn't load. Please try again.");
     } finally {
+      requestInProgress.current = false;
       setBusy(false);
     }
   }, [show]);
@@ -83,7 +89,7 @@ export const BookingFlowPage: React.FC = () => {
   if (!tripId) {
     return (
       <div className="max-w-xl mx-auto px-4 pt-10 pb-28 text-center space-y-4">
-        <p className="text-sm font-bold text-[var(--color-text-primary)]">Pehle trip kholiye.</p>
+        <p className="text-sm font-bold text-[var(--color-text-primary)]">Open a trip to start booking.</p>
         <button type="button" onClick={() => navigate('/trips')} className="min-h-12 w-full rounded-2xl bg-[var(--color-primary)] text-white font-extrabold text-sm dark:text-zinc-950">My trips</button>
       </div>
     );
@@ -94,44 +100,68 @@ export const BookingFlowPage: React.FC = () => {
     const q = view.question;
     void run(() => bookingApi.answer(tripId, q, value));
   };
-  const submitText = () => {
-    const value = text.trim();
-    const problem = view?.kind === 'name' ? nameProblem(value) : null;
-    if (problem) {
-      setLocalError(NAME_MESSAGES[problem]);
-      return;
-    }
-    if (!value) return;
-    answer(value);
+  const submitDetails = (value: TravelDetailsAnswer) => {
+    if (busy) return;
+    void run(async () => {
+      const result = await bookingApi.answer(tripId, 'traveler_details', value);
+      if (result.question === 'review' && !result.error) setEditingDetails(false);
+      return result;
+    });
   };
+
   const notNow = async () => {
     try { await bookingApi.cancel(tripId); } catch { /* the 2-hour expiry removes it anyway */ }
     navigate('/trip');
   };
 
-  const big = 'min-h-12 w-full rounded-2xl border px-3 py-2 text-sm font-extrabold press-scale disabled:opacity-50';
-  const choiceCls = `${big} border-[#355F58]/30 bg-[#E8F0EE] text-(--color-primary) dark:border-emerald-800 dark:bg-[#12332B]`;
-  const primaryCls = `${big} border-transparent bg-[var(--color-primary)] text-white dark:text-zinc-950`;
-  const inputCls = 'min-h-12 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] px-4 text-base text-[var(--color-text-primary)] dark:border-zinc-700';
-
+  const choiceCls = 'booking-choice';
+  const primaryCls = 'booking-primary';
   const finishedOrGone = view && !view.active;
+  const details = view?.travelDetails && (editingDetails || view.question !== 'review') ? view.travelDetails : undefined;
+  const isReview = view?.kind === 'review' && !details;
+  const showSummary = Boolean(view?.active && view.card && !isReview);
+  const progress = view?.progress;
+  const followsTravelerStep = ['phone', 'phone_ok', 'review', 'change'].includes(view?.question ?? '');
+  const step = progress ? progress.step - Number(followsTravelerStep) - Number(editingDetails) : null;
+  const rangeQuestion = view?.question === 'flight_time' || view?.question === 'train_time';
+  const airlineQuestion = view?.question === 'flight_airline';
+  const ratingQuestion = view?.question === 'hotel_type';
+  const roomQuestion = view?.question === 'hotel_rooms';
+  const currentAnswer = view?.currentAnswer == null ? undefined : String(view.currentAnswer);
+  const anyLabel = view?.choices?.find(choice => choice.value === 'any')?.label ?? 'No preference';
+  const prompt = details ? 'Traveler and contact details'
+    : rangeQuestion ? (view?.question === 'flight_time' ? 'When would you like to fly?' : 'When would you like to take the train?')
+    : airlineQuestion ? 'How should we choose your airline?'
+    : ratingQuestion ? 'Choose a hotel rating'
+    : roomQuestion ? 'How many rooms do you need?' : view?.prompt;
+
+  const goBack = () => {
+    if (editingDetails) {
+      setEditingDetails(false);
+    } else if (isReview) {
+      setEditingDetails(true);
+    } else if (details) {
+      void run(() => bookingApi.answer(tripId, 'traveler_details_back', ''));
+    } else {
+      void run(() => bookingApi.back(tripId));
+    }
+  };
 
   return (
-    <div className="max-w-xl mx-auto px-4 pt-4 pb-28 space-y-5 animate-fadeIn">
-      <div className="flex items-center justify-between gap-2">
-        {view?.active && view.canBack ? (
-          <button type="button" disabled={busy} onClick={() => void run(() => bookingApi.back(tripId))}
-            className="flex min-h-11 items-center gap-1 px-1 text-sm font-bold text-[var(--color-primary)]">
-            <ArrowLeft className="size-4" aria-hidden="true" />Back
-          </button>
-        ) : <span />}
-        {view?.active && <span className="text-xs font-bold text-[var(--color-text-secondary)]">{view.progress?.label}</span>}
-      </div>
+    <div className="booking-flow space-y-4">
+      {view?.active && (
+        <header className="booking-header space-y-2">
+          {view.canBack && (
+            <button type="button" disabled={busy} onClick={goBack} className="booking-back">
+              <ArrowLeft className="size-4" aria-hidden="true" />Back
+            </button>
+          )}
+          {progress && step && <PreferenceProgress currentStep={step} totalSteps={progress.total - 1} />}
+        </header>
+      )}
 
       {view?.testNote && (
-        <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-          {view.testNote}
-        </p>
+        <p className="booking-test-note"><Info size={16} aria-hidden="true" />{view.testNote}</p>
       )}
 
       {loadError && (
@@ -150,115 +180,86 @@ export const BookingFlowPage: React.FC = () => {
       {finishedOrGone && (
         <div className="space-y-4 text-center">
           <p role="status" className="text-base font-extrabold text-[var(--color-text-primary)]">
-            {view.finished || view.request?.open ? (view.message || `Request ${view.request?.requestNo}: ${view.request?.statusLabel}`) : 'Booking band hai.'}
+            {view.finished || view.request?.open ? (view.message || `Request ${view.request?.requestNo}: ${view.request?.statusLabel}`) : 'This booking session has ended.'}
           </p>
           {!view.finished && !view.request?.open && (
-            <button type="button" className={choiceCls} onClick={() => void run(() => bookingApi.start(tripId))}>Phir se shuru karein</button>
+            <button type="button" className={choiceCls} onClick={() => void run(() => bookingApi.start(tripId))}>Start again</button>
           )}
-          <button type="button" className={primaryCls} onClick={() => navigate('/trip')}>Trip par wapas</button>
+          <button type="button" className={primaryCls} onClick={() => navigate('/trip')}>Back to trip</button>
         </div>
       )}
 
-      {view?.active && view.card && <BookingLiveCard card={view.card} />}
-
       {view?.active && (
-        <div className="space-y-4">
-          <h1 className="text-lg font-extrabold text-[var(--color-text-primary)]">{view.prompt}</h1>
-          {(view.error || localError) && (
-            <p role="alert" className="text-sm font-bold text-red-700 dark:text-red-400">{localError || view.error}</p>
-          )}
+        <div className={showSummary ? 'booking-content booking-with-summary' : 'booking-content'}>
+          <section className="booking-question space-y-4" aria-labelledby="booking-question-title" aria-busy={busy}>
+            <h1 id="booking-question-title">{prompt}</h1>
+            {view.error && <p role="alert" className="book-field-error">{view.error}</p>}
 
-          {view.kind === 'services' && (
-            <div className="space-y-2">
-              {(view.choices || []).map((c) => {
-                const on = picked.includes(c.value);
-                return (
-                  <button key={c.value} type="button" aria-pressed={on} onClick={() => setPicked((p) => toggleService(p, c.value))}
-                    className={`${choiceCls} flex items-center justify-between ${on ? 'ring-2 ring-[var(--color-primary)]' : ''}`}>
-                    <span>{c.label}</span>{on && <Check className="size-4" aria-hidden="true" />}
-                  </button>
-                );
-              })}
-              <button type="button" className={primaryCls} disabled={!picked.length || busy} onClick={() => answer(picked)}>Aage</button>
-            </div>
-          )}
+            {view.kind === 'services' && (
+              <div className="space-y-2">
+                {(view.choices || []).map((c) => {
+                  const on = picked.includes(c.value);
+                  const Icon = serviceIcons[c.value as keyof typeof serviceIcons];
+                  return (
+                    <button key={c.value} type="button" aria-pressed={on} disabled={busy} onClick={() => setPicked((p) => toggleService(p, c.value))}
+                      className={choiceCls}>
+                      <span className="flex items-center gap-2">{Icon && <Icon size={18} aria-hidden="true" />}{c.label}</span>{on && <Check className="size-4" aria-hidden="true" />}
+                    </button>
+                  );
+                })}
+                <button type="button" className={primaryCls} disabled={!picked.length || busy} onClick={() => answer(picked)}>Continue</button>
+              </div>
+            )}
 
-          {(view.kind === 'choice' || view.kind === 'yesno' || view.kind === 'change') && (
-            <div className="grid grid-cols-2 gap-2">
-              {(view.choices || []).map((c) => (
-                <button key={c.value} type="button" disabled={busy} className={choiceCls} onClick={() => answer(c.value)}>{c.label}</button>
-              ))}
-            </div>
-          )}
+            {rangeQuestion && <DepartureWindow key={view.question} answer={answer} busy={busy} primaryClass={primaryCls} anyLabel={anyLabel} initialValue={currentAnswer} />}
+            {airlineQuestion && <AirlinePreference answer={answer} busy={busy} currentValue={currentAnswer} />}
+            {ratingQuestion && <HotelRating answer={answer} busy={busy} primaryClass={primaryCls} anyLabel={anyLabel} initialValue={currentAnswer} />}
+            {roomQuestion && <RoomCount answer={answer} busy={busy} primaryClass={primaryCls} anyLabel={anyLabel} initialValue={currentAnswer} />}
+            {details && <TravelerDetails details={details} busy={busy} primaryClass={primaryCls} answer={submitDetails} />}
 
-          {view.question === 'flight_airline' && (
-            <form className="flex gap-2" onSubmit={(e) => {
-              e.preventDefault();
-              if (nameProblem(text, 40) === 'script') { setLocalError('Airline ka naam English ya Hindi mein likhiye.'); return; }
-              if (text.trim()) answer(text.trim());
-            }}>
-              <input aria-label="Koi khaas airline" placeholder="Koi khaas airline" maxLength={40} value={text}
-                onChange={(e) => setText(e.target.value)} className={inputCls} />
-              <button type="submit" disabled={!text.trim() || busy} className={`${primaryCls} w-auto shrink-0 px-5`}>OK</button>
-            </form>
-          )}
-
-          {(view.kind === 'name' || view.kind === 'age' || view.kind === 'phone') && (
-            <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); submitText(); }}>
-              {(view.choices || []).map((c) => (
-                <button key={c.value} type="button" disabled={busy} className={choiceCls} onClick={() => answer(c.value)}>{c.label}</button>
-              ))}
-              {view.kind === 'name' && view.accountName && (
-                <button type="button" disabled={busy} className={choiceCls}
-                  onClick={() => { setLocalError(null); setText(view.accountName || ''); }}>
-                  Mera naam
-                </button>
+            {!details && !rangeQuestion && !airlineQuestion && !ratingQuestion && !roomQuestion &&
+              (view.kind === 'choice' || view.kind === 'yesno' || view.kind === 'change') && (
+                <div className="grid grid-cols-2 gap-2">
+                  {(view.choices || []).map(choice => (
+                    <button key={choice.value} type="button" disabled={busy} className={choiceCls} onClick={() => answer(choice.value)}>
+                      {choice.label}
+                    </button>
+                  ))}
+                </div>
               )}
-              <input
-                aria-label={view.kind === 'name' ? 'Naam' : view.kind === 'age' ? 'Umar' : 'Mobile number'}
-                placeholder={view.kind === 'name' ? 'Naam' : view.kind === 'age' ? 'Umar (saal)' : '10 digit mobile number'}
-                inputMode={view.kind === 'name' ? 'text' : view.kind === 'age' ? 'numeric' : 'tel'}
-                autoComplete={view.kind === 'phone' ? 'tel-national' : view.kind === 'name' ? 'name' : 'off'}
-                maxLength={view.kind === 'name' ? NAME_MAX : undefined}
-                value={text}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setLocalError(null);
-                  setText(view.kind === 'age' ? cleanAgeInput(v) : view.kind === 'phone' ? cleanPhoneInput(v) : v);
-                }}
-                className={inputCls}
-              />
-              <button type="submit" disabled={!text.trim() || busy} className={primaryCls}>Aage</button>
-            </form>
-          )}
 
-          {view.kind === 'review' && (
-            <div className="space-y-3">
-              <ul className="space-y-2">
-                {(view.summary || []).map((line) => (
-                  <li key={line.part} className="flex items-start justify-between gap-3 rounded-2xl border border-[var(--color-border)] p-3 dark:border-zinc-700">
-                    <div className="min-w-0">
-                      <p className="text-xs font-extrabold text-[var(--color-text-secondary)]">{line.label}</p>
-                      <p className="wrap-anywhere text-sm font-bold text-[var(--color-text-primary)]">{line.text}</p>
-                      {line.note && <p className="wrap-anywhere mt-1 text-xs font-medium text-[var(--color-text-secondary)]">{line.note}</p>}
-                    </div>
-                    <button type="button" disabled={busy} onClick={() => answer(`change:${line.part}`)}
-                      className="min-h-11 shrink-0 px-2 text-xs font-bold text-[var(--color-primary)] hover:underline">Badlein</button>
-                  </li>
-                ))}
-              </ul>
-              <p className="text-xs font-medium text-[var(--color-text-secondary)]">{view.consent}</p>
-              <button type="button" disabled={busy} className={primaryCls} onClick={() => answer('yes')}>Haan, sahi hai</button>
-            </div>
-          )}
+            {isReview && (
+              <div className="space-y-3">
+                <ul className="booking-review-list">
+                  {(view.summary || []).map((line) => (
+                    <li key={line.part} className="flex items-start justify-between gap-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-extrabold text-[var(--color-text-secondary)]">{line.label}</p>
+                        <p className="wrap-anywhere text-sm font-bold text-[var(--color-text-primary)]">{line.text}</p>
+                        {line.note && <p className="wrap-anywhere mt-1 text-xs font-medium text-[var(--color-text-secondary)]">{line.note}</p>}
+                      </div>
+                      <button type="button" disabled={busy} onClick={() => {
+                        if (line.part === 'phone' || line.part.startsWith('traveller:')) setEditingDetails(true);
+                        else answer(`change:${line.part}`);
+                      }}
+                        className="min-h-11 shrink-0 px-2 text-xs font-bold text-[var(--color-primary)] hover:underline">Edit</button>
+                    </li>
+                  ))}
+                </ul>
+                {!view.testNote && view.consent && <p className="book-field-hint">{view.consent}</p>}
+                <button type="button" disabled={busy} className={primaryCls} onClick={() => answer('yes')}>Confirm booking request</button>
+              </div>
+            )}
 
-          <button type="button" onClick={() => void notNow()} className="min-h-11 w-full text-sm font-bold text-[var(--color-text-secondary)] hover:underline">
-            Abhi nahi
-          </button>
+            <button type="button" disabled={busy} onClick={() => void notNow()} className="booking-not-now">
+              Not now
+            </button>
+          </section>
+          {showSummary && view.card && <BookingLiveCard card={view.card} />}
         </div>
       )}
     </div>
   );
-};
+}
 
 export default BookingFlowPage;

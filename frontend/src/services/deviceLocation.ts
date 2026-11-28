@@ -33,7 +33,7 @@ export const FRESH_MS = 60_000;
 export const PAUSE_MS = 10 * 60 * 1000;
 
 export class RoutePausedError extends Error {
-  constructor() { super('Route abhi available nahi hai'); }
+  constructor() { super('The route is currently unavailable'); }
 }
 
 export function createDeviceLocationStore(deps: StoreDeps) {

@@ -31,14 +31,14 @@ LABELS = {"travel", "emergency", "off_topic"}
 MAX_QUERY_CHARS = 1000
 SCORING_VERSION = "mean-top-2-cosine-v1"
 CLARIFY = (
-    "Thoda aur context bataiye: kahan jaana hai ya kis local help ki zaroorat hai? "
+    "Tell me where you’re going or what local help you need. "
     "If you are in immediate danger, contact local emergency services directly."
 )
 UNAVAILABLE = (
-    "Travel assistant abhi connect nahi ho pa raha. Please try again shortly. "
+    "The travel assistant is temporarily unavailable. Please try again shortly. "
     "If you are in immediate danger, contact local emergency services directly."
 )
-OFF_TOPIC = "Main travel, local food, stays aur local assistance mein madad karta hoon. Kahan chalna hai?"
+OFF_TOPIC = "I can help with travel, local food, places to stay, and local assistance. Where are you headed?"
 
 
 def corpus_fingerprint(corpus: dict) -> str:

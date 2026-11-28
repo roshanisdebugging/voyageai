@@ -12,7 +12,7 @@ const POLL_MAX = 36;   // about 3 minutes: the email takes seconds, or ~1 minute
 
 /**
  * Booking stage 2: the offer on the trip page once the plan is ready. Tapping a service opens the step screen
- * (that service already ticked); voice "book karwana hai" starts the same flow. "Abhi nahi" hides the card until the
+ * (that service already ticked); voice "book karwana hai" starts the same flow. "Not now" hides the card until the
  * page opens again (no stored flag), and ends a half-done flow. Nothing is booked, saved or sent.
  */
 export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
@@ -77,11 +77,11 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
         <p className="wrap-anywhere text-xs font-bold text-[var(--color-text-secondary)]">{status}</p>
       )}
       <p className="text-sm font-extrabold text-[var(--color-text-primary)]">
-        {inProgress ? `Booking adhoori hai (${flow?.progress?.label ?? ''}). Jaari rakhein?` : 'Train, flight ya hotel book karwana hai?'}
+        {inProgress ? `Booking in progress (${flow?.progress?.label ?? ''}).` : 'Need a flight, train, or hotel?'}
       </p>
       {inProgress ? (
         <div className="flex gap-2">
-          <button type="button" className={chip} onClick={() => open()}>Jaari rakhein</button>
+          <button type="button" className={chip} onClick={() => open()}>Resume booking</button>
         </div>
       ) : (
         <div className="flex gap-2">
@@ -93,7 +93,7 @@ export const BookingOfferCard: React.FC<{ trip: Trip }> = ({ trip }) => {
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] font-medium text-[var(--color-text-secondary)]">{flow?.testNote ?? ''}</span>
         <button type="button" onClick={notNow} className="min-h-11 shrink-0 px-2 text-xs font-bold text-[var(--color-text-secondary)] hover:underline">
-          Abhi nahi
+          Not now
         </button>
       </div>
     </section>

@@ -185,11 +185,11 @@ try:
     check("confirm: the right values", row.user_id == uid_a and row.services == ["hotel"]
           and row.preferences == {"hotel_type": "3star", "hotel_rooms": 2} and row.travellers == [{"name": "Dadaji Sharma", "age": 75}]
           and row.phone == "9876543210" and row.partner_note == "1 yatri 60 saal ya usse upar hain; lift ya ground floor wala kamra dekhein."
-          and row.consent_text == "Ye details hamare booking partner ko bheji jayengi." and row.consented_at is not None
+          and row.consent_text == BF.CONSENT["en"] and row.consented_at is not None
           and row.created_at is not None and row.updated_at is not None)
     check("confirm: the Redis state is deleted", not redis_conn.exists(key(uid_a, T1)))
     check("screen reply (notify off): saved, test, NOT sent", v.get("finished") and v["message"] ==
-          "Aapki request save ho gayi hai: BR-1001. Abhi ye test hai, partner ko nahi bheji gayi." and v["request"]["requestNo"] == "BR-1001")
+          BF.SAVED["en"].format(no="BR-1001") and v["request"]["requestNo"] == "BR-1001")
 
     # ---------------- a second confirmation returns the same request
     s_again = BF.BookingState(trip_id=T1, adults=1, children=0, services=["train"], answers={}, phone="9123456789",
@@ -197,8 +197,8 @@ try:
     req, created = BF.save_request(s_again, uid_a)
     check("second confirmation: the same request, no new row", req["requestNo"] == "BR-1001" and created is False and len(rows(T1)) == 1)
     v = wsd("booking:start", T1)
-    check("screen start with an open request: no new flow, 'pehle se save hai'", v["active"] is False
-          and v["message"] == "Aapki request BR-1001 pehle se save hai." and not redis_conn.exists(key(uid_a, T1)))
+    check("screen start with an open request: no new flow, already saved", v["active"] is False
+          and v["message"] == BF.ALREADY["en"].format(no="BR-1001") and not redis_conn.exists(key(uid_a, T1)))
 
     # two confirmations at the same time (double tap / voice + tap)
     st2 = BF.BookingState(trip_id=T2, adults=2, children=0, services=["hotel"], answers={"hotel_type": "any", "hotel_rooms": 1},
@@ -288,9 +288,9 @@ try:
               len(sent_mail) == 1 and row4.notify_status == "sent" and row4.notified_at is not None and row4.notify_error is None,
               (len(sent_mail), row4.notify_status))
         g = wsd("booking:get", T4)
-        check("screen after sending: 'bhej di gayi hai, wo 2 ghante mein sampark karenge' + the card line",
-              g.get("message") == f"Aapki request save ho gayi hai: {no4}. Partner ko bhej di gayi hai, wo 2 ghante mein sampark karenge."
-              and g["request"]["notify"] == "sent" and g["request"]["notifyText"].startswith("Partner ko bhej di gayi hai")
+        check("screen after sending: English confirmation and card line",
+              g.get("message") == BF.SENT["en"].format(no=no4, hours=2)
+              and g["request"]["notify"] == "sent" and g["request"]["notifyText"].startswith("Sent to the partner")
               and g.get("testNote") is None, g)
         check("postgres: a second send for the same request is skipped", booking_mail.notify_request(no4, send=lambda m, c: sent_mail.append(m))
               == "skipped" and len(sent_mail) == 1)
@@ -306,13 +306,13 @@ try:
         with mock.patch.object(booking_mail, "send_in_background", lambda no: None):   # left pending: "sending"
             v = ans(T4, "yes")
         os.environ.pop("BOOKING_NOTIFY_ENABLED")
-        check("screen reply (notify on): 'bhej rahe hain' while the email is going out",
-              v.get("finished") and v["message"].endswith("Partner ko bhej rahe hain.") and v["request"]["notify"] == "sending", v.get("message"))
+        check("screen reply (notify on): sending status",
+              v.get("finished") and v["message"].endswith("We are sending it to the partner.") and v["request"]["notify"] == "sending", v.get("message"))
         with database.engine.begin() as c:
             c.execute(sql("UPDATE booking_requests SET status = 'cancelled' WHERE trip_id = :t"), {"t": T4})
         to_review(T4)
         v = ans(T4, "yes")
-        check("screen reply (notify off again): never claims it was sent", "bhej di" not in v["message"] and "nahi bheji gayi" in v["message"])
+        check("screen reply (notify off again): never claims it was sent", "was not sent to the partner" in v["message"])
 
         # ---------------- trip page status card
         labels = {}
@@ -322,8 +322,8 @@ try:
                               "(SELECT max(request_seq) FROM booking_requests WHERE trip_id = :t)"), {"s": st, "t": T4})
             g = wsd("booking:get", T4)
             labels[st] = (g["request"]["statusLabel"], g["request"]["open"])
-        check("status card labels", labels == {"new": ("Save ho gayi", True), "contacted": ("Partner ne sampark kiya", True),
-                                               "booked": ("Booking ho gayi", False), "cancelled": ("Cancel", False)}, labels)
+        check("status card labels", labels == {"new": ("Saved", True), "contacted": ("Partner contacted you", True),
+                                               "booked": ("Booked", False), "cancelled": ("Cancelled", False)}, labels)
 
         # ---------------- another user / no login
         f = ws(tok_b, "booking:request", {"trip_id": T1})

@@ -15,7 +15,7 @@ RULES:
    - crowd or timing predictions (busy hours, best time to go)
    - delivery apps, or any brand, app or website that is not in the block
    - medical advice of any kind, including about medicines
-6. 2-3 short sentences in the language of the traveler's query (Hindi, Hinglish or English): the nearest one or two
+6. 2-3 short sentences in clear English, or in Devanagari if the user asks for Hindi: the nearest one or two
    places with their distance and open status. Add nothing after that.
 7. Plain sentences only: no coordinates, no lists, no suggestions for a next question, no <<<CHIPS>>> or <<<CARD>>>,
    no markdown, no code blocks (```).

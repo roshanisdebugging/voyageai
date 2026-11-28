@@ -225,11 +225,11 @@ for combo in combos:
     v = ans(T1, "+91 98765 43210")
     ok = ok and v["question"] == "phone_ok" and "9 8 7 6 5, 4 3 2 1 0" in v["prompt"]
     v = ans(T1, "yes")
-    ok = ok and v["question"] == "review" and v["consent"] == "Ye details hamare booking partner ko bheji jayengi."
+    ok = ok and v["question"] == "review" and v["consent"] == BF.CONSENT["en"]
     ok = ok and any(line["part"] == "traveller:0" and line["text"] == "Asha Ak (34)" for line in v["summary"])
     ok = ok and not any("bujurg" in line["text"].lower() or "elderly" in line["text"].lower() for line in v["summary"])
     v = ans(T1, "yes")
-    ok = ok and v.get("finished") and re.fullmatch(r"Aapki request save ho gayi hai: BR-\d+\. Abhi ye test hai, partner ko nahi bheji gayi\.", v["message"])         and v["request"]["status"] == "new" and not redis_conn.exists(key(uid_a, T1))
+    ok = ok and v.get("finished") and re.fullmatch(r"Your request is saved: BR-\d+\. This is a test for now; it was not sent to the partner\.", v["message"])         and v["request"]["status"] == "new" and not redis_conn.exists(key(uid_a, T1))
     check(f"screen: {'+'.join(combo)} -> only its questions, 'any' accepted, review, test message, state deleted", ok, asked)
 
 # invalid answers + confirm-once ages + read-back no + change one part
@@ -254,7 +254,7 @@ for bad in ("abc", "111", "-1", "3.5"):
     v = ans(T2, bad)
     check(f"screen: age {bad!r} refused", v["errorCode"] == "age_invalid")
 v = ans(T2, "10")
-check("screen: adult aged 10 -> asked to confirm", v["question"] == "t0_age_confirm" and "bade yatri" in v["prompt"])
+check("screen: adult aged 10 -> asked to confirm", v["question"] == "t0_age_confirm" and "adult" in v["prompt"])
 v = ans(T2, "no")
 check("screen: 'no' asks the age again", v["question"] == "t0_age")
 v = ans(T2, "40")
@@ -262,7 +262,7 @@ v = ans(T2, "Priya")
 v = ans(T2, "38")
 v = ans(T2, "Aryan")
 v = ans(T2, "25")
-check("screen: child aged 25 -> asked to confirm", v["question"] == "t2_age_confirm" and "bachche" in v["prompt"])
+check("screen: child aged 25 -> asked to confirm", v["question"] == "t2_age_confirm" and "child" in v["prompt"])
 v = ans(T2, "yes")
 check("screen: 'yes' keeps 25 and moves on", v["question"] == "phone")
 for bad in ("98765abc10", "987654321", "5876543210"):
@@ -670,8 +670,8 @@ v = wsd("booking:start", T1, services=["hotel"])
 for val in ("any", "1", "Dadaji Sharma", "75", "9876543210", "yes"):
     v = ans(T1, val)
 hl = next(l for l in v["summary"] if l["part"] == "hotel")
-check("screen review: the note under the hotel summary, also in the partner notes", hl.get("note") == NOTE1
-      and v.get("partnerNotes") == [NOTE1] and "Bujurg" not in hl["text"])
+check("screen review: the note under the hotel summary, also in the partner notes", hl.get("note") == BF.partner_notes(st_with([75]), "en")[0]
+      and v.get("partnerNotes") == [hl["note"]] and "Bujurg" not in hl["text"])
 v = ans(T1, "yes")
 flog = log_buf.getvalue()
 check("logs: the note, names and ages are not logged (a count only)", "older_travellers=1" in flog
@@ -693,8 +693,8 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     r = say("book karwana hai", CV)
     check("voice start: the reply opens the booking screen, then refreshes it", r.ui_actions == [NAV, {"type": "refresh", "what": "booking"}])
     card = wsd("booking:get", T2)["card"]
-    check("card: all '-' at the start, services marked current, 'Ab: kya book karna hai'",
-          card["now"] == "Ab: kya book karna hai" and [r_["key"] for r_ in card["rows"] if r_["current"]] == ["services"]
+    check("card: all '-' at the start, services marked current, 'Now: what to book'",
+          card["now"] == "Now: what to book" and [r_["key"] for r_ in card["rows"] if r_["current"]] == ["services"]
           and all(r_["value"] == "-" for r_ in card["rows"]), card)
     r = say("train aur hotel", CV)
     check("voice: the reply to the services answer opens the screen too", NAV in r.ui_actions)
@@ -703,7 +703,7 @@ with mock.patch.object(openai_client, "chat_tools", fake):
     check("card: the services filled in; one row per field of the chosen services, travellers and phone",
           rows["services"]["value"] == "Train, Hotel" and list(rows) == ["services", "train_class", "train_time", "train_tatkal",
           "hotel_type", "hotel_rooms", "traveller:0", "traveller:1", "traveller:2", "phone"]
-          and rows["train_class"]["current"] and card["now"] == "Ab: train ki class", list(rows))
+          and rows["train_class"]["current"] and card["now"] == "Now: train class", list(rows))
     r = say("2AC", CV)
     check("voice: later answers don't navigate", NAV not in r.ui_actions and r.ui_actions == [{"type": "refresh", "what": "booking"}])
     check("card: a voice answer fills its field", {r_["key"]: r_["value"] for r_ in wsd("booking:get", T2)["card"]["rows"]}["train_class"] == "2AC")

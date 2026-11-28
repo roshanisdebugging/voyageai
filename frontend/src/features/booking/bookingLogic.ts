@@ -38,8 +38,8 @@ export function looksLikeName(raw: string): boolean {
 }
 
 export const NAME_MESSAGES = {
-  script: 'Naam English ya Hindi mein likhiye.',
-  invalid: 'Naam mein sirf akshar ho sakte hain, 2 se 60 tak.',
+  script: 'Enter the name in English or Hindi.',
+  invalid: 'Enter a name with 2 to 60 characters and at least two letters.',
 } as const;
 
 /** Multi-select of the services step: tapping one adds or removes it, in a fixed order. */

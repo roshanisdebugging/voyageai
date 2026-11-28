@@ -249,7 +249,7 @@ export const TripCreationWizard: React.FC = () => {
     if (adults < 1) return 'At least one adult must travel.';
     if (totalTravelers > MAX_TRAVELERS) return `A trip can have at most ${MAX_TRAVELERS} travelers.`;
     if (!budgetAmount || budgetAmount < MIN_BUDGET) return `Enter a budget of at least ${formatInr(MIN_BUDGET)}.`;
-    if (origin && !cleanOriginName(origin.name)) return `Kahan se: choose a city name (letters only, at most ${ORIGIN_MAX_CHARS} characters), or clear it.`;
+    if (origin && !cleanOriginName(origin.name)) return `Starting city: choose a city name (letters only, at most ${ORIGIN_MAX_CHARS} characters), or clear it.`;
     return null;
   };
 
@@ -520,7 +520,7 @@ export const TripCreationWizard: React.FC = () => {
 
               <PlaceSearchField
                 id="trip-origin"
-                label="Kahan se"
+                label="Starting city"
                 placeholder="Your starting city (e.g. Delhi)"
                 value={origin}
                 onChange={setOrigin}
@@ -621,7 +621,7 @@ export const TripCreationWizard: React.FC = () => {
                       />
                       <PlaceSearchField
                         id="review-origin"
-                        label="Kahan se"
+                        label="Starting city"
                         placeholder="Your starting city"
                         value={origin}
                         onChange={setOrigin}
