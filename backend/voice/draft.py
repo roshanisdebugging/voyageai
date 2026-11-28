@@ -23,6 +23,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from trip_lifecycle import MIN_BUDGET_INR   # the one budget minimum, shared with trip creation
 from trip_lifecycle import clean_place_name  # the one starting-city name rule, shared with trip creation
 from voice.text_utils import canon, words as tu_words
+from voice import bn_words as BN
+from voice.bn_words import BN_MONTHS
+from voice.languages import tkey
 
 DRAFT_TTL_SECONDS = 30 * 60
 MAX_DAYS = 30            # trip_lifecycle: at most 30 days
@@ -156,7 +159,8 @@ def parse_int(raw: Any) -> Optional[int]:
         return int(s)
     if s in ("koi nahi", "koi bhi nahi", "none", "no", "nahi", "zero", "0", "koi bachcha nahi", "no kids"):
         return 0
-    return _NUMBER_WORDS.get(s)
+    found = _NUMBER_WORDS.get(s)
+    return found if found is not None else BN.number(s)     # Bengali number words ("পঁচিশ", "দুটো", "কেউ নেই")
 
 
 def parse_budget(raw: Any) -> Optional[int]:
@@ -174,7 +178,7 @@ def parse_budget(raw: Any) -> Optional[int]:
     words = s.split()
     if len(words) == 2 and words[0] in _NUMBER_WORDS and words[1] in _MULTIPLIERS:
         return _NUMBER_WORDS[words[0]] * _MULTIPLIERS[words[1]]
-    return None
+    return BN.budget(raw)     # Bengali: "পঞ্চাশ হাজার", "৫০ হাজার", "1.5 লাখ"
 
 
 def parse_date(raw: Any) -> Optional[date]:
@@ -233,16 +237,23 @@ def _said_parts(args: Dict[str, Any], which: str) -> Optional[Tuple[int, Optiona
     if day is None:
         return None
     month, year = parse_int(args.get(f"{which}_month")), parse_int(args.get(f"{which}_year"))
+    if month is None and args.get(f"{which}_month") is not None:
+        month = BN.month(args.get(f"{which}_month"))      # a Bengali month name ("ডিসেম্বর")
     return day, month, year
 
 
-def say_date(d: date) -> str:
+def say_date(d: date, lang: Optional[str] = None) -> str:
+    """"12 December" (hi / en, as before); Bengali: "12 ডিসেম্বর"."""
+    if lang == "bn":
+        return f"{d.day} {BN_MONTHS[d.month - 1]}"
     return f"{d.day} {MONTHS[d.month - 1]}"
 
 
 def nights_words(n: int, lang: str) -> str:
     if lang == "en":
         return f"{n} night{'s' if n != 1 else ''}"
+    if lang == "bn":
+        return f"{n} রাত"
     word = HINDI_NUMBERS[n] if 0 <= n < len(HINDI_NUMBERS) else str(n)
     return f"{word} raat"
 
@@ -257,7 +268,9 @@ NOT_A_CITY_WORDS = {canon(w) for w in (
     "hai", "jaana", "jagah", "shahar", "starting", "city", "origin", "i", "don", "t", "dont", "know", "no", "idea", "not",
     "sure", "none", "nothing", "unknown", "bhi", "भी",
     "पता", "नहीं", "ना", "कुछ", "कोई", "कहीं", "कहां", "मालूम", "छोड़ो", "छोड़", "छोड़िए", "दो", "स्किप", "अभी", "बाद", "में",
-    "से", "मुझे", "यार", "है", "जाना", "जगह", "शहर")}
+    "से", "मुझे", "यार", "है", "जाना", "जगह", "शहर",
+    # Bengali (beta)
+    "জানি", "না", "কিছু", "কোনো", "কোথাও", "কোথায়", "বাদ", "পরে", "এখন", "আমি", "আমার", "শহর", "জায়গা", "থেকে")}
 
 
 def is_not_a_city(raw: Any) -> bool:
@@ -372,9 +385,39 @@ def apply_base_area(draft: TripDraftState, said: Any, out: UpdateResult, find_pl
     draft.base_area, draft.area_skipped = ref, False
 
 
+# Why a value was refused (spoken). The same words as before for hi / en; bn (beta) for Bengali.
+PROBLEMS = {
+    "place_not_found": {"hi": "{name} nahi mila, India mein kaunsi jagah?", "en": "I couldn't find {name} in India. Which place?",
+                        "bn": "ভারতে {name} খুঁজে পেলাম না। কোন জায়গা?"},
+    "date_unclear": {"hi": "Tareekh samajh nahi aayi.", "en": "I didn't get the date.", "bn": "তারিখটা বুঝতে পারলাম না।"},
+    "days_range": {"hi": "Trip 1 se 30 din ki ho sakti hai.", "en": "A trip can be 1 to 30 days.",
+                   "bn": "ট্রিপ 1 থেকে 30 দিনের হতে পারে।"},
+    "past_date": {"hi": "Yeh tareekh beet chuki hai, aage ki tareekh boliye.",
+                  "en": "That date has passed. Please say a future date.",
+                  "bn": "এই তারিখটা পেরিয়ে গেছে। সামনের কোনো তারিখ বলুন।"},
+    "too_far_ahead": {"hi": "Ek saal se aage ki trip abhi nahi ban sakti.", "en": "Trips can start at most a year ahead.",
+                      "bn": "এক বছরের বেশি পরের ট্রিপ এখন বানানো যাবে না।"},
+    "end_before_start": {"hi": "Wapsi ki tareekh jaane se pehle hai.", "en": "The end date is before the start date.",
+                         "bn": "ফেরার তারিখটা যাওয়ার তারিখের আগে পড়ছে।"},
+    "too_long": {"hi": "Trip zyada se zyada 30 din ki ho sakti hai.", "en": "A trip can be at most 30 days.",
+                 "bn": "ট্রিপ সর্বোচ্চ 30 দিনের হতে পারে।"},
+    "start_first": {"hi": "Pehle jaane ki tareekh boliye.", "en": "Please tell me the start date first.",
+                    "bn": "আগে যাওয়ার তারিখটা বলুন।"},
+    "adults_min": {"hi": "Kam se kam ek bada hona chahiye.", "en": "At least one adult must travel.",
+                   "bn": "অন্তত একজন প্রাপ্তবয়স্ক থাকতে হবে।"},
+    "children_unclear": {"hi": "Bachchon ki ginti samajh nahi aayi.", "en": "I didn't get the number of children.",
+                         "bn": "বাচ্চাদের সংখ্যাটা বুঝতে পারলাম না।"},
+    "too_many": {"hi": "Ek trip mein zyada se zyada {n} log ho sakte hain.", "en": "A trip can have at most {n} travelers.",
+                 "bn": "একটা ট্রিপে সর্বোচ্চ {n} জন যেতে পারেন।"},
+    "budget_unclear": {"hi": "Budget samajh nahi aaya.", "en": "I didn't get the budget.", "bn": "বাজেটটা বুঝতে পারলাম না।"},
+    "budget_min": {"hi": "Budget kam se kam {n} rupaye hona chahiye.", "en": "The budget must be at least ₹{n:,}.",
+                   "bn": "বাজেট অন্তত ₹{n:,} হতে হবে।"},
+}
+
+
 def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: date, find_place_fn=None) -> UpdateResult:
     """Check and normalise each given field; refused values are not stored and come back as spoken reasons."""
-    hi = lang != "en"
+    k = tkey(lang)
     out = UpdateResult(draft)
     if find_place_fn is None:
         from voice.tools.lookups import find_place as find_place_fn
@@ -385,7 +428,7 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             return None, None
         hit = find_place_fn(name)
         if not hit:
-            return None, (f"{name} nahi mila, India mein kaunsi jagah?" if hi else f"I couldn't find {name} in India. Which place?")
+            return None, PROBLEMS["place_not_found"][k].format(name=name)
         from voice.tools.lookups import city_state
         city, state = city_state(hit)
         ref = {"id": hit.get("place_id") or hit.get("id"), "name": hit.get("name") or name, "city": city or hit.get("name"),
@@ -456,7 +499,7 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             else:
                 args["end_date"] = e_res.isoformat()
         if bad:
-            out.problems.append("Tareekh samajh nahi aayi." if hi else "I didn't get the date.")
+            out.problems.append(PROBLEMS["date_unclear"][k])
             args.pop("start_date", None)
             args.pop("end_date", None)
     elif args.get("start_date") or args.get("end_date"):
@@ -467,10 +510,10 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
     end = parse_date(args.get("end_date")) if args.get("end_date") else None
     days = parse_int(args.get("days"))
     if args.get("days") is not None and (days is None or not 1 <= days <= MAX_DAYS):
-        out.problems.append("Trip 1 se 30 din ki ho sakti hai." if hi else "A trip can be 1 to 30 days.")
+        out.problems.append(PROBLEMS["days_range"][k])
         days = None
     if args.get("start_date") and start is None:
-        out.problems.append("Tareekh samajh nahi aayi." if hi else "I didn't get the date.")
+        out.problems.append(PROBLEMS["date_unclear"][k])
     if days and start is None:
         draft.days = days            # remember the length; the end date comes with the start date
         draft.end_date = None
@@ -486,13 +529,13 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
             end = start + (old_e - old_s)   # moving the start keeps the trip length
     if start is not None and (args.get("start_date") or args.get("end_date") or (days and not draft.end_date) or args.get("days")):
         if start < today:
-            out.problems.append("Yeh tareekh beet chuki hai, aage ki tareekh boliye." if hi else "That date has passed. Please say a future date.")
+            out.problems.append(PROBLEMS["past_date"][k])
         elif (start - today).days > MAX_DAYS_AHEAD:
-            out.problems.append("Ek saal se aage ki trip abhi nahi ban sakti." if hi else "Trips can start at most a year ahead.")
+            out.problems.append(PROBLEMS["too_far_ahead"][k])
         elif end is not None and end < start:
-            out.problems.append("Wapsi ki tareekh jaane se pehle hai." if hi else "The end date is before the start date.")
+            out.problems.append(PROBLEMS["end_before_start"][k])
         elif end is not None and (end - start).days + 1 > MAX_DAYS:
-            out.problems.append("Trip zyada se zyada 30 din ki ho sakti hai." if hi else "A trip can be at most 30 days.")
+            out.problems.append(PROBLEMS["too_long"][k])
         else:
             if start.isoformat() != draft.start_date or (end and end.isoformat() != draft.end_date):
                 draft.dates_confirmed = False   # any date change needs a new read-back
@@ -502,29 +545,27 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
                 draft.days = None
             out.changed.append("dates")
     elif end is not None and start is None:
-        out.problems.append("Pehle jaane ki tareekh boliye." if hi else "Please tell me the start date first.")
+        out.problems.append(PROBLEMS["start_first"][k])
 
     for f, low in (("adults", 1), ("children", 0)):
         if f in args and args[f] is not None:
             n = parse_int(args[f])
             if n is None or n < low:
-                out.problems.append(("Kam se kam ek bada hona chahiye." if hi else "At least one adult must travel.") if f == "adults"
-                                    else ("Bachchon ki ginti samajh nahi aayi." if hi else "I didn't get the number of children."))
+                out.problems.append(PROBLEMS["adults_min"][k] if f == "adults" else PROBLEMS["children_unclear"][k])
                 continue
             setattr(draft, f, n)
             out.changed.append(f)
     if (draft.adults or 0) + (draft.children or 0) > MAX_TRAVELERS:
-        out.problems.append(f"Ek trip mein zyada se zyada {MAX_TRAVELERS} log ho sakte hain." if hi else f"A trip can have at most {MAX_TRAVELERS} travelers.")
+        out.problems.append(PROBLEMS["too_many"][k].format(n=MAX_TRAVELERS))
         draft.children = None if "children" in out.changed else draft.children
         draft.adults = None if "adults" in out.changed else draft.adults
 
     if args.get("budget_inr") is not None:
         b = parse_budget(args["budget_inr"])
         if b is None:
-            out.problems.append("Budget samajh nahi aaya." if hi else "I didn't get the budget.")
+            out.problems.append(PROBLEMS["budget_unclear"][k])
         elif b < MIN_BUDGET_INR:
-            out.problems.append(f"Budget kam se kam {MIN_BUDGET_INR} rupaye hona chahiye." if hi
-                                else f"The budget must be at least ₹{MIN_BUDGET_INR:,}.")
+            out.problems.append(PROBLEMS["budget_min"][k].format(n=MIN_BUDGET_INR))
         else:
             draft.budget_inr = b
             out.changed.append("budget_inr")
@@ -534,39 +575,56 @@ def apply_update(draft: TripDraftState, args: Dict[str, Any], lang: str, today: 
 # ---------------- what to say
 
 QUESTIONS = {
-    "destination": {"hi": "Kahan jaana hai?", "en": "Where do you want to go?"},
-    "start_date": {"hi": "Kab se kab tak jaana hai?", "en": "From which date to which date?"},
-    "end_date": {"hi": "Kab tak ki trip hai?", "en": "Until which date?"},
-    "adults": {"hi": "Kitne bade log jaa rahe hain?", "en": "How many adults are going?"},
-    "children": {"hi": "Koi bachcha bhi saath hai?", "en": "Any children coming along?"},
-    "budget_inr": {"hi": "Kul budget kitna hai?", "en": "What's the total budget?"},
-    "origin_city": {"hi": "Kahan se jaana hai?", "en": "Where are you starting from?"},
+    "destination": {"hi": "Kahan jaana hai?", "en": "Where do you want to go?", "bn": "কোথায় যেতে চান?"},
+    "start_date": {"hi": "Kab se kab tak jaana hai?", "en": "From which date to which date?", "bn": "কোন তারিখ থেকে কোন তারিখ পর্যন্ত যাবেন?"},
+    "end_date": {"hi": "Kab tak ki trip hai?", "en": "Until which date?", "bn": "কোন তারিখ পর্যন্ত ট্রিপ?"},
+    "adults": {"hi": "Kitne bade log jaa rahe hain?", "en": "How many adults are going?", "bn": "কতজন প্রাপ্তবয়স্ক যাচ্ছেন?"},
+    "children": {"hi": "Koi bachcha bhi saath hai?", "en": "Any children coming along?", "bn": "সঙ্গে কোনো বাচ্চা আছে?"},
+    "budget_inr": {"hi": "Kul budget kitna hai?", "en": "What's the total budget?", "bn": "মোট বাজেট কত?"},
+    "origin_city": {"hi": "Kahan se jaana hai?", "en": "Where are you starting from?", "bn": "কোথা থেকে যাবেন?"},
     "purpose": {"hi": "Kis kaam se ja rahe hain? Ghoomna, kaam ya business, event ya hackathon, teerth, ya kuch aur?",
                 "en": "What's the trip for? A holiday, work or business, an event like a hackathon, a pilgrimage, "
-                      "or something else?"},
+                      "or something else?", "bn": "কী কাজে যাচ্ছেন? বেড়াতে, অফিসের কাজে বা বিজনেসে, হ্যাকাথনের মতো কোনো ইভেন্টে, তীর্থে, নাকি অন্য কিছু?"},
     "base_area": {"hi": "Kis area mein zyada rehna ya kaam hai? Jaise Electronic City.",
-                  "en": "Which area will you mostly be in? For example Electronic City."},
+                  "en": "Which area will you mostly be in? For example Electronic City.", "bn": "কোন এলাকায় বেশি থাকবেন বা কাজ করবেন? যেমন Electronic City।"},
 }
 AREA_RETRY = {"hi": "{name} {city} ke paas nahi mila, area ka naam phir se bolenge ya skip karein?",
-              "en": "I couldn't find {name} near {city}. Say the area again, or say skip?"}
+              "en": "I couldn't find {name} near {city}. Say the area again, or say skip?", "bn": "{city}-এর কাছে {name} খুঁজে পেলাম না। এলাকার নামটা আবার বলবেন, নাকি স্কিপ করবেন?"}
 AREA_GIVE_UP = {"hi": "{name} bhi nahi mila, area ke bina aage badhte hain.",
-                "en": "I couldn't find {name} either, so we'll go on without an area."}
-PURPOSE_SKIPPED = {"hi": "", "en": ""}   # "pata nahi" to the purpose / area question: straight on (the read-back follows)
+                "en": "I couldn't find {name} either, so we'll go on without an area.", "bn": "{name}-ও খুঁজে পেলাম না, এলাকা ছাড়াই এগোচ্ছি।"}
+PURPOSE_SKIPPED = {"hi": "", "en": "", "bn": ""}   # "pata nahi" to the purpose / area question: straight on (the read-back follows)
 # How the read-back says the purpose when the user's own word isn't known ("kaam ke liye"); with it, the word.
 PURPOSE_WORDS = {
-    "leisure": {"hi": "ghoomne ke liye", "en": "for a holiday"},
-    "business": {"hi": "kaam ke liye", "en": "for work"},
-    "event": {"hi": "event ke liye", "en": "for an event"},
-    "pilgrimage": {"hi": "teerth ke liye", "en": "for a pilgrimage"},
-    "other": {"hi": "aapke bataye kaam ke liye", "en": "for the reason you gave"},
+    "leisure": {"hi": "ghoomne ke liye", "en": "for a holiday", "bn": "বেড়ানোর জন্য"},
+    "business": {"hi": "kaam ke liye", "en": "for work", "bn": "কাজের জন্য"},
+    "event": {"hi": "event ke liye", "en": "for an event", "bn": "ইভেন্টের জন্য"},
+    "pilgrimage": {"hi": "teerth ke liye", "en": "for a pilgrimage", "bn": "তীর্থের জন্য"},
+    "other": {"hi": "aapke bataye kaam ke liye", "en": "for the reason you gave", "bn": "আপনার বলা কারণে"},
 }
 _SAY_TEXT_MAX = 30
+# The user's own purpose word ("hackathon ke liye") and the base area (", Electronic City ke paas") in the read-back.
+OWN_PURPOSE = {"hi": "{text} ke liye", "en": "for your {text}", "bn": "আপনার {text}-এর জন্য"}
+NEAR_AREA = {"hi": ", {area} ke paas", "en": ", near {area}", "bn": ", {area}-এর কাছে"}
+# The read-back of the dates (step 4): with a starting city, and without.
+READBACK_FROM = {"hi": "{frm} se {to}, {start} se {end}, {nights}, {who}{why}. Sahi hai?",
+                 "en": "{frm} to {to}, {start} to {end}, {nights}, {who}{why}. Is that right?",
+                 "bn": "{frm} থেকে {to}, {start} থেকে {end}, {nights}, {who}{why}। ঠিক আছে?"}
+READBACK = {"hi": "{start} se {end}, {nights}{why}. Sahi hai?",
+            "en": "{start} to {end}, {nights}{why}. Is that right?",
+            "bn": "{start} থেকে {end}, {nights}{why}। ঠিক আছে?"}
+# The Confirm card's text. who / origin stay as before (English words) in every language.
+SUMMARY = {"hi": "{dest}{origin}, {start} se {end}, {who}, budget ₹{budget:,}. Confirm review page ki details save karega. "
+                 "Trip voice se undo nahi hogi.",
+           "en": "{dest}{origin}, {start} to {end}, {who}, budget ₹{budget:,}. Confirm saves what's on the review page. "
+                 "A trip can't be undone by voice.",
+           "bn": "{dest}{origin}, {start} থেকে {end}, {who}, বাজেট ₹{budget:,}। Confirm চাপলে রিভিউ পেজের তথ্য সেভ হবে। "
+                 "ভয়েস দিয়ে ট্রিপ আর ফেরানো যাবে না।"}
 ORIGIN_RETRY = {"hi": "{name} nahi mila, phir se bolenge ya skip karein?",
-                "en": "I couldn't find {name}. Say it again, or say skip?"}
+                "en": "I couldn't find {name}. Say it again, or say skip?", "bn": "{name} খুঁজে পেলাম না। আবার বলবেন, নাকি স্কিপ করবেন?"}
 ORIGIN_GIVE_UP = {"hi": "{name} bhi nahi mila, starting city ke bina aage badhte hain.",
-                  "en": "I couldn't find {name} either, so we'll go on without a starting city."}
-ORIGIN_CHECK = {"hi": "{name} se? Sahi hai?", "en": "Starting from {name}? Is that right?"}
-ORIGIN_SAME = {"hi": "{name} se {name} hi jaana hai? Sahi hai?", "en": "Starting from {name} and going to {name}? Is that right?"}
+                  "en": "I couldn't find {name} either, so we'll go on without a starting city.", "bn": "{name}-ও খুঁজে পেলাম না, কোথা থেকে যাচ্ছেন সেটা ছাড়াই এগোচ্ছি।"}
+ORIGIN_CHECK = {"hi": "{name} se? Sahi hai?", "en": "Starting from {name}? Is that right?", "bn": "{name} থেকে যাচ্ছেন? ঠিক আছে?"}
+ORIGIN_SAME = {"hi": "{name} se {name} hi jaana hai? Sahi hai?", "en": "Starting from {name} and going to {name}? Is that right?", "bn": "{name} থেকে {name}-এই যাচ্ছেন? ঠিক আছে?"}
 
 
 def ask_fields(missing: List[str], ask_origin: bool = False, ask_purpose: bool = False, ask_area: bool = False) -> List[str]:
@@ -582,12 +640,12 @@ def ask_fields(missing: List[str], ask_origin: bool = False, ask_purpose: bool =
 def question_for(missing: List[str], lang: str, days_known: bool = False, ask_origin: bool = False,
                  ask_purpose: bool = False, ask_area: bool = False) -> str:
     """At most 2 things per question; the date pair counts as one."""
-    lang = "en" if lang == "en" else "hi"
+    lang = tkey(lang)
     fields = ask_fields(missing, ask_origin, ask_purpose, ask_area)
     parts = []
     for f in fields:
         if f == "start_date" and days_known:
-            parts.append({"hi": "Kab se jaana hai?", "en": "From which date?"}[lang])
+            parts.append({"hi": "Kab se jaana hai?", "en": "From which date?", "bn": "কোন তারিখ থেকে?"}[lang])
         else:
             parts.append(QUESTIONS[f][lang])
     return " ".join(parts)
@@ -598,6 +656,8 @@ def people_words(adults: int, children: int, lang: str) -> str:
     if lang == "en":
         out = f"{adults} adult{'s' if adults != 1 else ''}"
         return out + (f", {children} child{'ren' if children != 1 else ''}" if children else "")
+    if lang == "bn":
+        return f"{adults} জন প্রাপ্তবয়স্ক" + (f", {children} জন বাচ্চা" if children else "")
     word = lambda n: HINDI_NUMBERS[n] if 0 <= n < len(HINDI_NUMBERS) else str(n)  # noqa: E731
     out = "ek bada" if adults == 1 else f"{word(adults)} bade log"
     if children:
@@ -607,16 +667,16 @@ def people_words(adults: int, children: int, lang: str) -> str:
 
 def purpose_words(draft: TripDraftState, lang: str) -> str:
     """", kaam ke liye, Electronic City ke paas" / ", for work, near Electronic City"; "" when no purpose was given."""
-    lang = "en" if lang == "en" else "hi"
+    lang = tkey(lang)
     if not draft.purpose_type:
         return ""
     said = PURPOSE_WORDS.get(draft.purpose_type, {}).get(lang, "")
     # The user's own word ("हैकथन" -> "hackathon ke liye"); the type word only when there is none (or it is long).
     if draft.purpose_type in ("business", "event", "other") and draft.purpose_text             and len(draft.purpose_text) <= _SAY_TEXT_MAX:
-        said = f"{draft.purpose_text} ke liye" if lang == "hi" else f"for your {draft.purpose_text}"
+        said = OWN_PURPOSE[lang].format(text=draft.purpose_text)
     area = (draft.base_area or {}).get("name")
     if area:
-        said += f", {area} ke paas" if lang == "hi" else f", near {area}"
+        said += NEAR_AREA[lang].format(area=area)
     return f", {said}" if said else ""
 
 
@@ -626,15 +686,13 @@ def readback(draft: TripDraftState, lang: str) -> str:
     s, e = parse_date(draft.start_date), parse_date(draft.end_date)
     nights = max((e - s).days, 0)
     why = purpose_words(draft, lang)
+    k = tkey(lang)
+    parts = {"start": say_date(s, k), "end": say_date(e, k), "nights": nights_words(nights, k), "why": why}
     if draft.origin_city:
         frm, to = (draft.origin_city or {}).get("name", ""), (draft.destination or {}).get("name", "")
-        who = people_words(draft.adults or 0, draft.children or 0, "en" if lang == "en" else "hi")
-        if lang == "en":
-            return f"{frm} to {to}, {say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}, {who}{why}. Is that right?"
-        return f"{frm} se {to}, {say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}, {who}{why}. Sahi hai?"
-    if lang == "en":
-        return f"{say_date(s)} to {say_date(e)}, {nights_words(nights, 'en')}{why}. Is that right?"
-    return f"{say_date(s)} se {say_date(e)}, {nights_words(nights, 'hi')}{why}. Sahi hai?"
+        who = people_words(draft.adults or 0, draft.children or 0, k)
+        return READBACK_FROM[k].format(frm=frm, to=to, who=who, **parts)
+    return READBACK[k].format(**parts)
 
 
 def summary(draft: TripDraftState, lang: str) -> str:
@@ -648,11 +706,9 @@ def summary(draft: TripDraftState, lang: str) -> str:
         card = pilgrimage.get_card(draft.plan_card_id)
         dest = f"{dest} ({card.short_name}, checked plan)" if card else dest
     origin += purpose_words(draft, lang)
-    if lang == "en":
-        return (f"{dest}{origin}, {say_date(s)} to {say_date(e)}, {who}, budget ₹{draft.budget_inr:,}. "
-                "Confirm saves what's on the review page. A trip can't be undone by voice.")
-    return (f"{dest}{origin}, {say_date(s)} se {say_date(e)}, {who}, budget ₹{draft.budget_inr:,}. "
-            "Confirm review page ki details save karega. Trip voice se undo nahi hogi.")
+    k = tkey(lang)
+    return SUMMARY[k].format(dest=dest, origin=origin, start=say_date(s, k), end=say_date(e, k), who=who,
+                             budget=draft.budget_inr)
 
 
 def prefill(draft: TripDraftState) -> Dict[str, Any]:

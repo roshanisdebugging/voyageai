@@ -44,6 +44,16 @@ FILLER = (
 )
 
 
+# Bengali (beta, feat/bengali): kept apart so the lists above stay as they were; joined into the sets below.
+POSITIVE_BN = ("হ্যাঁ", "হ্যা", "হাঁ", "হুঁ", "ঠিক", "সঠিক", "অবশ্যই", "নিশ্চয়ই", "ওকে", "ইয়েস", "কনফার্ম", "বানাও", "বানান",
+               "করুন", "করো", "চলো", "শুরু", "একদম")
+POSITIVE_PHRASES_BN = ("ঠিক আছে", "করে দিন", "করে দাও", "বানিয়ে দিন", "বানিয়ে দাও", "শুরু করুন", "এগিয়ে যান")
+NEGATIVE_BN = ("না", "নাহ", "নয়", "বাতিল", "থাক", "থাকুক", "দাঁড়ান", "দাঁড়াও", "বদলান", "বদলাও", "পাল্টান", "ভুল",
+               "ক্যানসেল", "নো", "থামুন", "থামো")
+FILLER_BN = ("আছে", "প্লিজ", "ট্রিপ", "এখন", "তো", "দিন", "দাও", "সব", "আপনি", "এটা", "এটাকে", "প্ল্যান", "ভাই", "দাদা",
+             "দিদি", "খুব", "ভালো", "দারুণ", "ধন্যবাদ", "হ্যাঁ")
+
+
 def _canon_set(items: Iterable[str]) -> Set[str]:
     return {canon(w) for w in items}
 
@@ -52,10 +62,10 @@ def _phrases(items: Iterable[str]) -> List[Tuple[str, ...]]:
     return [tuple(tu_words(p)) for p in items]
 
 
-_POSITIVE = _canon_set(POSITIVE)
-_NEGATIVE = _canon_set(NEGATIVE)
-_FILLER = _canon_set(FILLER)
-_POSITIVE_PHRASES = _phrases(POSITIVE_PHRASES)
+_POSITIVE = _canon_set(POSITIVE) | _canon_set(POSITIVE_BN)
+_NEGATIVE = _canon_set(NEGATIVE) | _canon_set(NEGATIVE_BN)
+_FILLER = _canon_set(FILLER) | _canon_set(FILLER_BN)
+_POSITIVE_PHRASES = _phrases(POSITIVE_PHRASES) + _phrases(POSITIVE_PHRASES_BN)
 
 
 def is_positive_confirmation(text: str) -> bool:

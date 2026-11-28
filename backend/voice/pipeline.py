@@ -27,6 +27,8 @@ from voice import languages as L
 EMPTY_TRANSCRIPT_REPLY = "Mujhe kuch sunai nahi diya, phir se boliye."
 # Only when the user chose English (voice/languages.py); "auto" keeps the Hinglish line above.
 EMPTY_TRANSCRIPT_REPLY_EN = "I didn't hear anything. Please say it again."
+EMPTY_TRANSCRIPT_REPLY_BN = "কিছু শুনতে পেলাম না, আবার বলুন।"
+EMPTY_BY_LANG = {"en": EMPTY_TRANSCRIPT_REPLY_EN, "bn": EMPTY_TRANSCRIPT_REPLY_BN}
 
 logger = logging.getLogger("voice")
 
@@ -128,7 +130,7 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
     forced = L.template_lang(choice, ctx.conversation_id or ctx.session_id)    # None = auto
     if not text:
         result.reply_text, result.ui_actions, result.action, result.llm_ms = (
-            EMPTY_TRANSCRIPT_REPLY_EN if forced == "en" else EMPTY_TRANSCRIPT_REPLY), [], "unclear", 0
+            EMPTY_BY_LANG.get(forced, EMPTY_TRANSCRIPT_REPLY)), [], "unclear", 0
         return
     try:
         extra = {"language": choice} if forced else {}     # auto: run_agent is called exactly as before
@@ -137,10 +139,10 @@ def decide_reply(ctx: TurnContext, result: TurnResult) -> None:
                           screen=ctx.screen, trip=ctx.trip, location=ctx.location, screen_place=ctx.screen_place,
                           **extra)
     except Exception as exc:  # run_agent doesn't raise, but a turn must never crash here
-        from voice.agent import FALLBACK_REPLY, FALLBACK_REPLY_EN, crash_error_info
+        from voice.agent import FALLBACK_BY_LANG, FALLBACK_REPLY, crash_error_info
         logger.exception("[VOICE] turn=%s agent crashed", ctx.turn_id)   # server log only: full traceback
         result.reply_text, result.ui_actions, result.action, result.llm_ms = (
-            FALLBACK_REPLY_EN if forced == "en" else FALLBACK_REPLY), [], "error", 0
+            FALLBACK_BY_LANG.get(forced, FALLBACK_REPLY)), [], "error", 0
         result.agent_error_info = crash_error_info(exc)
         result.agent_error_code, result.agent_error_detail = "agent_crashed", result.agent_error_info["detail"]
         return

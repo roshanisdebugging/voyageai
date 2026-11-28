@@ -22,6 +22,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from voice import context as C
+from voice.languages import AND_WORD, OR_WORD, tkey  # noqa: F401
 
 LAST_PLACE_TTL_SECONDS = 30 * 60
 PLACE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,300}$")
@@ -35,28 +36,34 @@ EXPENSE_CATEGORY = {"food": "Food", "transport": "Transport", "stay": "Hotel", "
 CATEGORY_WORD = {
     "hi": {"food": "khane", "transport": "transport", "stay": "stay", "shopping": "shopping", "tickets": "tickets", "other": "other"},
     "en": {"food": "food", "transport": "transport", "stay": "stay", "shopping": "shopping", "tickets": "tickets", "other": "other"},
+    "bn": {'food': "খাবার",
+           'transport': "যাতায়াত",
+           'stay': "থাকা",
+           'shopping': "কেনাকাটা",
+           'tickets': "টিকিট",
+           'other': "অন্যান্য"},
 }
 MAX_EXPENSE = 1_000_000
 REGEN_RATE = ("ai_trip", 10)   # same bucket and limit as WS_RATE_LIMITS["trips:regenerate_itinerary"] in main.py
 
 T = {
-    "no_trip": {"hi": "Kaun si trip mein?", "en": "Which trip?"},
+    "no_trip": {"hi": "Kaun si trip mein?", "en": "Which trip?", "bn": "কোন ট্রিপে?"},
     "trip_changed": {"hi": "Ab doosri trip khuli hai, isliye kuch nahi badla. Phir se boliye.",
-                     "en": "A different trip is open now, so nothing changed. Please say it again."},
-    "no_itinerary": {"hi": "Is trip ka itinerary abhi tayyar nahi hai.", "en": "This trip's itinerary isn't ready yet."},
-    "which_activity": {"hi": "Kaunsi activity? Yeh naam itinerary mein nahi mila.", "en": "Which activity? I couldn't find that name in the itinerary."},
-    "no_activity_named": {"hi": "Kaunsi activity?", "en": "Which activity?"},
+                     "en": "A different trip is open now, so nothing changed. Please say it again.", "bn": "এখন অন্য একটা ট্রিপ খোলা আছে, তাই কিছু বদলানো হয়নি। আবার বলুন।"},
+    "no_itinerary": {"hi": "Is trip ka itinerary abhi tayyar nahi hai.", "en": "This trip's itinerary isn't ready yet.", "bn": "এই ট্রিপের ইটিনেরারি এখনো তৈরি হয়নি।"},
+    "which_activity": {"hi": "Kaunsi activity? Yeh naam itinerary mein nahi mila.", "en": "Which activity? I couldn't find that name in the itinerary.", "bn": "কোন অ্যাক্টিভিটি? এই নামটা ইটিনেরারিতে পেলাম না।"},
+    "no_activity_named": {"hi": "Kaunsi activity?", "en": "Which activity?", "bn": "কোন অ্যাক্টিভিটি?"},
     "no_place": {"hi": "Kaunsi jagah? Pehle jagah dhoondhiye ya kholiye, phir save boliye.",
-                 "en": "Which place? Search for it or open it first, then say save."},
-    "not_saved": {"hi": "Yeh jagah saved nahi hai.", "en": "That place isn't saved."},
-    "bad_amount": {"hi": "Kitne rupaye ka kharcha tha?", "en": "How much was it, in rupees?"},
+                 "en": "Which place? Search for it or open it first, then say save.", "bn": "কোন জায়গা? আগে জায়গাটা খুঁজুন বা খুলুন, তারপর সেভ বলুন।"},
+    "not_saved": {"hi": "Yeh jagah saved nahi hai.", "en": "That place isn't saved.", "bn": "এই জায়গাটা সেভ করা নেই।"},
+    "bad_amount": {"hi": "Kitne rupaye ka kharcha tha?", "en": "How much was it, in rupees?", "bn": "কত টাকা খরচ হয়েছিল?"},
     "regen_ask": {"hi": "Poora itinerary dobara banaun? Isme thoda time lagega.",
-                  "en": "Rebuild the whole itinerary? It will take a little time."},
-    "regen_busy": {"hi": "Itinerary pehle se ban raha hai, thodi der rukiye.", "en": "The itinerary is already being rebuilt, please wait."},
-    "regen_done": {"hi": "Itinerary dobara ban raha hai. Ready hone par bata dunga.", "en": "Rebuilding the itinerary. I'll tell you when it's ready."},
-    "rate_limited": {"hi": "Abhi bahut requests ho gayi, thodi der baad boliye.", "en": "Too many requests right now, please try again in a bit."},
-    "failed": {"hi": "Abhi yeh nahi ho paaya, phir se koshish kariye.", "en": "That didn't work, please try again."},
-    "gone": {"hi": "Yeh trip ab nahi mili, kuch nahi badla.", "en": "That trip isn't available any more; nothing changed."},
+                  "en": "Rebuild the whole itinerary? It will take a little time.", "bn": "পুরো ইটিনেরারি আবার বানাব? একটু সময় লাগবে।"},
+    "regen_busy": {"hi": "Itinerary pehle se ban raha hai, thodi der rukiye.", "en": "The itinerary is already being rebuilt, please wait.", "bn": "ইটিনেরারি আগে থেকেই তৈরি হচ্ছে, একটু অপেক্ষা করুন।"},
+    "regen_done": {"hi": "Itinerary dobara ban raha hai. Ready hone par bata dunga.", "en": "Rebuilding the itinerary. I'll tell you when it's ready.", "bn": "ইটিনেরারি আবার বানাচ্ছি। তৈরি হলে জানিয়ে দেব।"},
+    "rate_limited": {"hi": "Abhi bahut requests ho gayi, thodi der baad boliye.", "en": "Too many requests right now, please try again in a bit.", "bn": "এখন অনেক বেশি অনুরোধ এসেছে, একটু পরে আবার বলুন।"},
+    "failed": {"hi": "Abhi yeh nahi ho paaya, phir se koshish kariye.", "en": "That didn't work, please try again.", "bn": "এটা হলো না, আবার চেষ্টা করুন।"},
+    "gone": {"hi": "Yeh trip ab nahi mili, kuch nahi badla.", "en": "That trip isn't available any more; nothing changed.", "bn": "এই ট্রিপটা আর পাওয়া যাচ্ছে না, কিছু বদলানো হয়নি।"},
 }
 
 
@@ -77,12 +84,17 @@ def _db():
     return database.SessionLocal()
 
 
+# "Which one: Amber Fort (day 1) or City Palace (day 2)?"
+DAY_TAG = {"hi": "{title} (din {n})", "en": "{title} (day {n})", "bn": "{title} ({n} নম্বর দিন)"}
+ASK_WHICH = {"hi": "Kaunsa: {names}?", "en": "Which one: {names}?", "bn": "কোনটা: {names}?"}
+
+
 def _ask_which(cands: List[C.Act], lang: str):
     if not cands:
         return _res(T["which_activity"][lang], action="ask_activity", error_code="unknown_activity")
-    names = [f"{a.title} (day {a.day_number})" if lang == "en" else f"{a.title} (din {a.day_number})" for a in cands[:3]]
-    q = (" ya ".join(names) + "?") if lang == "hi" else ("Which one: " + " or ".join(names) + "?")
-    return _res(("Kaunsa: " + q) if lang == "hi" else q, action="ask_activity", error_code="ambiguous_activity")
+    k = tkey(lang)
+    names = OR_WORD[k].join(DAY_TAG[k].format(title=a.title, n=a.day_number) for a in cands[:3])
+    return _res(ASK_WHICH[k].format(names=names), action="ask_activity", error_code="ambiguous_activity")
 
 
 # ---------------- which trip
@@ -151,11 +163,11 @@ def mark_activity_done(user_id: str, open_ctx: Optional[C.TripContext], args: Di
         return _res(T["gone"][lang], action="mark_done", error_code="not_owned")
     except Exception as err:
         return _res(T["failed"][lang], action="mark_done", error_code=type(err).__name__)
-    where = {"hi": f"{trip_label(ctx)} trip mein ", "en": f"In your {trip_label(ctx)} trip, "}[lang] if other else ""
+    where = {"hi": f"{trip_label(ctx)} trip mein ", "en": f"In your {trip_label(ctx)} trip, ", "bn": f"আপনার {trip_label(ctx)} ট্রিপে, "}[lang] if other else ""
     if done:
-        text = {"hi": f"{where}{act.title} done mark kar diya.", "en": f"{where}marked {act.title} as done."}[lang]
+        text = {"hi": f"{where}{act.title} done mark kar diya.", "en": f"{where}marked {act.title} as done.", "bn": f"{where}{act.title} হয়ে গেছে বলে চিহ্নিত করলাম।"}[lang]
     else:
-        text = {"hi": f"{where}{act.title} se done hata diya.", "en": f"{where}{act.title} is no longer marked done."}[lang]
+        text = {"hi": f"{where}{act.title} se done hata diya.", "en": f"{where}{act.title} is no longer marked done.", "bn": f"{where}{act.title} থেকে 'হয়ে গেছে' চিহ্ন সরিয়ে দিলাম।"}[lang]
     text = text[0].upper() + text[1:]
     toast = undo_toast(text, "trips:set_activity_done", {"trip_id": ctx.trip_id, "activity_id": act.id, "done": not done})
     return _res(text, action="mark_done", ui_actions=[{"type": "refresh", "what": "itinerary"}, toast])
@@ -218,12 +230,12 @@ def save_place(redis_conn, user_id: str, conversation_id: str, screen_place, arg
     try:
         with _db() as db:
             if trip_actions.find_saved_place(db, user_id, place["place_id"]) is not None:
-                return _res({"hi": f"{name} pehle se saved hai.", "en": f"{name} is already saved."}[lang], action="save_place")
+                return _res({"hi": f"{name} pehle se saved hai.", "en": f"{name} is already saved.", "bn": f"{name} আগে থেকেই সেভ করা আছে।"}[lang], action="save_place")
             trip_actions.save_place(db, user_id, place_id=place["place_id"], title=name,
                                     location_name=place.get("address") or "")
     except Exception as err:
         return _res(T["failed"][lang], action="save_place", error_code=type(err).__name__)
-    text = {"hi": f"{name} save kar diya.", "en": f"Saved {name}."}[lang]
+    text = {"hi": f"{name} save kar diya.", "en": f"Saved {name}.", "bn": f"{name} সেভ করে দিলাম।"}[lang]
     toast = undo_toast(text, "places:unsave", {"place_id": place["place_id"]})
     return _res(text, action="save_place", ui_actions=[{"type": "refresh", "what": "saved_places"}, toast])
 
@@ -243,8 +255,8 @@ def unsave_place(redis_conn, user_id: str, conversation_id: str, screen_place, a
                 mine = db.query(SavedPlaceModel).filter(SavedPlaceModel.user_id == user_id).all()
                 hits = [r for r in mine if _same_name(spoken, r.title or "")]
                 if len(hits) > 1:
-                    names = " ya ".join(h.title for h in hits[:3]) if lang == "hi" else " or ".join(h.title for h in hits[:3])
-                    return _res({"hi": f"Kaunsi: {names}?", "en": f"Which one: {names}?"}[lang], action="ask_place",
+                    names = OR_WORD[tkey(lang)].join(h.title for h in hits[:3])
+                    return _res({"hi": f"Kaunsi: {names}?", "en": f"Which one: {names}?", "bn": f"কোনটা: {names}?"}[lang], action="ask_place",
                                 error_code="ambiguous_place")
                 row = hits[0] if hits else None
             if row is None:
@@ -254,7 +266,7 @@ def unsave_place(redis_conn, user_id: str, conversation_id: str, screen_place, a
             res = trip_actions.unsave_place(db, user_id, row.place_id)
     except Exception as err:
         return _res(T["failed"][lang], action="unsave_place", error_code=type(err).__name__)
-    text = {"hi": f"{name} saved se hata diya.", "en": f"Removed {name} from saved places."}[lang]
+    text = {"hi": f"{name} saved se hata diya.", "en": f"Removed {name} from saved places.", "bn": f"{name} সেভ করা জায়গা থেকে সরিয়ে দিলাম।"}[lang]
     removed = res.get("removed") or {"place_id": res["place_id"], "title": name}
     payload = {k: v for k, v in removed.items() if v is not None}
     toast = undo_toast(text, "places:save", payload)
@@ -286,10 +298,10 @@ def add_expense(redis_conn, user_id: str, conversation_id: str, open_ctx: Option
     word = CATEGORY_WORD[lang][cat]
     if other:   # not the open trip: the confirm line names it
         summary = {"hi": f"{trip_label(ctx)} trip mein ₹{amount:,}, {title}, {word} add karun?",
-                   "en": f"Add ₹{amount:,} for {title} under {word} to your {trip_label(ctx)} trip?"}[lang]
+                   "en": f"Add ₹{amount:,} for {title} under {word} to your {trip_label(ctx)} trip?", "bn": f"আপনার {trip_label(ctx)} ট্রিপে {word} খাতে {title}-এর জন্য ₹{amount:,} যোগ করব?"}[lang]
     else:
         summary = {"hi": f"₹{amount:,}, {title}, {word} mein add karun?",
-                   "en": f"Add ₹{amount:,} for {title} under {word}?"}[lang]
+                   "en": f"Add ₹{amount:,} for {title} under {word}?", "bn": f"{word} খাতে {title}-এর জন্য ₹{amount:,} যোগ করব?"}[lang]
     pc = P.save(redis_conn, user_id, conversation_id, "add_expense", summary,
                 {"trip_id": ctx.trip_id, "named": other, "title": title, "amount": amount, "category": cat})
     return _res(summary, action="expense_pending",
@@ -324,7 +336,7 @@ def run_add_expense(user_id: str, data: Dict[str, Any], lang: str, open_trip_id:
     except Exception as err:
         return _res(T["failed"][lang], action="expense_failed", error_code=type(err).__name__)
     word = CATEGORY_WORD[lang][cat]
-    text = {"hi": f"₹{amount:,} {word} mein add kar diya.", "en": f"Added ₹{amount:,} under {word}."}[lang]
+    text = {"hi": f"₹{amount:,} {word} mein add kar diya.", "en": f"Added ₹{amount:,} under {word}.", "bn": f"{word} খাতে ₹{amount:,} যোগ করে দিলাম।"}[lang]
     return _res(text, action="expense_added", ui_actions=[{"type": "refresh", "what": "expenses"}])
 
 
@@ -338,7 +350,7 @@ def swap_activity(user_id: str, open_ctx: Optional[C.TripContext], args: Dict[st
     if ask:
         return ask
     text = {"hi": f"{act.title} ki jagah options dikha raha hoon. Pasand ka chuniye.",
-            "en": f"Here are options instead of {act.title}. Pick one."}[lang]
+            "en": f"Here are options instead of {act.title}. Pick one.", "bn": f"{act.title}-এর বদলে কয়েকটা বিকল্প দেখাচ্ছি। পছন্দেরটা বেছে নিন।"}[lang]
     return _res(text, action="swap_open", ui_actions=[{"type": "open_swap", "trip_id": ctx.trip_id, "activity_id": act.id,
                                                        "activity_name": act.title, "day_number": act.day_number}])
 
@@ -355,7 +367,7 @@ def regenerate_itinerary(redis_conn, user_id: str, conversation_id: str, open_ct
         return _res(T["regen_busy"][lang], action="regen_busy")
     if other:
         summary = {"hi": f"{trip_label(ctx)} trip ka poora itinerary dobara banaun? Isme thoda time lagega.",
-                   "en": f"Rebuild your {trip_label(ctx)} trip's whole itinerary? It will take a little time."}[lang]
+                   "en": f"Rebuild your {trip_label(ctx)} trip's whole itinerary? It will take a little time.", "bn": f"আপনার {trip_label(ctx)} ট্রিপের পুরো ইটিনেরারি আবার বানাব? একটু সময় লাগবে।"}[lang]
     else:
         summary = T["regen_ask"][lang]
     pc = P.save(redis_conn, user_id, conversation_id, "regenerate_itinerary", summary,

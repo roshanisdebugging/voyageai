@@ -31,6 +31,7 @@ from trip_lifecycle import MAX_BUDGET_INR, MIN_BUDGET_INR   # the one budget ran
 from trip_area import PlaceOutsideTripArea
 from voice import pages
 from voice import pending as P
+from voice.languages import tkey
 
 logger = logging.getLogger("voice")
 
@@ -44,55 +45,55 @@ AI_LIMIT_PER_MINUTE = 10
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 TEXT: Dict[str, Dict[str, str]] = {
-    "no_trip": {"hi": "Pehle koi trip kholiye.", "en": "Open a trip first."},
-    "no_itinerary": {"hi": "Itinerary abhi ban rahi hai.", "en": "Your itinerary isn't ready yet."},
-    "not_found": {"hi": "Yeh trip nahi mili.", "en": "I couldn't find that trip."},
+    "no_trip": {"hi": "Pehle koi trip kholiye.", "en": "Open a trip first.", "bn": "আগে একটা ট্রিপ খুলুন।"},
+    "no_itinerary": {"hi": "Itinerary abhi ban rahi hai.", "en": "Your itinerary isn't ready yet.", "bn": "আপনার ইটিনেরারি এখনো তৈরি হয়নি।"},
+    "not_found": {"hi": "Yeh trip nahi mili.", "en": "I couldn't find that trip.", "bn": "ট্রিপটা খুঁজে পেলাম না।"},
     "need_day": {"hi": "Kaunsa din? Din ka number, ya aaj ya kal boliye.",
-                 "en": "Which day? Say the day number, or today or tomorrow."},
+                 "en": "Which day? Say the day number, or today or tomorrow.", "bn": "কোন দিন? দিনের নম্বর বলুন, অথবা আজ বা কাল।"},
     "outside_trip": {"hi": "Trip {start} se {end} tak hai, kaunsa din?",
-                     "en": "The trip runs from {start} to {end}. Which day?"},
-    "past_day": {"hi": "Yeh din nikal chuka hai.", "en": "That day has already passed."},
-    "too_far": {"hi": "Itne aage ka mausam abhi pata nahi hai.", "en": "There's no forecast that far ahead yet."},
-    "forecast_unavailable": {"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now."},
+                     "en": "The trip runs from {start} to {end}. Which day?", "bn": "ট্রিপ {start} থেকে {end} পর্যন্ত। কোন দিন?"},
+    "past_day": {"hi": "Yeh din nikal chuka hai.", "en": "That day has already passed.", "bn": "ওই দিনটা পেরিয়ে গেছে।"},
+    "too_far": {"hi": "Itne aage ka mausam abhi pata nahi hai.", "en": "There's no forecast that far ahead yet.", "bn": "এত দিন পরের আবহাওয়ার পূর্বাভাস এখনো নেই।"},
+    "forecast_unavailable": {"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now.", "bn": "এখন আবহাওয়ার খবর পাওয়া যাচ্ছে না।"},
     "no_bad_weather_day": {"hi": "{when} mausam theek hai, plan badalne ki zaroorat nahi.",
-                           "en": "{when}, the weather looks fine, so there's no need to change the plan."},
+                           "en": "{when}, the weather looks fine, so there's no need to change the plan.", "bn": "{when} আবহাওয়া ভালোই আছে, প্ল্যান বদলানোর দরকার নেই।"},
     "no_bad_weather_trip": {"hi": "Trip ke dauran mausam theek hai, plan badalne ki zaroorat nahi.",
-                            "en": "The weather looks fine for your trip, so there's no need to change the plan."},
+                            "en": "The weather looks fine for your trip, so there's no need to change the plan.", "bn": "ট্রিপের সময় আবহাওয়া ভালোই আছে, প্ল্যান বদলানোর দরকার নেই।"},
     "no_indoor_needed": {"hi": "Mausam kharab hai, par koi jagah badalni nahi padegi.",
-                         "en": "The weather is bad, but none of your plans need changing."},
-    "rate_limited": {"hi": "Thodi der baad try karein.", "en": "Please try again in a little while."},
+                         "en": "The weather is bad, but none of your plans need changing.", "bn": "আবহাওয়া খারাপ, তবে কোনো জায়গা বদলানোর দরকার নেই।"},
+    "rate_limited": {"hi": "Thodi der baad try karein.", "en": "Please try again in a little while.", "bn": "একটু পরে আবার চেষ্টা করুন।"},
     "failed": {"hi": "Abhi plan badal nahi paaya, thodi der mein try karein.",
-               "en": "I couldn't change the plan right now, please try again in a bit."},
-    "need_budget": {"hi": "Pehle budget batayein, kitna hai?", "en": "First tell me your budget. How much is it?"},
+               "en": "I couldn't change the plan right now, please try again in a bit.", "bn": "এখন প্ল্যান বদলাতে পারলাম না, একটু পরে আবার চেষ্টা করুন।"},
+    "need_budget": {"hi": "Pehle budget batayein, kitna hai?", "en": "First tell me your budget. How much is it?", "bn": "আগে বাজেটটা বলুন, কত?"},
     "budget_low": {"hi": "Budget kam se kam {min} rupaye hona chahiye, kitna hai?",
-                   "en": "The budget must be at least {min} rupees. How much is it?"},
+                   "en": "The budget must be at least {min} rupees. How much is it?", "bn": "বাজেট অন্তত {min} টাকা হতে হবে, কত?"},
     "budget_high": {"hi": "Budget zyada se zyada {max} rupaye ho sakta hai, kitna hai?",
-                    "en": "The budget can be at most {max} rupees. How much is it?"},
-    "within_budget": {"hi": "Plan pehle se budget ke andar hai.", "en": "Your plan is already within budget."},
-    "no_savings": {"hi": "Budget ke liye koi sasta vikalp nahi mila.", "en": "I couldn't find cheaper options."},
-    "no_activities": {"hi": "Is din mein koi activity nahi hai.", "en": "There are no activities on that day."},
-    "stale": {"hi": "Plan pehle hi badal gaya tha, kuch nahi badla.", "en": "The plan had already changed, so nothing was changed."},
-    "weather_q": {"hi": "{when} {cond} ka forecast hai. {what}?", "en": "{when} the forecast is {cond}. Shall I {what}?"},
-    "budget_q": {"hi": "{saving} bachane ke liye {what}?", "en": "To save {saving}, shall I {what}?"},
+                    "en": "The budget can be at most {max} rupees. How much is it?", "bn": "বাজেট সর্বোচ্চ {max} টাকা হতে পারে, কত?"},
+    "within_budget": {"hi": "Plan pehle se budget ke andar hai.", "en": "Your plan is already within budget.", "bn": "আপনার প্ল্যান আগে থেকেই বাজেটের মধ্যে আছে।"},
+    "no_savings": {"hi": "Budget ke liye koi sasta vikalp nahi mila.", "en": "I couldn't find cheaper options.", "bn": "এর চেয়ে সস্তা কোনো বিকল্প পেলাম না।"},
+    "no_activities": {"hi": "Is din mein koi activity nahi hai.", "en": "There are no activities on that day.", "bn": "ওই দিনে কোনো অ্যাক্টিভিটি নেই।"},
+    "stale": {"hi": "Plan pehle hi badal gaya tha, kuch nahi badla.", "en": "The plan had already changed, so nothing was changed.", "bn": "প্ল্যান আগেই বদলে গিয়েছিল, তাই কিছু বদলানো হয়নি।"},
+    "weather_q": {"hi": "{when} {cond} ka forecast hai. {what}?", "en": "{when} the forecast is {cond}. Shall I {what}?", "bn": "{when} {cond} হওয়ার পূর্বাভাস আছে। {what}?"},
+    "budget_q": {"hi": "{saving} bachane ke liye {what}?", "en": "To save {saving}, shall I {what}?", "bn": "{saving} বাঁচাতে {what}?"},
     "day_q_MINIMIZE_TRAVEL_TIME": {"hi": "Day {n} ka order travel kam karne ke liye badal doon?",
-                                   "en": "Shall I reorder day {n} to cut travel time?"},
-    "day_q_RELAXED": {"hi": "Day {n} ko relaxed banane ke liye badal doon?", "en": "Shall I make day {n} more relaxed?"},
+                                   "en": "Shall I reorder day {n} to cut travel time?", "bn": "যাতায়াতের সময় কমাতে {n} নম্বর দিনের ক্রম বদলে দেব?"},
+    "day_q_RELAXED": {"hi": "Day {n} ko relaxed banane ke liye badal doon?", "en": "Shall I make day {n} more relaxed?", "bn": "{n} নম্বর দিনটা একটু আরামের করে দেব?"},
     "day_q_MORE_SIGHTS": {"hi": "Day {n} mein zyada jagahein dekhne ke liye badal doon?",
-                          "en": "Shall I reorder day {n} to fit in more sights?"},
-    "applied": {"hi": "Ho gaya. {what}", "en": "Done. {what}"},
-    "day_applied": {"hi": "Day {n} ab aisa hai: {titles}.", "en": "Day {n} is now: {titles}."},
-    "cancelled": {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing was changed."},
+                          "en": "Shall I reorder day {n} to fit in more sights?", "bn": "আরও বেশি জায়গা দেখার জন্য {n} নম্বর দিনের ক্রম বদলে দেব?"},
+    "applied": {"hi": "Ho gaya. {what}", "en": "Done. {what}", "bn": "হয়ে গেছে। {what}"},
+    "day_applied": {"hi": "Day {n} ab aisa hai: {titles}.", "en": "Day {n} is now: {titles}.", "bn": "{n} নম্বর দিন এখন এরকম: {titles}।"},
+    "cancelled": {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing was changed.", "bn": "ঠিক আছে, কিছু বদলানো হয়নি।"},
     # set_trip_budget: set or change the open trip's budget amount (asks first)
-    "budget_ask_amount": {"hi": "Kitna budget rakhun?", "en": "What should the budget be?"},
-    "budget_same": {"hi": "Budget pehle se {amount} hai.", "en": "The budget is already {amount}."},
-    "budget_change_q": {"hi": "Trip ka budget {old} se {new} kar doon?", "en": "Change the trip budget from {old} to {new}?"},
-    "budget_set_q": {"hi": "Trip ka budget {new} rakh doon?", "en": "Set the trip budget to {new}?"},
-    "budget_set_done": {"hi": "Ho gaya, budget ab {new} hai.", "en": "Done. The budget is now {new}."},
+    "budget_ask_amount": {"hi": "Kitna budget rakhun?", "en": "What should the budget be?", "bn": "বাজেট কত রাখব?"},
+    "budget_same": {"hi": "Budget pehle se {amount} hai.", "en": "The budget is already {amount}.", "bn": "বাজেট আগে থেকেই {amount}।"},
+    "budget_change_q": {"hi": "Trip ka budget {old} se {new} kar doon?", "en": "Change the trip budget from {old} to {new}?", "bn": "ট্রিপের বাজেট {old} থেকে {new} করে দেব?"},
+    "budget_set_q": {"hi": "Trip ka budget {new} rakh doon?", "en": "Set the trip budget to {new}?", "bn": "ট্রিপের বাজেট {new} রাখব?"},
+    "budget_set_done": {"hi": "Ho gaya, budget ab {new} hai.", "en": "Done. The budget is now {new}.", "bn": "হয়ে গেছে, বাজেট এখন {new}।"},
 }
 
 
 def _t(key: str, lang: str, **kw: Any) -> str:
-    return TEXT[key][lang if lang in ("hi", "en") else "hi"].format(**kw)
+    return TEXT[key][tkey(lang)].format(**kw)
 
 
 # ---------------- days of a trip
@@ -215,11 +216,14 @@ def normalize_action(rec: Any) -> Optional[Dict[str, Any]]:
             "activityTitle": str(rec.get("activityTitle") or "").strip()[:120], "replacement": out}
 
 
+ONE_STOP = {"hi": "ek jagah", "en": "one stop", "bn": "একটা জায়গা"}
+
+
 def summarize_replacements(actions: List[Dict[str, Any]], lang: str, past: bool = False) -> str:
     """'Amber Fort ki jagah City Palace rakh doon' / 'replace Amber Fort with City Palace' (past: 'rakh diya' / 'Replaced')."""
     parts = []
     for a in actions[:2]:
-        old = a.get("activityTitle") or ("ek jagah" if lang != "en" else "one stop")
+        old = a.get("activityTitle") or ONE_STOP[tkey(lang)]
         new = (a.get("replacement") or {}).get("name") or ""
         parts.append((old, new))
     if not parts:
@@ -228,6 +232,9 @@ def summarize_replacements(actions: List[Dict[str, Any]], lang: str, past: bool 
     if lang == "en":
         body = " and ".join(f"{o} with {n}" for o, n in parts) + (f", and {more} more" if more > 0 else "")
         return f"Replaced {body}" if past else f"replace {body}"
+    if lang == "bn":
+        body = " আর ".join(f"{o}-এর জায়গায় {n}" for o, n in parts) + (f", আর {more}টা" if more > 0 else "")
+        return f"{body} রাখা হয়েছে" if past else f"{body} রাখব"
     body = " aur ".join(f"{o} ki jagah {n}" for o, n in parts) + (f", aur {more} aur" if more > 0 else "")
     return f"{body} rakh diya" if past else f"{body} rakh doon"
 
@@ -246,7 +253,7 @@ def summarize_day_order(activities: List[Dict[str, Any]], day_number: int, lang:
     """One sentence from the service's result: the first three stops in time order."""
     ordered = sorted(enumerate(activities), key=lambda p: _time_key(p[1].get("timeSlot"), p[0]))
     titles = [str(a.get("title") or "").strip() for _, a in ordered if str(a.get("title") or "").strip()][:3]
-    return _t("day_applied", lang, n=day_number, titles=", ".join(titles) if lang != "en" else ", then ".join(titles))
+    return _t("day_applied", lang, n=day_number, titles=", then ".join(titles) if lang == "en" else ", ".join(titles))
 
 
 # ---------------- the ask turn

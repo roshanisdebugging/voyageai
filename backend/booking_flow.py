@@ -21,6 +21,7 @@ import os
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from voice.languages import screen_lang   # on-screen labels: hi / en as before, Bengali -> English
 
 logger = logging.getLogger("booking")
 
@@ -50,8 +51,8 @@ CHANGE_PARTS = ["services", "flight", "train", "hotel", "travellers", "phone"]
 
 TEST_NOTE = {"hi": "Test version: kuch bheja nahi jayega", "en": "Test version: nothing will be sent"}
 CONSENT = {"hi": "Ye details hamare booking partner ko bheji jayengi.", "en": "These details will be sent to our booking partner."}
-DONE = {"hi": "Abhi ye test hai. Kuch bheja nahi gaya.", "en": "This is a test for now. Nothing was sent."}
-CANCELLED = {"hi": "Theek hai.", "en": "Okay."}
+DONE = {"hi": "Abhi ye test hai. Kuch bheja nahi gaya.", "en": "This is a test for now. Nothing was sent.", "bn": "এখন এটা পরীক্ষামূলক। কিছু পাঠানো হয়নি।"}
+CANCELLED = {"hi": "Theek hai.", "en": "Okay.", "bn": "ঠিক আছে।"}
 OFFER = {"hi": "Train, flight ya hotel book karwana hai?", "en": "Want to book a train, flight or hotel?"}
 
 LABELS = {
@@ -116,6 +117,25 @@ PROMPTS = {
         "review_screen": "Please check the details.",
         "change": "What should I change? Flight, train, hotel, travellers or phone?",
     },
+    "bn": {'services': "ট্রেন, ফ্লাইট নাকি হোটেল বুক করবেন? এক বা একাধিক বেছে নিন।",
+           'flight_time': "ফ্লাইট কখন চাই? সকাল, দুপুর, সন্ধ্যা নাকি রাত?",
+           'flight_airline': "কোনো নির্দিষ্ট এয়ারলাইন, নাকি যেটা সবচেয়ে সস্তা?",
+           'train_class': "ট্রেনে কোন ক্লাস? স্লিপার, 3AC, 2AC নাকি 1AC?",
+           'train_time': "ট্রেন কখন চাই? সকাল, দুপুর, সন্ধ্যা নাকি রাত?",
+           'train_tatkal': "তৎকাল চলবে?",
+           'hotel_type': "কেমন হোটেল চাই? বাজেট, 3-star নাকি 4-star বা তার উপরে?",
+           'hotel_rooms': "কয়টা রুম লাগবে? 1 থেকে 9।",
+           'name_adult': "যাত্রী {n}-এর নাম?",
+           'name_child': "বাচ্চা {n}-এর নাম?",
+           'travellers_intro': "এবার যাত্রীদের নাম আর বয়স।",
+           'age': "{name}-এর বয়স কত?",
+           'age_child_check': "{name}-এর বয়স {age}? এটা বাচ্চার জায়গা। ঠিক আছে?",
+           'age_adult_check': "{name}-এর বয়স {age}? এটা বড়দের জায়গা। ঠিক আছে?",
+           'phone': "একটা মোবাইল নম্বর বলুন, 10 সংখ্যার।",
+           'phone_ok': "নম্বর: {digits}। ঠিক আছে?",
+           'review': "ঠিক আছে?",
+           'review_screen': "সব তথ্য দেখে নিন।",
+           'change': "কী বদলাতে হবে? ফ্লাইট, ট্রেন, হোটেল, যাত্রী নাকি ফোন?"},
 }
 
 ERRORS = {
@@ -153,6 +173,21 @@ ERRORS = {
         "save_failed": "The request couldn't be saved. Please try again in a little while.",
         "no_travellers": "This trip has no travellers.",
     },
+    "bn": {'services_empty': "অন্তত একটা বেছে নিন: ফ্লাইট, ট্রেন বা হোটেল।",
+           'choice_invalid': "বুঝতে পারলাম না।",
+           'name_invalid': "নামে শুধু অক্ষর থাকতে পারে, 2 থেকে 60টা।",
+           'name_script': "নামটা ইংরেজি, হিন্দি বা বাংলায় লিখুন।",
+           'airline_invalid': "এয়ারলাইনের নামটা শুধু অক্ষরে বলুন।",
+           'airline_script': "এয়ারলাইনের নামটা ইংরেজি, হিন্দি বা বাংলায় লিখুন।",
+           'airline_name_needed': "কোন এয়ারলাইন?",
+           'age_invalid': "বয়সটা 0 থেকে 110-এর মধ্যে একটা পূর্ণ সংখ্যায় বলুন।",
+           'rooms_invalid': "রুম 1 থেকে 9টা হতে পারে।",
+           'phone_invalid': "নম্বরটা ঠিক মনে হচ্ছে না। 6, 7, 8 বা 9 দিয়ে শুরু হওয়া 10 সংখ্যার মোবাইল নম্বর বলুন।",
+           'decide_not_allowed': "এটা আপনাকেই বলতে হবে।",
+           'stale': "এই প্রশ্নটা বদলে গেছে।",
+           'trip_past': "এই ট্রিপ শেষ হয়ে গেছে।",
+           'save_failed': "অনুরোধটা সেভ করা গেল না। একটু পরে আবার চেষ্টা করুন।",
+           'no_travellers': "এই ট্রিপে কোনো যাত্রী নেই।"},
 }
 
 
@@ -238,22 +273,27 @@ def _is_letter(ch: str) -> bool:
     return unicodedata.category(ch)[0] in "LM"
 
 
-def _allowed_letter(ch: str) -> bool:
+def _allowed_letter(ch: str, lang: Optional[str] = None) -> bool:
     """Latin (with accents) or Devanagari letters and vowel marks only. Any other script (Ol Chiki, Bengali, Tamil...)
-    is refused: speech-to-text sometimes writes a Hindi name in a script the app can't read back."""
+    is refused: speech-to-text sometimes writes a Hindi name in a script the app can't read back.
+    Exception: a booking whose voice language is Bengali (lang "bn", feat/bengali) also takes Bengali letters, since
+    its speech-to-text is pinned to Bengali and writes names in Bangla script."""
     if "\u0900" <= ch <= "\u097f":
+        return _is_letter(ch)
+    if lang == "bn" and "\u0980" <= ch <= "\u09ff":
         return _is_letter(ch)
     if "\u0300" <= ch <= "\u036f":                 # combining accents (Latin)
         return True
     return _is_letter(ch) and unicodedata.name(ch, "").startswith("LATIN")
 
 
-def name_problem(raw: Any, max_chars: int = NAME_MAX) -> Optional[str]:
-    """None when the name is fine; "script" for letters outside Latin / Devanagari; "invalid" otherwise."""
+def name_problem(raw: Any, max_chars: int = NAME_MAX, lang: Optional[str] = None) -> Optional[str]:
+    """None when the name is fine; "script" for letters outside Latin / Devanagari (and Bengali for a Bengali voice
+    booking); "invalid" otherwise."""
     if not isinstance(raw, str):
         return "invalid"
     text = " ".join(unicodedata.normalize("NFC", raw).split())
-    if any(_is_letter(ch) and not _allowed_letter(ch) for ch in text):
+    if any(_is_letter(ch) and not _allowed_letter(ch, lang) for ch in text):
         return "script"
     if not (NAME_MIN <= len(text) <= max_chars):
         return "invalid"
@@ -301,9 +341,9 @@ def airline_name(value: Any) -> Optional[str]:
     return _AIRLINE_KEYS.get(k) or _AIRLINE_KEYS.get(k.replace(" ", ""))
 
 
-def clean_name(raw: Any, max_chars: int = NAME_MAX) -> Optional[str]:
+def clean_name(raw: Any, max_chars: int = NAME_MAX, lang: Optional[str] = None) -> Optional[str]:
     """Latin or Devanagari letters, spaces and . - ' only, 2..max_chars characters, at least 2 letters."""
-    if name_problem(raw, max_chars) is not None:
+    if name_problem(raw, max_chars, lang) is not None:
         return None
     return " ".join(unicodedata.normalize("NFC", raw).split())
 
@@ -432,8 +472,8 @@ def _person_label(s: BookingState, i: int, lang: str) -> str:
     if name:
         return name
     if _is_child(s, i):
-        return ("Bachcha {n}" if lang == "hi" else "Child {n}").format(n=i - s.adults + 1)
-    return ("Yatri {n}" if lang == "hi" else "Traveller {n}").format(n=i + 1)
+        return {"hi": "Bachcha {n}", "bn": "বাচ্চা {n}"}.get(lang, "Child {n}").format(n=i - s.adults + 1)
+    return {"hi": "Yatri {n}", "bn": "যাত্রী {n}"}.get(lang, "Traveller {n}").format(n=i + 1)
 
 
 # ---------------- applying answers
@@ -509,10 +549,10 @@ def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
         if known:                                   # stored (and shown / spoken) by its normal name
             s.answers[qid] = known
             return Outcome(True)
-        problem = name_problem(value, AIRLINE_MAX)
+        problem = name_problem(value, AIRLINE_MAX, s.voice_lang)
         if problem:
             return Outcome(False, "airline_script" if problem == "script" else "airline_invalid")
-        name = clean_name(value, AIRLINE_MAX)
+        name = clean_name(value, AIRLINE_MAX, s.voice_lang)
         s.answers[qid] = name
         return Outcome(True)
 
@@ -536,10 +576,10 @@ def apply_answer(s: BookingState, question: str, value: Any) -> Outcome:
         i = t[0]
         if value == ANY:
             return Outcome(False, "decide_not_allowed")
-        problem = name_problem(value)
+        problem = name_problem(value, lang=s.voice_lang)
         if problem:
             return Outcome(False, "name_script" if problem == "script" else "name_invalid")    # never stored
-        s.travellers[i]["name"] = clean_name(value)
+        s.travellers[i]["name"] = clean_name(value, lang=s.voice_lang)
         return Outcome(True)
 
     if t and t[1] == "age":
@@ -643,6 +683,7 @@ def _value_label(value: Any, lang: str) -> str:
 
 
 def summary_lines(s: BookingState, lang: str) -> List[Dict[str, str]]:
+    lang = screen_lang(lang)     # on screen: Bengali -> English
     L = LABELS[lang]
     hi = lang == "hi"
     lines: List[Dict[str, str]] = []
@@ -684,6 +725,26 @@ _SPOKEN = {
            "4plus": "4-star or above", "cheapest": "cheapest", "tatkal_yes": "Tatkal okay", "tatkal_no": "no Tatkal",
            "room": "room", "rooms": "rooms", "traveller": "traveller", "travellers": "travellers",
            "consent": "Details go to our booking partner."},
+    "bn": {'morning': "সকাল",
+           'afternoon': "দুপুর",
+           'evening': "সন্ধ্যা",
+           'night': "রাত",
+           ANY: "যেটা পাওয়া যায়",
+           'SL': "স্লিপার",
+           '3A': "3AC",
+           '2A': "2AC",
+           '1A': "1AC",
+           'budget': "বাজেট",
+           '3star': "3-star",
+           '4plus': "4-star বা তার উপরে",
+           'cheapest': "সবচেয়ে সস্তা",
+           'tatkal_yes': "তৎকাল চলবে",
+           'tatkal_no': "তৎকাল নয়",
+           'room': "রুম",
+           'rooms': "রুম",
+           'traveller': "জন যাত্রী",
+           'travellers': "জন যাত্রী",
+           'consent': "তথ্য আমাদের বুকিং পার্টনারের কাছে যাবে।"},
 }
 _HI_COUNT = ["", "ek", "do", "teen", "chaar", "paanch", "chhe", "saat", "aath", "nau", "das"]
 
@@ -708,8 +769,8 @@ def spoken_review(s: BookingState, lang: str) -> str:
     if "flight" in s.services:
         airline = a.get("flight_airline")
         named = airline not in (None, ANY, "cheapest")
-        head = "Sasti flight" if airline == "cheapest" and lang == "hi" else \
-            ("Cheapest flight" if airline == "cheapest" else "Flight")
+        head = ({"hi": "Sasti flight", "bn": "সবচেয়ে সস্তা flight"}.get(lang, "Cheapest flight")
+                if airline == "cheapest" else "Flight")
         parts.append(f"{head} {joined(a.get('flight_time'))}" + (f", {airline}." if named else "."))
     if "train" in s.services:
         tatkal = {"yes": W["tatkal_yes"], "no": W["tatkal_no"]}.get(a.get("train_tatkal"))
@@ -751,7 +812,7 @@ def prompt_for(s: BookingState, qid: str, lang: str, spoken: bool = False) -> st
 
 
 def _choices(s: BookingState, qid: str, lang: str) -> List[Dict[str, str]]:
-    L = LABELS[lang]
+    L = LABELS[screen_lang(lang)]     # buttons on screen: Bengali -> English
     if qid == "services":
         return [{"value": x, "label": L[x]} for x in SERVICES]
     if qid == "flight_airline":
@@ -833,6 +894,7 @@ def _row_key(qid: str) -> Optional[str]:
 
 
 def card(s: BookingState, lang: str = "hi") -> Dict[str, Any]:
+    lang = screen_lang(lang)     # the card is on screen: Bengali -> English
     """The live summary on the booking screen: every field of the chosen services, "-" until answered, the
     current one marked. Same Redis state as voice, so a voice answer shows up here after the refresh event."""
     C = CARD_LABELS[lang]
@@ -894,7 +956,7 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
         out["accountName"] = s.account_name     # the screen's optional "Mera naam" button (filled only on tap)
     if qid in ("review", "change"):
         out["summary"] = summary_lines(s, lang)
-        out["consent"] = CONSENT[lang]
+        out["consent"] = CONSENT[screen_lang(lang)]
         out["partnerNotes"] = partner_notes(s)
     return out
 
@@ -902,21 +964,21 @@ def view(s: BookingState, lang: str = "hi", error: Optional[str] = None) -> Dict
 # ---------------- stage 3: the confirmed request (booking_requests)
 
 SAVED = {"hi": "Aapki request save ho gayi hai: {no}. Abhi ye test hai, partner ko nahi bheji gayi.",
-         "en": "Your request is saved: {no}. This is a test for now; it was not sent to the partner."}
+         "en": "Your request is saved: {no}. This is a test for now; it was not sent to the partner.", "bn": "আপনার অনুরোধ সেভ হয়েছে: {no}। এখন এটা পরীক্ষামূলক, পার্টনারের কাছে পাঠানো হয়নি।"}
 # Stage 4 (BOOKING_NOTIFY_ENABLED=true): the wording follows notify_status; "bhej di gayi hai" only once really sent.
 SENDING = {"hi": "Aapki request save ho gayi hai: {no}. Partner ko bhej rahe hain.",
-           "en": "Your request is saved: {no}. We are sending it to the partner."}
+           "en": "Your request is saved: {no}. We are sending it to the partner.", "bn": "আপনার অনুরোধ সেভ হয়েছে: {no}। পার্টনারের কাছে পাঠাচ্ছি।"}
 SENT = {"hi": "Aapki request save ho gayi hai: {no}. Partner ko bhej di gayi hai, wo {hours} ghante mein sampark karenge.",
-        "en": "Your request is saved: {no}. It has been sent to the partner; they will contact you within {hours} hours."}
+        "en": "Your request is saved: {no}. It has been sent to the partner; they will contact you within {hours} hours.", "bn": "আপনার অনুরোধ সেভ হয়েছে: {no}। পার্টনারের কাছে পাঠানো হয়েছে, ওঁরা {hours} ঘণ্টার মধ্যে যোগাযোগ করবেন।"}
 SEND_FAILED = {"hi": "Request save hai ({no}), par partner ko bhejna nahi ho paya. Hum dobara koshish karenge.",
-               "en": "Your request is saved ({no}), but sending it to the partner failed. We will try again."}
+               "en": "Your request is saved ({no}), but sending it to the partner failed. We will try again.", "bn": "অনুরোধ সেভ হয়েছে ({no}), কিন্তু পার্টনারের কাছে পাঠানো যায়নি। আমরা আবার চেষ্টা করব।"}
 NOTIFY_LINES = {   # the trip page's status card (the request number is on the line above)
     "hi": {"sending": "Partner ko bhej rahe hain…", "sent": "Partner ko bhej di gayi hai, wo {hours} ghante mein sampark karenge.",
            "failed": "Partner ko bhejna nahi ho paya. Hum dobara koshish karenge."},
     "en": {"sending": "Sending it to the partner…", "sent": "Sent to the partner; they will contact you within {hours} hours.",
            "failed": "Sending it to the partner failed. We will try again."},
 }
-ALREADY = {"hi": "Aapki request {no} pehle se save hai.", "en": "Your request {no} is already saved."}
+ALREADY = {"hi": "Aapki request {no} pehle se save hai.", "en": "Your request {no} is already saved.", "bn": "আপনার অনুরোধ {no} আগে থেকেই সেভ করা আছে।"}
 STATUS_LABELS = {
     "hi": {"new": "Save ho gayi", "contacted": "Partner ne sampark kiya", "booked": "Booking ho gayi", "cancelled": "Cancel"},
     "en": {"new": "Saved", "contacted": "Partner contacted you", "booked": "Booked", "cancelled": "Cancelled"},
@@ -938,7 +1000,7 @@ def notify_enabled() -> bool:
 
 def test_note(lang: str = "hi") -> Optional[str]:
     """"Test version: kuch bheja nahi jayega" only while nothing is emailed."""
-    return None if notify_enabled() else TEST_NOTE[lang]
+    return None if notify_enabled() else TEST_NOTE[screen_lang(lang)]
 
 
 def notify_state(notify_status: Optional[str]) -> str:
@@ -967,13 +1029,13 @@ def _public(row, lang: str = "hi") -> Dict[str, Any]:
     """What the owner's screen / voice may show: number and status only (no names, ages or phone)."""
     from models_booking import OPEN_STATUSES
     out = {"requestNo": row.request_no, "status": row.status,
-           "statusLabel": STATUS_LABELS[lang].get(row.status, row.status), "open": row.status in OPEN_STATUSES,
+           "statusLabel": STATUS_LABELS[screen_lang(lang)].get(row.status, row.status), "open": row.status in OPEN_STATUSES,
            "createdAt": row.created_at.isoformat() if row.created_at else None}
     notify = notify_state(row.notify_status)
     out["notify"] = notify
     if notify != "off" and row.status == "new":
         from booking_mail import reply_hours
-        out["notifyText"] = NOTIFY_LINES[lang][notify].format(hours=reply_hours())
+        out["notifyText"] = NOTIFY_LINES[screen_lang(lang)][notify].format(hours=reply_hours())
     return out
 
 
@@ -1014,7 +1076,7 @@ def save_request(s: BookingState, user_id: str, lang: str = "hi") -> Tuple[Dict[
                 preferences={q: s.answers[q] for q in chosen if q in s.answers},
                 travellers=[{"name": t.get("name"), "age": t.get("age")} for t in s.travellers],
                 phone=s.phone, partner_note=" ".join(partner_notes(s)) or None,
-                consent_text=CONSENT.get(lang, CONSENT["hi"]), consented_at=now,
+                consent_text=CONSENT.get(screen_lang(lang), CONSENT["hi"]), consented_at=now,
                 notify_status="pending" if notify_enabled() else "off",
                 created_at=now, updated_at=now)
         db.add(row)
@@ -1128,10 +1190,10 @@ def correct_name(redis_conn, user_id: str, trip_id: str, index: int, name: Optio
     if s.finished or not 0 <= index < len(s.travellers):
         return s, Outcome(False, "stale")
     if name is not None:
-        problem = name_problem(name)
+        problem = name_problem(name, lang=s.voice_lang)
         if problem:
             return s, Outcome(False, "name_script" if problem == "script" else "name_invalid")   # never stored
-    s.travellers[index] = {"name": clean_name(name) if name is not None else None, "age": None}
+    s.travellers[index] = {"name": clean_name(name, lang=s.voice_lang) if name is not None else None, "age": None}
     s.age_check = None
     save(redis_conn, user_id, s)
     log_event("name_fix", s, new_name=name is not None)       # a flag only
@@ -1186,7 +1248,7 @@ def response(s: Optional[BookingState], out: Optional[Outcome] = None, lang: str
         return {"active": False, "finished": True, "message": saved_text(out.request, lang), "request": out.request,
                 "testNote": test_note(lang)}
     if s is None:
-        res = {"active": False, "expired": bool(out and out.error == "expired"), "offer": OFFER[lang],
+        res = {"active": False, "expired": bool(out and out.error == "expired"), "offer": OFFER[screen_lang(lang)],
                "testNote": test_note(lang), "request": request}
         if request and request.get("status") == "new" and request.get("notify", "off") != "off":
             res["message"] = saved_text(request, lang)      # stage 4: the email's real state (sending / sent / failed)

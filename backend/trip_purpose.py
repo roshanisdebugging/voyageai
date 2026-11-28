@@ -38,6 +38,26 @@ _TYPE_WORDS = (
                  "घूमना", "घूमने", "घुमना", "घुमने", "घूम", "छुट्टी", "छुट्टियां", "हॉलिडे", "वेकेशन")),
 )
 _TYPE_PHRASES = (("leisure", ("family trip", "bas ghoomna", "fun trip")),)
+# Bengali (beta, feat/bengali): the same types, own lists (whole words, common inflected forms listed), joined in
+# classify_purpose and purpose_label. The label is the English word, as for Hindi.
+_TYPE_WORDS_BN = {
+    "event": ("হ্যাকাথন", "হ্যাকাথনে", "হ্যাকাথনের", "হ্যাকাথনটা", "ইভেন্ট", "ইভেন্টে", "ইভেন্টের", "কনফারেন্স",
+              "কনফারেন্সে", "সেমিনার", "সেমিনারে", "বিয়ে", "বিয়েতে", "বিয়েবাড়ি", "ওয়ার্কশপ", "ওয়ার্কশপে", "ইন্টারভিউ",
+              "ইন্টারভিউয়ে", "ইন্টারভিউয়ের", "পরীক্ষা", "পরীক্ষার", "পরীক্ষায়"),
+    "business": ("কাজ", "কাজে", "কাজের", "অফিস", "অফিসে", "অফিসের", "মিটিং", "মিটিংয়ে", "মিটিংয়ের", "ক্লায়েন্ট",
+                 "বিজনেস", "বিজনেসের", "ব্যবসা", "ব্যবসার", "ব্যবসায়িক"),
+    "pilgrimage": ("তীর্থ", "তীর্থে", "তীর্থযাত্রা", "তীর্থযাত্রায়", "দর্শন", "দর্শনে", "পুজো", "পুজোয়", "পূজা", "পূজায়"),
+    "leisure": ("বেড়ানো", "বেড়াতে", "বেড়ানোর", "ঘুরতে", "ঘোরা", "ঘোরার", "ছুটি", "ছুটিতে", "হলিডে", "ভেকেশন"),
+}
+_LABELS_BN = {
+    "hackathon": ("হ্যাকাথন", "হ্যাকাথনে", "হ্যাকাথনের", "হ্যাকাথনটা"), "conference": ("কনফারেন্স", "কনফারেন্সে"),
+    "seminar": ("সেমিনার", "সেমিনারে"), "wedding": ("বিয়ে", "বিয়েতে", "বিয়েবাড়ি"), "workshop": ("ওয়ার্কশপ", "ওয়ার্কশপে"),
+    "interview": ("ইন্টারভিউ", "ইন্টারভিউয়ে", "ইন্টারভিউয়ের"), "exam": ("পরীক্ষা", "পরীক্ষার", "পরীক্ষায়"),
+    "event": ("ইভেন্ট", "ইভেন্টে", "ইভেন্টের"), "work": ("কাজ", "কাজে", "কাজের"), "office": ("অফিস", "অফিসে", "অফিসের"),
+    "meeting": ("মিটিং", "মিটিংয়ে", "মিটিংয়ের"), "client": ("ক্লায়েন্ট",),
+    "business": ("বিজনেস", "বিজনেসের", "ব্যবসা", "ব্যবসার", "ব্যবসায়িক"),
+}
+_SKIP_PHRASES_BN = ("জানি না", "জানিনা", "কিছু না", "কিছুই না", "বাদ দিন", "বাদ দাও", "পরে", "স্কিপ", "থাক")
 # The word the user said, as the read-back says it and purpose_text keeps it (business / event): "हैकथन" ->
 # "hackathon", "client meeting" -> "client meeting". Phrases first, then single words; anything else keeps its word.
 _LABEL_PHRASES = (("business meeting", "business meeting"), ("client meeting", "client meeting"),
@@ -112,10 +132,10 @@ def classify_purpose(raw: Any) -> Tuple[Optional[str], Optional[str], bool]:
             found = ptype
     if found is None:
         for ptype, items in _TYPE_WORDS:
-            if ws & _canon_set(items):
+            if ws & _canon_set(items + _TYPE_WORDS_BN.get(ptype, ())):
                 found = ptype
                 break
-    if found is None and any(_phrase_in(words, p) for p in _SKIP_PHRASES):
+    if found is None and any(_phrase_in(words, p) for p in _SKIP_PHRASES + _SKIP_PHRASES_BN):
         return None, None, True
     if found is None:
         cleaned = clean_purpose_text(text)
@@ -132,6 +152,9 @@ def purpose_label(words) -> Optional[str]:
             return label
     for w in words:
         for label, items in _LABELS.items():
+            if w in _canon_set(items):
+                return label
+        for label, items in _LABELS_BN.items():
             if w in _canon_set(items):
                 return label
     return None

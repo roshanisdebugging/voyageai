@@ -11,13 +11,14 @@ Confirm / Cancel taps. It is one of:
           speaks", and TTS uses tts_code.
 Anything else (unknown, empty, not a string, not selectable) means "auto".
 
-Templates exist only for "hi" (Hinglish in Roman script, as the existing templates are) and "en". A language with
+Templates exist for "hi" (Hinglish in Roman script, as the existing templates are), "en" and "bn" (Bengali in Bangla
+script, beta: written by us, not yet checked by a native speaker; docs/bengali_review.md). A language with
 has_templates=False gets the English templates (template_lang) and one log line per conversation:
 "[LANG] templates=fallback_en lang=<code>". Its STT, TTS and model reply language still follow the table.
 
-A new language, e.g. Bengali, is one entry (selectable only once someone has listened to it):
-    "bn": Language("bn", "Bengali", "বাংলা", stt_code="bn", tts_code="bn-IN", prompt_name="Bengali",
-                   has_templates=False, selectable=True),
+A new language is one entry here (has_templates=False until its templates are written), e.g. Tamil:
+    "ta": Language("ta", "Tamil", "தமிழ்", stt_code="ta", tts_code="ta-IN", prompt_name="Tamil (Tamil script)",
+                   has_templates=False),
 """
 from __future__ import annotations
 
@@ -45,11 +46,33 @@ LANGUAGES: Dict[str, Language] = {
                    prompt_name="Hindi (Hinglish in Roman script is fine)", has_templates=True),
     "en": Language("en", "English", "English", stt_code="en", tts_code="en-IN", prompt_name="English",
                    has_templates=True),
+    # beta: templates in voice/*.py and booking_flow.py ("bn" keys), listening words in confirm_words.py,
+    # booking_voice.py, draft.py, trip_purpose.py and voice/text_utils.py
+    "bn": Language("bn", "Bengali (beta)", "বাংলা", stt_code="bn", tts_code="bn-IN",
+                   prompt_name="Bengali (Bangla script)", has_templates=True),
 }
 
 _FALLBACK_LOGGED: set = set()      # (conversation_id, code): "templates=fallback_en" logged once per conversation
 _FALLBACK_LOCK = threading.Lock()
 _FALLBACK_MAX = 5000
+
+
+# The joining words of spoken lists ("Charminar ya Golconda?"), per template language.
+OR_WORD = {"hi": " ya ", "en": " or ", "bn": " নাকি "}
+AND_WORD = {"hi": " aur ", "en": " and ", "bn": " আর "}
+
+
+def tkey(lang: Optional[str]) -> str:
+    """The template key for a reply language: a language with templates as is; anything else "hi" (what the code
+    did before Bengali: every non-English language read the Hinglish templates)."""
+    found = LANGUAGES.get(lang or "")
+    return lang if found is not None and found.has_templates else "hi"
+
+
+def screen_lang(lang: Optional[str]) -> str:
+    """The language of on-screen labels (booking buttons, card labels, status lines): "hi" and "en" as before; Bengali
+    and any other voice language -> English (the app's written screens are English)."""
+    return lang if lang in ("hi", "en") else ("hi" if not lang else "en")
 
 
 def normalize_choice(value: Any) -> str:
@@ -103,4 +126,10 @@ def reply_rule(choice: Optional[str]) -> Optional[str]:
     lang = chosen(choice)
     if lang is None:
         return None
+    if lang.code in _RULE_OVERRIDE:
+        return _RULE_OVERRIDE[lang.code]
     return f"- Always reply in {lang.prompt_name}, whatever language the user speaks."
+
+
+# A language whose model line needs more than its name (the script to write in).
+_RULE_OVERRIDE = {"bn": "- Always reply in Bengali, whatever language the user speaks; use Bangla script."}

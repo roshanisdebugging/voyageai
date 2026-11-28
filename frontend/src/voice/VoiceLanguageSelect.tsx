@@ -2,11 +2,11 @@ import React from 'react';
 import { nextVoiceLanguage, VOICE_LANGUAGES, voiceLanguageOption } from './voiceLanguage';
 import { useVoiceLanguage } from './useVoiceLanguage';
 
-/** Settings: Auto / हिन्दी / English as one row of buttons (each at least 44 px). */
+/** Settings: Auto / हिन्दी / English / বাংলা as one row of buttons (each at least 44 px; wraps on narrow screens). */
 export const VoiceLanguageSegmented: React.FC<{ id?: string }> = ({ id = 'voice-language' }) => {
   const [value, setValue] = useVoiceLanguage();
   return (
-    <div role="radiogroup" aria-labelledby={`${id}-label`} className="flex gap-1.5">
+    <div role="radiogroup" aria-labelledby={`${id}-label`} className="flex flex-wrap gap-1.5">
       {VOICE_LANGUAGES.map(opt => (
         <button
           key={opt.id}

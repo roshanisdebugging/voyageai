@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from voice import pages
 from voice.lang import detect_lang
+from voice.languages import tkey
 from voice.text_utils import canon, is_devanagari_letter, normalize_text as tu_normalize, words as tu_words
 
 logger = logging.getLogger("voice")
@@ -39,16 +40,20 @@ FALLBACK_REPLY = "Abhi samajh nahi paaya, phir se boliye."
 # voice language (voice/languages.py). "auto" keeps them in Hinglish as before.
 FALLBACK_REPLY_EN = "Sorry, I didn't get that. Please say it again."
 UNCLEAR_REPLY_EN = "Sorry, I didn't catch that. Please say it again."
+FALLBACK_REPLY_BN = "দুঃখিত, বুঝতে পারলাম না। আবার বলুন।"
+# A chosen language's version of the Hinglish-only lines (Bengali's unclear line is UNCLEAR_REPLY["bn"]).
+FALLBACK_BY_LANG = {"en": FALLBACK_REPLY_EN, "bn": FALLBACK_REPLY_BN}
 # The AI service is limited or down: say "try again later" (not "I didn't understand"), in the user's language.
 TRY_LATER_REPLY = {"hi": "Abhi jawab nahi de paa raha, thodi der baad phir try karein.",
-                   "en": "I can't answer right now, please try again in a little while."}
+                   "en": "I can't answer right now, please try again in a little while.", "bn": "এখন উত্তর দিতে পারছি না, একটু পরে আবার চেষ্টা করুন।"}
 
 # Garbled words have no reliable language, so "unclear" is always said in Hinglish (fixes-before-step4 item 6).
-UNCLEAR_REPLY = {"hi": "Samajh nahi aaya, phir se boliye.", "en": "Samajh nahi aaya, phir se boliye."}
-DECLINE_REPLY = {"hi": "Main sirf aapki trip mein madad kar sakta hoon.", "en": "I can only help with your trip."}
-OK_NO_REPLY = {"hi": "Theek hai.", "en": "Okay."}
+UNCLEAR_REPLY = {"hi": "Samajh nahi aaya, phir se boliye.", "en": "Samajh nahi aaya, phir se boliye.",
+                 "bn": "বুঝতে পারলাম না, আবার বলুন।"}
+DECLINE_REPLY = {"hi": "Main sirf aapki trip mein madad kar sakta hoon.", "en": "I can only help with your trip.", "bn": "আমি শুধু আপনার ট্রিপের ব্যাপারে সাহায্য করতে পারি।"}
+OK_NO_REPLY = {"hi": "Theek hai.", "en": "Okay.", "bn": "ঠিক আছে।"}
 ANSWER_FAILED = {"hi": "Abhi jawab nahi mil paaya, thodi der mein phir poochhiye.",
-                 "en": "I couldn't get an answer right now, please ask again in a moment."}
+                 "en": "I couldn't get an answer right now, please ask again in a moment.", "bn": "এখন উত্তর পাওয়া গেল না, একটু পরে আবার জিজ্ঞেস করুন।"}
 
 SYSTEM_PROMPT = """You are VoyageAI's voice assistant inside a travel app for Indian users.
 
@@ -551,6 +556,17 @@ _NO_CORE.update(canon(w) for w in _NO_HI_CORE)
 # First word that cancels a trip draft ("cancel karo", "रद्द करो", "कैंसल").
 _CANCEL_FIRST_WORDS = {canon("कैंसल"), canon("रद्द")}
 
+# Bengali (beta, feat/bengali): the same rule (every word a yes / no word, at least one core word), own lists.
+_YES_BN_CORE = {"হ্যাঁ", "হ্যা", "হাঁ", "হুঁ", "ঠিক", "সঠিক", "অবশ্যই", "নিশ্চয়ই", "ওকে", "ইয়েস", "কনফার্ম", "দেখাও", "দেখান"}
+_YES_BN = _YES_BN_CORE | {"আছে", "করুন", "করো", "দিন", "দাও", "প্লিজ", "একদম"}
+_NO_BN_CORE = {"না", "নাহ", "নো", "বাতিল", "থাক", "ক্যানসেল", "নেই"}
+_NO_BN = _NO_BN_CORE | {"দরকার", "ভুল", "করুন", "করো", "দিন", "দাও", "ধন্যবাদ", "থাকুক", "নয়"}
+_YES.update(canon(w) for w in _YES_BN)
+_YES_CORE.update(canon(w) for w in _YES_BN_CORE)
+_NO.update(canon(w) for w in _NO_BN)
+_NO_CORE.update(canon(w) for w in _NO_BN_CORE)
+_CANCEL_FIRST_WORDS |= {canon("বাতিল"), canon("ক্যানসেল")}
+
 
 def yes_or_no(text: str) -> Optional[str]:
     words = tu_words(text)
@@ -569,7 +585,9 @@ def yes_or_no(text: str) -> Optional[str]:
 _PLAN_START = {canon(w) for w in ("shuru", "suru", "start", "karo", "karein", "karen", "kare", "kariye", "kijiye",
                                   "kar", "do", "ji", "please", "isse", "ise", "yahi", "plan", "se",
                                   "शुरू", "करो", "करें", "करे", "करिए", "करिये", "कीजिए", "कीजिये", "कर",
-                                  "इससे", "इसे", "यही", "प्लान", "से", "जी")}
+                                  "इससे", "इसे", "यही", "प्लान", "से", "जी",
+                                  # Bengali (beta)
+                                  "শুরু", "করুন", "করো", "এটা", "এটাই", "দিয়ে", "প্ল্যান", "থেকে")}
 
 
 def plan_offer_yes(text: str) -> bool:
@@ -589,13 +607,16 @@ _ORIGIN_SKIP_PHRASES = [tuple(tu_words(p)) for p in (
     "pata nahi", "pata nahin", "pata nai", "nahi pata", "nahin pata", "nai pata", "maloom nahi", "malum nahi",
     "nahi maloom", "chhodo", "chodo", "chhod do", "chod do", "chhodiye", "chodiye", "skip", "abhi nahi", "abhi nahin",
     "baad mein", "don't know", "dont know", "do not know", "no idea", "not sure", "पता नहीं", "नहीं पता", "मालूम नहीं",
-    "नहीं मालूम", "छोड़ो", "छोड़ दो", "छोड़िए", "छोड़िये", "अभी नहीं", "बाद में", "स्किप")]
+    "नहीं मालूम", "छोड़ो", "छोड़ दो", "छोड़िए", "छोड़िये", "अभी नहीं", "बाद में", "स्किप",
+    # Bengali (beta)
+    "জানি না", "জানিনা", "জানা নেই", "বলতে পারব না", "বাদ দিন", "বাদ দাও", "থাক", "স্কিপ", "এখন না", "পরে")]
 _ORIGIN_PATA = {canon("pata"), canon("पता")}                 # "पता।" alone: speech-to-text cut "पता नहीं" short
 _ORIGIN_KOI = {canon("koi"), canon("कोई")}                   # "koi starting city nahi hai"
 _ORIGIN_NAHI = {canon("nahi"), canon("nahin"), canon("नहीं")}
 _ORIGIN_START = {canon(w) for w in ("kahan", "kahaan", "kaha", "starting", "start", "shuru", "suru", "origin", "from",
-                                    "कहां", "कहा", "शुरू", "शुरु", "स्टार्टिंग")}
-_ORIGIN_WHEN = {canon(w) for w in ("kab", "when", "date", "tareekh", "tarikh", "कब", "तारीख")}
+                                    "कहां", "कहा", "शुरू", "शुरु", "स्टार्टिंग",
+                                    "কোথা", "কোথায়", "কোথাকার", "শুরু")}           # Bengali (beta)
+_ORIGIN_WHEN = {canon(w) for w in ("kab", "when", "date", "tareekh", "tarikh", "कब", "तारीख", "কবে", "তারিখ")}
 _ORIGIN_SKIP_FILLER = {canon(w) for w in (
     "mujhe", "muje", "abhi", "karo", "kar", "karein", "do", "dijiye", "ji", "i", "it", "please", "yaar", "toh", "to",
     "bhi", "hai", "ye", "yeh", "isko", "city", "sorry", "maine", "main", "mai", "bola", "boli", "kaha", "se", "jaunga",
@@ -603,7 +624,9 @@ _ORIGIN_SKIP_FILLER = {canon(w) for w in (
     "we", "will", "the", "a", "shahar", "jagah", "ka", "ki", "ke", "pata",
     "मुझे", "करो", "कर", "करें", "दो", "दीजिए", "जी", "है", "भी", "तो", "यह", "इसे", "मैंने", "मैं", "बोला", "बोली", "कहा",
     "से", "जाऊंगा", "जाऊंगी", "जाना", "जाएंगे", "जायेंगे", "होगा", "कोई", "कुछ", "नहीं", "शहर", "जगह", "का", "की", "के",
-    "यार", "पता")} | _ORIGIN_START
+    "यार", "पता",
+    # Bengali (beta)
+    "আমি", "আমার", "তো", "থেকে", "যাব", "যাবো", "শহর", "জায়গা", "কোনো", "কিছু", "এখন", "ভাই", "আসলে", "সেটা")} | _ORIGIN_START
 
 
 def origin_skip_kind(text: str, origin_asked: bool) -> Optional[str]:
@@ -739,17 +762,17 @@ def _starts_cancel(transcript: str) -> bool:
 # ---------------- create a trip by voice (step 4)
 
 READY_REPLY = {"hi": "Sab details review page par hain. Check karke Proceed dabaiye, ya haan boliye.",
-               "en": "All details are on the review page. Check them and tap Proceed, or say yes."}
-CONFIRMED_REPLY = {"hi": "Trip bana raha hoon.", "en": "Creating your trip."}
-NOTHING_TO_CONFIRM = {"hi": "Abhi confirm karne ke liye kuch nahi hai.", "en": "There's nothing to confirm right now."}
-CANCELLED_REPLY = {"hi": "Theek hai, trip nahi banayi. Kuch save nahi hua.", "en": "Okay, no trip was created. Nothing was saved."}
-REPLACED_NOTE = {"hi": "Pichli trip ka draft hata diya.", "en": "I dropped the previous trip draft."}
-DATE_AGAIN = {"hi": "Theek hai, kab se kab tak jaana hai?", "en": "Okay, from which date to which date?"}
+               "en": "All details are on the review page. Check them and tap Proceed, or say yes.", "bn": "সব তথ্য রিভিউ পেজে আছে। দেখে নিয়ে Proceed চাপুন, অথবা হ্যাঁ বলুন।"}
+CONFIRMED_REPLY = {"hi": "Trip bana raha hoon.", "en": "Creating your trip.", "bn": "আপনার ট্রিপ বানাচ্ছি।"}
+NOTHING_TO_CONFIRM = {"hi": "Abhi confirm karne ke liye kuch nahi hai.", "en": "There's nothing to confirm right now.", "bn": "এখন কনফার্ম করার মতো কিছু নেই।"}
+CANCELLED_REPLY = {"hi": "Theek hai, trip nahi banayi. Kuch save nahi hua.", "en": "Okay, no trip was created. Nothing was saved.", "bn": "ঠিক আছে, ট্রিপ বানানো হলো না। কিছু সেভ হয়নি।"}
+REPLACED_NOTE = {"hi": "Pichli trip ka draft hata diya.", "en": "I dropped the previous trip draft.", "bn": "আগের ট্রিপের খসড়াটা বাদ দিলাম।"}
+DATE_AGAIN = {"hi": "Theek hai, kab se kab tak jaana hai?", "en": "Okay, from which date to which date?", "bn": "ঠিক আছে, কোন তারিখ থেকে কোন তারিখ পর্যন্ত?"}
 # Checked plans (pilgrimage cards): code decides when to offer; these are the fixed words.
 PLAN_OFFER = {"hi": "{name} ka ek checked plan hai. Isse shuru karein?",
-              "en": "There's a checked plan for {name}. Shall we start with it?"}
-PLAN_ACCEPTED = {"hi": "Theek hai, checked plan se banate hain.", "en": "Okay, we'll start from the checked plan."}
-PLAN_DECLINED = {"hi": "Theek hai.", "en": "Okay."}
+              "en": "There's a checked plan for {name}. Shall we start with it?", "bn": "{name}-এর একটা যাচাই করা প্ল্যান আছে। ওটা দিয়ে শুরু করব?"}
+PLAN_ACCEPTED = {"hi": "Theek hai, checked plan se banate hain.", "en": "Okay, we'll start from the checked plan.", "bn": "ঠিক আছে, যাচাই করা প্ল্যান দিয়েই বানাচ্ছি।"}
+PLAN_DECLINED = {"hi": "Theek hai.", "en": "Okay.", "bn": "ঠিক আছে।"}
 
 
 def _draft_today():
@@ -935,13 +958,14 @@ def update_draft(redis_conn, user_id: str, conversation_id: str, args: Dict[str,
         # Said only on the turn the destination is first set or changed (the model re-sends it on every update).
         # (not before "<origin> se <destination>, ...": that already names the destination)
         name = (res.draft.destination or {}).get("name", "")
-        length = f", {res.draft.days} din" if res.draft.days and lang != "en" else (f", {res.draft.days} days" if res.draft.days else "")
+        length = DAYS_LENGTH[tkey(lang)].format(n=res.draft.days) if res.draft.days else ""
         prefix = f"{name}{length}."
     prefix = f"{prefix} {origin_note} {area_note}".strip()
     return draft_next(redis_conn, user_id, conversation_id, res.draft, lang, prefix)
 
 
-ORIGIN_SKIPPED = {"hi": "Theek hai, starting city ke bina.", "en": "Okay, without a starting city."}
+DAYS_LENGTH = {"hi": ", {n} din", "en": ", {n} days", "bn": ", {n} দিন"}   # "Goa, 3 din." after a new destination
+ORIGIN_SKIPPED = {"hi": "Theek hai, starting city ke bina.", "en": "Okay, without a starting city.", "bn": "ঠিক আছে, কোথা থেকে যাচ্ছেন সেটা ছাড়াই।"}
 
 
 def skip_origin(redis_conn, user_id: str, conversation_id: str, d, lang: str) -> AgentResult:
@@ -1035,9 +1059,9 @@ def answer_plan_offer(redis_conn, user_id: str, conversation_id: str, d, said: O
 
 # A pending item was found and used ("smart_failed": it ran and the service failed; nothing changed).
 CONFIRMED_ACTIONS = {"trip_confirm", "expense_added", "regen_queued", "smart_applied", "smart_failed"}
-NOTHING_CHANGED = {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing changed."}
+NOTHING_CHANGED = {"hi": "Theek hai, kuch nahi badla.", "en": "Okay, nothing changed.", "bn": "ঠিক আছে, কিছু বদলানো হয়নি।"}
 DELETE_REPLY = {"hi": "Trip delete karne ke liye button khud dabaiye, dhyan se.",
-                "en": "To delete a trip, please tap the delete button yourself, carefully."}
+                "en": "To delete a trip, please tap the delete button yourself, carefully.", "bn": "ট্রিপ মুছতে হলে ডিলিট বোতামটা নিজে সাবধানে চাপুন।"}
 
 
 def confirm_pending(redis_conn, user_id: str, conversation_id: str, lang: str, pending_id: Optional[str] = None,
@@ -1083,10 +1107,18 @@ _DELETE_WORDS = re.compile(r"\b(delete|del|remove|hatao|hata|hatado|mitao|mita|m
 _TRIP_WORDS = re.compile(r"\b(trip|trips|yatra|safar|plan|itinerary)\b")
 
 
+_DELETE_WORDS_BN = {canon(w) for w in ("মুছে", "মুছুন", "মোছো", "মুছে", "ডিলিট", "সরাও", "সরান", "সরিয়ে")}   # Bengali (beta)
+_TRIP_WORDS_BN = {canon(w) for w in ("ট্রিপ", "ট্রিপটা", "ট্রিপটি", "যাত্রা", "প্ল্যান", "ইটিনেরারি")}
+_SAVE_WORDS_BN = {canon(w) for w in ("সেভ", "সেভড")}
+
+
 def is_delete_request(text: str) -> bool:
     """'meri trip delete karo': answered by code, never by a tool. (Removing a SAVED place is unsave_place.)"""
     t = (text or "").lower()
-    return bool(_DELETE_WORDS.search(t) and _TRIP_WORDS.search(t) and "save" not in t)
+    if _DELETE_WORDS.search(t) and _TRIP_WORDS.search(t) and "save" not in t:
+        return True
+    ws = set(tu_words(text))      # Bengali ("আমার ট্রিপ মুছে দিন"): whole words
+    return bool(ws & _DELETE_WORDS_BN and ws & _TRIP_WORDS_BN and not ws & _SAVE_WORDS_BN)
 
 
 def delete_refused(lang: str) -> AgentResult:
@@ -1286,18 +1318,22 @@ def _decide(tool_calls: List[Dict[str, Any]], content: Optional[str], lang: str,
 
 # ---------------- a bare acknowledgement with nothing open (BR-1006)
 
-ACK_REPLY = {"hi": "Theek hai.", "en": "Okay."}
+ACK_REPLY = {"hi": "Theek hai.", "en": "Okay.", "bn": "ঠিক আছে।"}
 _ACK_MAX_WORDS = 6
 _THANKS_WORDS = {canon(w) for w in (
     "dhanyavaad", "dhanyavad", "dhanyawad", "dhanyawaad", "shukriya", "sukriya", "thanks", "thank", "thankyou", "you",
     "u", "ok", "okay", "accha", "acha", "achha", "theek", "thik", "hai", "chalo", "bas", "ji", "haan", "han", "bhai",
     "sir", "bahut", "very", "much", "so", "great", "nice", "good", "badhiya", "perfect", "done", "cool", "fine",
     "धन्यवाद", "शुक्रिया", "थैंक", "थैंक्स", "यू", "ओके", "अच्छा", "ठीक", "है", "चलो", "बस", "जी", "हां", "भाई", "बहुत",
-    "बढ़िया", "बढिया")}
+    "बढ़िया", "बढिया",
+    # Bengali (beta)
+    "ধন্যবাদ", "থ্যাংক", "থ্যাংকস", "থ্যাঙ্কস", "ঠিক", "আছে", "আচ্ছা", "ওকে", "হ্যাঁ", "বাহ", "দারুণ", "খুব", "ভালো",
+    "চলো", "বেশ", "ভাই", "দাদা")}
 # Words that make a short sentence a request, not a thank-you ("trip bana do", "shuru karo"): it goes to the model.
 _REQUEST_WORDS = {canon(w) for w in (
     "bana", "banao", "banaiye", "karo", "kar", "kijiye", "shuru", "proceed", "confirm", "trip", "plan", "book", "booking",
-    "बना", "बनाओ", "बनाइए", "करो", "कर", "कीजिए", "शुरू", "कन्फर्म", "ट्रिप", "प्लान", "बुक", "बुकिंग")}
+    "बना", "बनाओ", "बनाइए", "करो", "कर", "कीजिए", "शुरू", "कन्फर्म", "ट्रिप", "प्लान", "बुक", "बुकिंग",
+    "বানাও", "বানান", "বানিয়ে", "করো", "করুন", "শুরু", "কনফার্ম", "ট্রিপ", "প্ল্যান", "বুক", "বুকিং")}   # Bengali (beta)
 
 
 def is_acknowledgement(text: str) -> bool:
@@ -1319,7 +1355,7 @@ EDIT_UNSUPPORTED_REPLY = {
     "hi": "Voice se trip ke andar badlav abhi nahi ho paata. Trip screen par Swap ya Optimize Day button se badal "
           "sakte hain, map se jagah Add to Itinerary kar sakte hain, ya main nayi trip bana sakta hoon.",
     "en": "I can't change an existing trip by voice yet. You can edit it on the trip screen with Swap or Optimize Day, "
-          "add a place from the map with Add to Itinerary, or I can plan a new trip.",
+          "add a place from the map with Add to Itinerary, or I can plan a new trip.", "bn": "ভয়েস দিয়ে এখনো তৈরি ট্রিপ বদলানো যায় না। ট্রিপ স্ক্রিনে Swap বা Optimize Day দিয়ে বদলাতে পারেন, ম্যাপ থেকে Add to Itinerary দিয়ে জায়গা যোগ করতে পারেন, নয়তো আমি নতুন ট্রিপ বানাতে পারি।",
 }
 _EDIT_WORDS = {canon(w) for w in (
     "add", "added", "adding", "jod", "jodo", "jodna", "jodiye", "jod", "badal", "badlo", "badalna", "badaliye", "badlna",
@@ -1492,7 +1528,7 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     elif answer_to_pending == "yes":
         # "Taj Mahal kahan hai?" -> "... Map par dikhaun?" -> "haan": run the kept map actions, no LLM call.
         name = next((a.get("name") for a in pending if a.get("type") == "map_focus"), "")
-        result = AgentResult({"hi": f"{name}: map par dikha diya.", "en": f"Showing {name} on the map."}[lang],
+        result = AgentResult({"hi": f"{name}: map par dikha diya.", "en": f"Showing {name} on the map.", "bn": f"{name} ম্যাপে দেখাচ্ছি।"}[lang],
                              ui_actions=pending, action="map_focus")
     elif answer_to_pending == "no":
         result = AgentResult(OK_NO_REPLY[lang], action="reply")
@@ -1558,6 +1594,8 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     if forced == "en":    # the Hinglish-only lines, in English for a user who chose English
         result.reply_text = {FALLBACK_REPLY: FALLBACK_REPLY_EN, UNCLEAR_REPLY["en"]: UNCLEAR_REPLY_EN}.get(
             result.reply_text, result.reply_text)
+    elif forced == "bn" and result.reply_text == FALLBACK_REPLY:
+        result.reply_text = FALLBACK_REPLY_BN
     ended = time.perf_counter()
     result.llm_ms = int(((llm_done or ended) - started) * 1000) if used_llm else 0
     result.tool_ms = int((ended - llm_done) * 1000) if llm_done else (0 if used_llm else int((ended - started) * 1000))

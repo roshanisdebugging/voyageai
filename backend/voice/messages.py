@@ -4,7 +4,7 @@ Message shapes for /ws/voice, in one place.
 App -> server (text frames, JSON):
   {"type": "auth", "token": "..."}                       only when the login cookie isn't sent
   {"type": "start", "conversation_id": "...", "screen": "/trip", "trip_id": "..." | null,
-   "language": "auto" | "hi" | "en"}   the user's voice language (voice/languages.py; unknown -> "auto")
+   "language": "auto" | "hi" | "en" | "bn"}   the user's voice language (voice/languages.py; unknown -> "auto")
                                                           trip_id is ownership-checked; not yours = none
   {"type": "stop"}
   {"type": "end_session"}

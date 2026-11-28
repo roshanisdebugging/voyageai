@@ -24,10 +24,11 @@ globalThis.CustomEvent = class { constructor(type, init) { this.type = type; thi
 
 const V = await loadTs(join(src, 'voice', 'voiceLanguage.ts'));
 
-check('options: Auto, हिन्दी, English (in that order)', JSON.stringify(V.VOICE_LANGUAGES.map(o => [o.id, o.label]))
-  === JSON.stringify([['auto', 'Auto'], ['hi', 'हिन्दी'], ['en', 'English']]));
+check('options: Auto, हिन्दी, English, বাংলা (in that order)', JSON.stringify(V.VOICE_LANGUAGES.map(o => [o.id, o.label]))
+  === JSON.stringify([['auto', 'Auto'], ['hi', 'हिन्दी'], ['en', 'English'], ['bn', 'বাংলা']]));
+check('mic chip labels: Auto / हि / EN / বা', V.VOICE_LANGUAGES.map(o => o.short).join(' / ') === 'Auto / हि / EN / বা');
 check('default: auto', V.getVoiceLanguage() === 'auto');
-for (const [raw, want] of [['hi', 'hi'], ['en', 'en'], ['auto', 'auto'], ['fr', 'auto'], ['', 'auto'], [null, 'auto'], [7, 'auto'], ['HI', 'auto']]) {
+for (const [raw, want] of [['hi', 'hi'], ['en', 'en'], ['bn', 'bn'], ['auto', 'auto'], ['fr', 'auto'], ['', 'auto'], [null, 'auto'], [7, 'auto'], ['HI', 'auto']]) {
   check(`sanitize ${JSON.stringify(raw)} -> ${want}`, V.sanitizeVoiceLanguage(raw) === want);
 }
 check('set hi: stored under cruiser_voice_language', V.setVoiceLanguage('hi') === 'hi' && store.getItem('cruiser_voice_language') === 'hi');
@@ -35,8 +36,8 @@ check('set hi: a change event for the other selector', events.at(-1)?.type === V
 check('read back: hi', V.getVoiceLanguage() === 'hi');
 check('a tampered stored value reads as auto', (store.setItem('cruiser_voice_language', 'klingon'), V.getVoiceLanguage() === 'auto'));
 V.setVoiceLanguage('en');
-check('mic control cycles Auto -> हिन्दी -> English -> Auto', V.nextVoiceLanguage('auto') === 'hi' && V.nextVoiceLanguage('hi') === 'en'
-  && V.nextVoiceLanguage('en') === 'auto');
+check('mic control cycles Auto -> हि -> EN -> বা -> Auto', V.nextVoiceLanguage('auto') === 'hi' && V.nextVoiceLanguage('hi') === 'en'
+  && V.nextVoiceLanguage('en') === 'bn' && V.nextVoiceLanguage('bn') === 'auto');
 const broken = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
 check('blocked storage: the choice still works for this page (memory)', V.setVoiceLanguage('hi', broken) === 'hi'
   && V.getVoiceLanguage(broken) === 'hi');
@@ -68,6 +69,9 @@ S.voiceSocket.confirm('conv1', 'p1', null);
 S.voiceSocket.cancel('conv1', 'p1');
 check('confirm and cancel carry it too', sent.at(-2)?.type === 'confirm' && sent.at(-2)?.language === 'hi'
   && sent.at(-1)?.type === 'cancel' && sent.at(-1)?.language === 'hi');
+store.setItem('cruiser_voice_language', 'bn');
+S.voiceSocket.start('conv1', '/home', null, null, null);
+check('Bengali: start carries "bn"', sent.at(-1)?.language === 'bn', JSON.stringify(sent.at(-1)));
 store.setItem('cruiser_voice_language', 'auto');
 S.voiceSocket.start('conv1', '/home', null, null, null);
 check('auto is sent as "auto" (the server keeps the old behaviour)', sent.at(-1)?.language === 'auto');

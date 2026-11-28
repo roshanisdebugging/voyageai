@@ -23,6 +23,10 @@ DEFAULT_STT_MODEL = "gpt-transcribe"
 # Nudges the model towards romanized Hinglish spellings for travel talk. Not a translation instruction.
 DEFAULT_HINGLISH_PROMPT = "Namaste. Mujhe Delhi se Jaipur jaana hai, 3 din ke liye, budget 20 hazaar. Itinerary dikhao."
 
+# The spelling hint for a chosen voice language whose speech isn't Hinglish (voice/languages.py); Bengali (beta).
+LANGUAGE_PROMPTS = {"bn": "নমস্কার। আমি কলকাতা থেকে দার্জিলিং যেতে চাই, 3 দিনের জন্য, বাজেট 20 হাজার। ইটিনেরারি দেখান।"}
+
+
 def active_prompts() -> List[str]:
     """Every spelling hint sent to speech-to-text (today one: VOICE_STT_PROMPT or the built-in Hinglish hint)."""
     prompt = os.getenv("VOICE_STT_PROMPT", DEFAULT_HINGLISH_PROMPT)
@@ -55,7 +59,7 @@ def is_prompt_echo(text: str, prompts: Optional[List[str]] = None) -> bool:
     said = words(text)
     if not said:
         return False
-    for prompt in (active_prompts() if prompts is None else prompts):
+    for prompt in ((active_prompts() + list(LANGUAGE_PROMPTS.values())) if prompts is None else prompts):
         hint = words(prompt)
         if not hint:
             continue
@@ -130,6 +134,8 @@ class OpenAITranscribeSTT:
         if not api_key:
             raise STTError("OPENAI_API_KEY is not set")
         prompt = (active_prompts() or [""])[0]
+        if languages and len(languages) == 1 and languages[0] in LANGUAGE_PROMPTS:
+            prompt = LANGUAGE_PROMPTS[languages[0]]      # pinned to Bengali: a Bengali hint, not the Hinglish one
         # A list of tuples so `languages[]` can repeat. gpt-transcribe takes `languages[]`, never `language`.
         data = [("model", self.model)]
         if prompt:

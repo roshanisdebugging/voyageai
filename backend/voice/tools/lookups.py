@@ -19,6 +19,9 @@ from datetime import date
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from voice.bn_words import BN_MONTHS
+from voice.languages import AND_WORD, OR_WORD, screen_lang, tkey
+
 MONTHS_EN = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
              "October", "November", "December"]
 MONTH_ALIASES = {m.lower(): i + 1 for i, m in enumerate(MONTHS_EN)}
@@ -44,7 +47,7 @@ class ToolResult:
 
 # ---------------- search a place on the map
 
-MAPS_UNAVAILABLE = {"hi": "Map search abhi available nahi hai.", "en": "Map search isn't available right now."}
+MAPS_UNAVAILABLE = {"hi": "Map search abhi available nahi hai.", "en": "Map search isn't available right now.", "bn": "ম্যাপ সার্চ এখন পাওয়া যাচ্ছে না।"}
 
 
 INDIAN_STATES = {
@@ -117,9 +120,9 @@ def _choice_reply(choices: List[Dict[str, Any]], lang: str) -> str:
     """'Charminar ya Masjid Char Minar?' (city added only when two names are the same)."""
     names = [str(c.get("name") or "").strip().lower() for c in choices]
     labels = [_label(c, names.count(n) > 1) for c, n in zip(choices, names)]
-    sep = " ya " if lang == "hi" else " or "
+    sep = OR_WORD[tkey(lang)]
     joined = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + sep + labels[-1]
-    return {"hi": f"{joined}?", "en": f"Did you mean {joined}?"}[lang]
+    return {"hi": f"{joined}?", "en": f"Did you mean {joined}?", "bn": f"আপনি কি {joined} বলছেন?"}[lang]
 
 
 def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> ToolResult:
@@ -130,14 +133,14 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     """
     q = (query or "").strip()[:120]
     if len(q) < 2:
-        return ToolResult({"hi": "Kaunsi jagah?", "en": "Which place?"}[lang], action="reply", error_code="no_query")
+        return ToolResult({"hi": "Kaunsi jagah?", "en": "Which place?", "bn": "কোন জায়গা?"}[lang], action="reply", error_code="no_query")
     found = search(q, search_fn)
     calls = found.google_calls
     if found.unavailable:
         return ToolResult(MAPS_UNAVAILABLE[lang], action="map_unavailable", error_code="maps_unavailable",
                           google_calls=calls)
     if not found.results:
-        return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place."}[lang],
+        return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place.", "bn": "জায়গাটা খুঁজে পেলাম না।"}[lang],
                           action="map_focus_none", error_code="not_found", google_calls=calls)
     if found.ambiguous and len(found.choices) > 1:
         # Never pick a shop, or one of two equally likely landmarks, by default: ask a short choice.
@@ -159,12 +162,12 @@ def search_place(query: str, lang: str, show: bool = True, search_fn=None) -> To
     found = {"place_id": focus.get("place_id"), "name": name, "address": ", ".join(x for x in (city, state) if x)}
     if show:
         label = f"{name}, {city}" if city and city.lower() != name.lower() else name
-        reply = {"hi": f"{label}: map par dikha diya.", "en": f"Showing {label} on the map."}[lang]
+        reply = {"hi": f"{label}: map par dikha diya.", "en": f"Showing {label} on the map.", "bn": f"{label} ম্যাপে দেখাচ্ছি।"}[lang]
         return ToolResult(reply, ui_actions=actions, action="map_focus", google_calls=calls, place=place_info)
     if where:
-        reply = {"hi": f"{name} {where} mein hai. Map par dikhaun?", "en": f"{name} is in {where}. Shall I show it on the map?"}[lang]
+        reply = {"hi": f"{name} {where} mein hai. Map par dikhaun?", "en": f"{name} is in {where}. Shall I show it on the map?", "bn": f"{name} {where}-এ আছে। ম্যাপে দেখাব?"}[lang]
     else:
-        reply = {"hi": f"{name} mil gaya. Map par dikhaun?", "en": f"I found {name}. Shall I show it on the map?"}[lang]
+        reply = {"hi": f"{name} mil gaya. Map par dikhaun?", "en": f"I found {name}. Shall I show it on the map?", "bn": f"{name} পেয়েছি। ম্যাপে দেখাব?"}[lang]
     return ToolResult(reply, action="where", pending_actions=actions, google_calls=calls, place=place_info)
 
 
@@ -200,10 +203,21 @@ def rough_distance(meters: float, lang: str) -> str:
     """Straight-line distance for speech: "lagbhag 1.2 kilometer" / "lagbhag 400 meter" / "about 1.2 km"."""
     if meters < 1000:
         m = max(50, int(round(meters / 50.0) * 50))
-        return {"hi": f"lagbhag {m} meter", "en": f"about {m} metres"}[lang]
+        return {"hi": f"lagbhag {m} meter", "en": f"about {m} metres", "bn": f"প্রায় {m} মিটার"}[lang]
     km = meters / 1000.0
     txt = f"{km:.1f}".rstrip("0").rstrip(".") if km < 10 else str(round(km))
-    return {"hi": f"lagbhag {txt} kilometer", "en": f"about {txt} km"}[lang]
+    return {"hi": f"lagbhag {txt} kilometer", "en": f"about {txt} km", "bn": f"প্রায় {txt} কিলোমিটার"}[lang]
+
+
+# search_nearby's spoken lines. {where}: WHERE_NEAR / WHERE_HERE; {Where} / {Plural}: the same, first letter upper.
+WHERE_NEAR = {"hi": "{spoken} ke paas", "en": "near {spoken}", "bn": "{spoken}-এর কাছে"}
+WHERE_HERE = {"hi": "aapke aaspas", "en": "around you", "bn": "আপনার আশেপাশে"}
+NEARBY_NONE = {"hi": "{Where} koi {plural} nahi mile.", "en": "I couldn't find {plural} {where}.",
+               "bn": "{where} কোনো {plural} পেলাম না।"}
+NEARBY_TITLE = {"hi": "{Where} {plural}", "en": "{Plural} {where}"}          # on screen (hi / en only)
+NEARBY_FOUND = {"hi": "{Where} ye {plural} mile: {names}. Map par dikha diye.",
+                "en": "{Plural} {where}: {names}. Showing them on the map.",
+                "bn": "{where} এই {Plural} পেলাম: {names}। ম্যাপে দেখাচ্ছি।"}
 
 
 def rank_for_speech(results: List[Dict[str, Any]], origin: Optional[Tuple[float, float]], match_types) -> List[Dict[str, Any]]:
@@ -241,7 +255,7 @@ def search_nearby(category: Optional[str], near: Optional[str], lang: str, *, ne
     cat = (category or "").strip()[:60]
     if len(cat) < 2:
         return ToolResult({"hi": "Kya dhoondhun? Jaise restaurant, cafe ya hotel.",
-                           "en": "What should I look for? A restaurant, cafe or hotel?"}[lang],
+                           "en": "What should I look for? A restaurant, cafe or hotel?", "bn": "কী খুঁজব? রেস্টুরেন্ট, ক্যাফে নাকি হোটেল?"}[lang],
                           action="reply", error_code="no_category")
     near_q = (near or "").strip()[:100] or None
     if near_q and _norm_words(near_q) in NEAR_ME_WORDS:
@@ -255,24 +269,25 @@ def search_nearby(category: Optional[str], near: Optional[str], lang: str, *, ne
         speech_origin = None                   # X's own position isn't known without a second call
     else:
         if not device:
-            return ToolResult({"hi": "Kahan ke paas dekhun?", "en": "Near which place should I look?"}[lang],
+            return ToolResult({"hi": "Kahan ke paas dekhun?", "en": "Near which place should I look?", "bn": "কোন জায়গার কাছে খুঁজব?"}[lang],
                               action="reply", error_code="no_area")
         found = (search_fn or places.search_category)(cat, near=None, area=None, bias=device,
                                                       bias_radius_m=places.NEAR_BIAS_RADIUS_M)
         speech_origin = device
     calls = found.google_calls
     gtype, match, plural = places.category_info(cat)
+    k = tkey(lang)
     if near_q:
         spoken = _spoken_near(near_q, found.results)
-        where_hi, where_en = f"{spoken} ke paas", f"near {spoken}"
+        where = WHERE_NEAR[k].format(spoken=spoken)
     else:
-        where_hi, where_en = "aapke aaspas", "around you"
+        where = WHERE_HERE[k]
+    Where, Plural = where[:1].upper() + where[1:], plural[:1].upper() + plural[1:]
     if found.unavailable:
         return ToolResult(MAPS_UNAVAILABLE[lang], action="map_unavailable", error_code="maps_unavailable",
                           google_calls=calls)
     if not found.results:
-        return ToolResult({"hi": f"{where_hi[:1].upper()}{where_hi[1:]} koi {plural} nahi mile.",
-                           "en": f"I couldn't find {plural} {where_en}."}[lang],
+        return ToolResult(NEARBY_NONE[k].format(Where=Where, where=where, plural=plural),
                           action="nearby_none", error_code="not_found", google_calls=calls)
     ranked = rank_for_speech(list(found.results), speech_origin, match)
     shown = []
@@ -288,7 +303,11 @@ def search_nearby(category: Optional[str], near: Optional[str], lang: str, *, ne
         if address:
             item["address"] = str(address)[:200]
         shown.append(item)
-    title = {"hi": f"{where_hi[:1].upper()}{where_hi[1:]} {plural}", "en": f"{plural[:1].upper()}{plural[1:]} {where_en}"}[lang][:80]
+    # the map panel's title is on screen: English for Bengali (the app's written screens are English)
+    sk = screen_lang(lang)
+    s_where = WHERE_NEAR[sk].format(spoken=spoken) if near_q else WHERE_HERE[sk]
+    title = NEARBY_TITLE[sk].format(Where=s_where[:1].upper() + s_where[1:], where=s_where, plural=plural,
+                                    Plural=Plural)[:80]
     actions = [{"type": "map_results", "title": title, "places": shown}, {"type": "navigate", "to": "/map"}]
     spoken_items = []
     for r in ranked[:NEARBY_SPOKEN]:
@@ -298,8 +317,7 @@ def search_nearby(category: Optional[str], near: Optional[str], lang: str, *, ne
         spoken_items.append(name)
     sep = "; " if speech_origin else ", "
     names = sep.join(spoken_items)
-    reply = {"hi": f"{where_hi[:1].upper()}{where_hi[1:]} ye {plural} mile: {names}. Map par dikha diye.",
-             "en": f"{plural[:1].upper()}{plural[1:]} {where_en}: {names}. Showing them on the map."}[lang]
+    reply = NEARBY_FOUND[k].format(Where=Where, where=where, plural=plural, Plural=Plural, names=names)
     return ToolResult(reply, ui_actions=actions, action="map_results", google_calls=calls)
 
 
@@ -318,8 +336,19 @@ TRAVEL_MODES = {"drive": "drive", "car": "drive", "cab": "drive", "taxi": "drive
                 "two_wheeler": "two_wheeler", "bike": "two_wheeler", "scooty": "two_wheeler", "scooter": "two_wheeler",
                 "walk": "walk", "walking": "walk", "paidal": "walk"}
 MODE_WORDS = {"hi": {"drive": "car se", "two_wheeler": "bike se", "walk": "paidal"},
-              "en": {"drive": "by car", "two_wheeler": "by bike", "walk": "on foot"}}
-ROUTE_UNAVAILABLE = {"hi": "Route abhi available nahi hai.", "en": "Routes aren't available right now."}
+              "en": {"drive": "by car", "two_wheeler": "by bike", "walk": "on foot"},
+              "bn": {'drive': "গাড়িতে",
+                     'two_wheeler': "বাইকে",
+                     'walk': "হেঁটে"}}
+ROUTE_UNAVAILABLE = {"hi": "Route abhi available nahi hai.", "en": "Routes aren't available right now.", "bn": "রুট এখন পাওয়া যাচ্ছে না।"}
+
+
+ROUTE_NONE_STRAIGHT = {"hi": "{unavailable} Seedhi doori {straight} hai.",
+                       "en": "{unavailable} In a straight line it's {straight}.",
+                       "bn": "{unavailable} সোজাসুজি দূরত্ব {straight}।"}
+TRAVEL_REPLY = {"hi": "{name} aapki location se {dist} hai, {words} {dur}.",
+                "en": "{name} is {dist} from your location, {dur} {words}.",
+                "bn": "{name} আপনার লোকেশন থেকে {dist}, {words} {dur} লাগবে।"}
 
 
 def travel_mode(raw: Any) -> str:
@@ -341,6 +370,8 @@ def spoken_duration(seconds: float, lang: str) -> str:
     if lang == "hi":
         hours = f"{h} ghanta" if h == 1 else f"{h} ghante"
         return f"{mins} minute" if not h else (hours + (f" {m} minute" if m else ""))
+    if lang == "bn":
+        return f"{mins} মিনিট" if not h else (f"{h} ঘণ্টা" + (f" {m} মিনিট" if m else ""))
     if not h:
         return f"{mins} minute" + ("s" if mins != 1 else "")
     return f"{h} hour" + ("s" if h != 1 else "") + (f" {m} minute" + ("s" if m != 1 else "") if m else "")
@@ -351,7 +382,7 @@ LOCATION_MAX_ACCURACY_M = 1000   # worse than this: not a usable origin
 HERE_M = 150                     # closer than this: "you're here", no route call
 FAR_AWAY_M = 300_000             # farther than this: straight-line only, no route call
 NO_LOCATION = {"hi": "Aapki location nahi mili, location on kijiye.",
-               "en": "I couldn't get your location. Please turn location on."}
+               "en": "I couldn't get your location. Please turn location on.", "bn": "আপনার লোকেশন পাওয়া গেল না। লোকেশন চালু করুন।"}
 
 
 def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optional[str] = None,
@@ -368,7 +399,7 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
     from services.routes_service import RouteNotFound, RouteUnavailable
     q = (place or "").strip()[:120]
     if len(q) < 2:
-        return ToolResult({"hi": "Kahan tak ki doori?", "en": "Distance to which place?"}[lang], action="reply", error_code="no_query")
+        return ToolResult({"hi": "Kahan tak ki doori?", "en": "Distance to which place?", "bn": "কোন জায়গা পর্যন্ত দূরত্ব?"}[lang], action="reply", error_code="no_query")
     if not origin:
         return ToolResult(NO_LOCATION[lang], action="travel_time", error_code="no_origin")
     o_lat, o_lng = float(origin[0]), float(origin[1])
@@ -378,7 +409,7 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
     if found.unavailable:
         return ToolResult(MAPS_UNAVAILABLE[lang], action="travel_time", error_code="maps_unavailable", google_calls=calls)
     if not found.results:
-        return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place."}[lang],
+        return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place.", "bn": "জায়গাটা খুঁজে পেলাম না।"}[lang],
                           action="travel_time", error_code="not_found", google_calls=calls)
     if found.ambiguous and len(found.choices) > 1:
         return ToolResult(_choice_reply(found.choices, lang), action="place_ask", error_code="ambiguous", google_calls=calls)
@@ -389,12 +420,12 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
     straight_m = haversine_meters(o_lat, o_lng, d_lat, d_lng)
     straight = spoken_distance(straight_m)
     if straight_m < HERE_M:
-        return ToolResult({"hi": f"Aap {name} par hi hain.", "en": f"You're at {name}."}[lang],
+        return ToolResult({"hi": f"Aap {name} par hi hain.", "en": f"You're at {name}.", "bn": f"আপনি {name}-এই আছেন।"}[lang],
                           action="travel_time", google_calls=calls)
     if straight_m > FAR_AWAY_M:
         km = round(straight_m / 1000)
         return ToolResult({"hi": f"Aap {name} se door hain, seedhi doori {km} km hai.",
-                           "en": f"You're far from {name}: {km} km in a straight line."}[lang],
+                           "en": f"You're far from {name}: {km} km in a straight line.", "bn": f"আপনি {name} থেকে অনেক দূরে, সোজাসুজি {km} কিলোমিটার।"}[lang],
                           action="travel_time", error_code="far_away", google_calls=calls)
 
     if route_fn is None:
@@ -406,21 +437,17 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
     try:
         route = route_fn(o_lat, o_lng, d_lat, d_lng, mode, user_id=user_id)
     except RouteUnavailable:
-        reply = {"hi": f"{ROUTE_UNAVAILABLE['hi']} Seedhi doori {straight} hai.",
-                 "en": f"{ROUTE_UNAVAILABLE['en']} In a straight line it's {straight}."}[lang]
+        reply = ROUTE_NONE_STRAIGHT[tkey(lang)].format(unavailable=ROUTE_UNAVAILABLE[tkey(lang)], straight=straight)
         return ToolResult(reply, action="travel_time", error_code="routes_unavailable", google_calls=calls)
     except (RouteNotFound, ValueError):
         reply = {"hi": f"Wahan tak ka route nahi mila. Seedhi doori {straight} hai.",
-                 "en": f"I couldn't find a route there. In a straight line it's {straight}."}[lang]
+                 "en": f"I couldn't find a route there. In a straight line it's {straight}.", "bn": f"ওখানে যাওয়ার রুট পেলাম না। সোজাসুজি দূরত্ব {straight}।"}[lang]
         return ToolResult(reply, action="travel_time", error_code="no_route", google_calls=calls)
     if calls is not None and not route.get("cached"):
         calls += 1
     dist, dur = spoken_distance(route["distance_m"]), spoken_duration(route["duration_s"], lang)
     words = MODE_WORDS[lang][mode]
-    if lang == "hi":
-        reply = f"{name} aapki location se {dist} hai, {words} {dur}."
-    else:
-        reply = f"{name} is {dist} from your location, {dur} {words}."
+    reply = TRAVEL_REPLY[tkey(lang)].format(name=name, dist=dist, words=words, dur=dur)
     # Google's route warning (walk / bike) goes on screen, not in the spoken reply.
     note = route.get("warning") if mode != "drive" else None
     return ToolResult(reply, action="travel_time", google_calls=calls, note=note,
@@ -429,7 +456,13 @@ def get_travel_time(place: Optional[str], mode: Any, lang: str, user_id: Optiona
 
 # ---------------- weather (Open-Meteo via weather_service)
 
-DAY_WORDS = {"today": 0, "aaj": 0, "tomorrow": 1, "kal": 1, "day_after_tomorrow": 2, "parso": 2, "parson": 2}
+DAY_WORDS = {"today": 0, "aaj": 0, "tomorrow": 1, "kal": 1, "day_after_tomorrow": 2, "parso": 2, "parson": 2,
+             "আজ": 0, "আজকে": 0, "কাল": 1, "কালকে": 1, "আগামীকাল": 1, "পরশু": 2, "পরশুদিন": 2}   # Bengali (beta)
+
+
+RAIN_CHANCE = {"hi": "baarish ka {p}% chance hai", "en": "{p}% chance of rain", "bn": "বৃষ্টির সম্ভাবনা {p}%"}
+TEMP_HIGH = {"hi": "high {t}°C", "en": "high {t}°C", "bn": "সর্বোচ্চ তাপমাত্রা {t}°C"}
+WEATHER_REPLY = {"hi": "{when} {name} mein {parts}.", "en": "{when} in {name}: {parts}.", "bn": "{when} {name}-এ {parts}।"}
 
 
 def resolve_day(day: Any, today: date) -> Optional[date]:
@@ -446,8 +479,18 @@ def resolve_day(day: Any, today: date) -> Optional[date]:
 
 def _day_words(d: date, today: date, lang: str) -> str:
     diff = (d - today).days
-    names = {"hi": {0: "Aaj", 1: "Kal", 2: "Parso"}, "en": {0: "Today", 1: "Tomorrow", 2: "The day after tomorrow"}}[lang]
-    return names.get(diff) or (f"{d.day} {MONTHS_EN[d.month - 1][:3]} ko" if lang == "hi" else f"On {d.day} {MONTHS_EN[d.month - 1][:3]}")
+    names = {"hi": {0: "Aaj", 1: "Kal", 2: "Parso"}, "en": {0: "Today", 1: "Tomorrow", 2: "The day after tomorrow"},
+                                                     "bn": {0: "আজ",
+                                                            1: "কাল",
+                                                            2: "পরশু"}}[lang]
+    if diff in names:
+        return names[diff]
+    k = tkey(lang)
+    mon = BN_MONTHS[d.month - 1] if k == "bn" else MONTHS_EN[d.month - 1][:3]
+    return DAY_ON[k].format(day=d.day, mon=mon)
+
+
+DAY_ON = {"hi": "{day} {mon} ko", "en": "On {day} {mon}", "bn": "{day} {mon}"}
 
 
 def _trip_destination(user_id: Optional[str], trip_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -476,9 +519,9 @@ def get_weather(place: Optional[str], day: Any, lang: str, user_id: Optional[str
     today = today_ist()
     the_day = resolve_day(day, today)
     if the_day is None or the_day < today:
-        return ToolResult({"hi": "Kis din ka mausam?", "en": "For which day?"}[lang], action="reply", error_code="bad_day")
+        return ToolResult({"hi": "Kis din ka mausam?", "en": "For which day?", "bn": "কোন দিনের জন্য?"}[lang], action="reply", error_code="bad_day")
     if (the_day - today).days >= 16:
-        return ToolResult({"hi": "Itne aage ka mausam abhi pata nahi hai.", "en": "There's no forecast that far ahead yet."}[lang],
+        return ToolResult({"hi": "Itne aage ka mausam abhi pata nahi hai.", "en": "There's no forecast that far ahead yet.", "bn": "এত দিন পরের আবহাওয়ার পূর্বাভাস এখনো নেই।"}[lang],
                           action="weather", error_code="too_far")
     target = None
     calls = None
@@ -492,12 +535,12 @@ def get_weather(place: Optional[str], day: Any, lang: str, user_id: Optional[str
             city, _ = city_state(hit)
             target = {"name": city or hit.get("name") or place.strip(), "latitude": hit["latitude"], "longitude": hit["longitude"]}
         else:
-            return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place."}[lang], action="weather",
+            return ToolResult({"hi": "Yeh jagah nahi mili.", "en": "I couldn't find that place.", "bn": "জায়গাটা খুঁজে পেলাম না।"}[lang], action="weather",
                               error_code="not_found", google_calls=calls)
     else:
         target = _trip_destination(user_id, trip_id)
     if not target:
-        return ToolResult({"hi": "Kis jagah ka mausam batau?", "en": "Weather for which place?"}[lang], action="reply", error_code="no_place")
+        return ToolResult({"hi": "Kis jagah ka mausam batau?", "en": "Weather for which place?", "bn": "কোন জায়গার আবহাওয়া?"}[lang], action="reply", error_code="no_place")
 
     if forecast_fn is None:
         from weather_service import get_trip_forecast as forecast_fn
@@ -507,21 +550,20 @@ def get_weather(place: Optional[str], day: Any, lang: str, user_id: Optional[str
     except Exception:
         d = None
     if not d:
-        return ToolResult({"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now."}[lang],
+        return ToolResult({"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now.", "bn": "এখন আবহাওয়ার খবর পাওয়া যাচ্ছে না।"}[lang],
                           action="weather", error_code="unavailable", google_calls=calls)
     when, name = _day_words(the_day, today, lang), target["name"]
     rain, hi_t = d.get("rainChancePercent"), d.get("tempMaxC")
-    parts_hi, parts_en = [], []
+    k = tkey(lang)
+    parts = []
     if rain is not None:
-        parts_hi.append(f"baarish ka {round(rain)}% chance hai")
-        parts_en.append(f"{round(rain)}% chance of rain")
+        parts.append(RAIN_CHANCE[k].format(p=round(rain)))
     if hi_t is not None:
-        parts_hi.append(f"high {round(hi_t)}°C")
-        parts_en.append(f"high {round(hi_t)}°C")
-    if not parts_hi:
-        return ToolResult({"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now."}[lang],
+        parts.append(TEMP_HIGH[k].format(t=round(hi_t)))
+    if not parts:
+        return ToolResult({"hi": "Abhi mausam ki jaankari nahi mil rahi.", "en": "I couldn't get the weather right now.", "bn": "এখন আবহাওয়ার খবর পাওয়া যাচ্ছে না।"}[lang],
                           action="weather", error_code="unavailable", google_calls=calls)
-    reply = (f"{when} {name} mein " + ", ".join(parts_hi) + ".") if lang == "hi" else (f"{when} in {name}: " + ", ".join(parts_en) + ".")
+    reply = WEATHER_REPLY[k].format(when=when, name=name, parts=", ".join(parts))
     return ToolResult(reply, action="weather", google_calls=calls)
 
 
@@ -586,7 +628,7 @@ def _when(t: TripRow, lang: str) -> str:
     if not t.start:
         return ""
     day = f"{t.start.day} {MONTHS_EN[t.start.month - 1][:3]}"
-    return {"hi": f"{day} se", "en": f"from {day}"}[lang]
+    return {"hi": f"{day} se", "en": f"from {day}", "bn": f"{day} থেকে"}[lang]
 
 
 def _short_name(t: TripRow) -> str:
@@ -603,15 +645,18 @@ def list_my_trips(user_id: str, lang: str, include_past: bool = False, db=None) 
         pool = _sort_open(pool)
     nav = [{"type": "navigate", "to": "/trips"}]
     if not pool:
-        reply = ({"hi": "Aapki koi purani trip nahi hai.", "en": "You have no past trips."} if include_past else
-                 {"hi": "Abhi aapki koi trip nahi hai. Nayi trip banani hai?", "en": "You don't have any trips yet. Want to plan one?"})[lang]
+        reply = ({"hi": "Aapki koi purani trip nahi hai.", "en": "You have no past trips.", "bn": "আপনার কোনো পুরোনো ট্রিপ নেই।"} if include_past else
+                 {"hi": "Abhi aapki koi trip nahi hai. Nayi trip banani hai?", "en": "You don't have any trips yet. Want to plan one?", "bn": "আপনার এখনো কোনো ট্রিপ নেই। নতুন ট্রিপ বানাবেন?"})[lang]
         return ToolResult(reply, ui_actions=nav, action="list_trips", error_code="no_trips")
     spoken = [f"{_short_name(t)} {_when(t, lang)}".strip() for t in pool[:MAX_SPOKEN_TRIPS]]
-    joined = (", ".join(spoken[:-1]) + (" aur " if lang == "hi" else " and ") + spoken[-1]) if len(spoken) > 1 else spoken[0]
+    joined = (", ".join(spoken[:-1]) + AND_WORD[tkey(lang)] + spoken[-1]) if len(spoken) > 1 else spoken[0]
     n = len(pool)
     if lang == "hi":
         head = f"Aapki {n} {'purani ' if include_past else ''}trip{'s' if n > 1 else ''} {'hain' if n > 1 else 'hai'}: "
         tail = ", aur bhi hain." if n > MAX_SPOKEN_TRIPS else "."
+    elif lang == "bn":
+        head = f"আপনার {n}টি {'পুরোনো ' if include_past else ''}ট্রিপ আছে: "
+        tail = ", আরও আছে।" if n > MAX_SPOKEN_TRIPS else "।"
     else:
         head = f"You have {n} {'past ' if include_past else ''}trip{'s' if n > 1 else ''}: "
         tail = ", and more." if n > MAX_SPOKEN_TRIPS else "."
@@ -684,7 +729,10 @@ def match_trips(user_id: str, name_or_destination: Optional[str] = None, month: 
     return trips, cands
 
 
-NO_SUCH_TRIP = {"hi": "Is naam ki koi trip nahi mili.", "en": "I couldn't find a trip like that."}
+NO_SUCH_TRIP = {"hi": "Is naam ki koi trip nahi mili.", "en": "I couldn't find a trip like that.", "bn": "এমন কোনো ট্রিপ পেলাম না।"}
+
+
+WHICH_MONTH = {"hi": "{mo} wali", "en": "the {mo} one", "bn": "{mo}-এর টা"}
 
 
 def which_trip_question(cands: List[TripRow], lang: str) -> str:
@@ -692,13 +740,15 @@ def which_trip_question(cands: List[TripRow], lang: str) -> str:
     cands = _sort_open(cands)[:3]
     months = [MONTHS_EN[t.start.month - 1] if t.start else "?" for t in cands]
     if len(set(months)) == len(months):
-        options = [f"{mo} wali" if lang == "hi" else f"the {mo} one" for mo in months]
+        options = [WHICH_MONTH[tkey(lang)].format(mo=mo) for mo in months]
     else:
         options = [_when(t, lang) for t in cands]
     name = _short_name(cands[0]) if len({_short_name(t) for t in cands}) == 1 else None
-    sep = " ya " if lang == "hi" else " or "
+    sep = OR_WORD[tkey(lang)]
     if lang == "hi":
         return (f"{name} ki {len(cands)} trips hain: " if name else f"{len(cands)} trips milin: ") + sep.join(options) + "?"
+    if lang == "bn":
+        return (f"{name}-এর {len(cands)}টি ট্রিপ আছে: " if name else f"{len(cands)}টি ট্রিপ পেলাম: ") + sep.join(options) + "?"
     return (f"You have {len(cands)} {name} trips: " if name else f"I found {len(cands)} trips: ") + sep.join(options) + "?"
 
 
@@ -706,13 +756,13 @@ def open_trip(user_id: str, lang: str, name_or_destination: Optional[str] = None
               which: Optional[str] = None, db=None) -> ToolResult:
     trips, cands = match_trips(user_id, name_or_destination, month, which, db)
     if not trips:
-        return ToolResult({"hi": "Abhi aapki koi trip nahi hai.", "en": "You don't have any trips yet."}[lang],
+        return ToolResult({"hi": "Abhi aapki koi trip nahi hai.", "en": "You don't have any trips yet.", "bn": "আপনার এখনো কোনো ট্রিপ নেই।"}[lang],
                           ui_actions=[{"type": "navigate", "to": "/trips"}], action="open_trip_none", error_code="no_trips")
     if not cands:
         return ToolResult(NO_SUCH_TRIP[lang], action="open_trip_none", error_code="not_found")
     if len(cands) == 1:
         t = cands[0]
-        reply = {"hi": f"{_short_name(t)} wali trip khol di.", "en": f"Opened your {_short_name(t)} trip."}[lang]
+        reply = {"hi": f"{_short_name(t)} wali trip khol di.", "en": f"Opened your {_short_name(t)} trip.", "bn": f"আপনার {_short_name(t)} ট্রিপ খুলে দিলাম।"}[lang]
         return ToolResult(reply, ui_actions=[{"type": "open_trip", "trip_id": t.id}, {"type": "navigate", "to": "/trip"}],
                           action="open_trip")
     return ToolResult(which_trip_question(cands, lang), action="open_trip_ask", error_code="ambiguous")

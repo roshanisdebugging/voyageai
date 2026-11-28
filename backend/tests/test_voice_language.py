@@ -112,10 +112,10 @@ print("\n== 1. the language table")
 for code, lang in L.LANGUAGES.items():
     check(f"{code}: complete entry", lang.code == code and lang.name and lang.native_name and lang.stt_code
           and lang.tts_code.endswith("-IN") and lang.prompt_name and isinstance(lang.has_templates, bool))
-check("hi and en only, both with templates", sorted(L.LANGUAGES) == ["en", "hi"]
+check("hi, en and bn (feat/bengali), all with templates", sorted(L.LANGUAGES) == ["bn", "en", "hi"]
       and all(x.has_templates and x.selectable for x in L.LANGUAGES.values()))
 for raw, want in (("hi", "hi"), ("en", "en"), (" EN ", "en"), ("auto", "auto"), ("", "auto"), (None, "auto"),
-                  ("fr", "auto"), ("bn", "auto"), (5, "auto"), (["hi"], "auto"), ("hindi", "auto"), ("h" * 500, "auto")):
+                  ("fr", "auto"), ("ta", "auto"), ("bn", "bn"), (5, "auto"), (["hi"], "auto"), ("hindi", "auto"), ("h" * 500, "auto")):
     check(f"normalize_choice({raw!r:.20}) -> {want}", L.normalize_choice(raw) == want, L.normalize_choice(raw))
 check("auto: no template language, no STT pin, no TTS code, no prompt rule",
       L.template_lang("auto") is None and L.stt_languages("auto") is None and L.tts_code("xx") is None
@@ -129,21 +129,21 @@ check("tts.sarvam_language unchanged for hi / ur / en / unknown", tts.sarvam_lan
       and tts.sarvam_language(None) == "hi-IN" and tts.sarvam_language("zz") == "hi-IN")
 
 print("\n== 2. a language without templates: English templates, logged once per conversation")
-BN = L.Language("bn", "Bengali", "বাংলা", stt_code="bn", tts_code="bn-IN", prompt_name="Bengali", has_templates=False)
-with mock.patch.dict(L.LANGUAGES, {"bn": BN}):
+TA = L.Language("ta", "Tamil", "தமிழ்", stt_code="ta", tts_code="ta-IN", prompt_name="Tamil", has_templates=False)
+with mock.patch.dict(L.LANGUAGES, {"ta": TA}):
     buf = io.StringIO()
     with redirect_stdout(buf):
-        a1, a2, a3 = L.template_lang("bn", "c1"), L.template_lang("bn", "c1"), L.template_lang("bn", "c2")
+        a1, a2, a3 = L.template_lang("ta", "c1"), L.template_lang("ta", "c1"), L.template_lang("ta", "c2")
     lines = [x for x in buf.getvalue().splitlines() if x.startswith("[LANG]")]
-    check("bn -> English templates", (a1, a2, a3) == ("en", "en", "en"), (a1, a2, a3))
-    check("'[LANG] templates=fallback_en lang=bn' once per conversation (c1 once, c2 once)",
-          lines == ["[LANG] templates=fallback_en lang=bn"] * 2, lines)
-    check("bn: its own STT, TTS and prompt line", L.stt_languages("bn") == ["bn"] and tts.sarvam_language("bn") == "bn-IN"
-          and L.reply_rule("bn") == "- Always reply in Bengali, whatever language the user speaks.")
+    check("ta (no templates) -> English templates", (a1, a2, a3) == ("en", "en", "en"), (a1, a2, a3))
+    check("'[LANG] templates=fallback_en lang=ta' once per conversation (c1 once, c2 once)",
+          lines == ["[LANG] templates=fallback_en lang=ta"] * 2, lines)
+    check("ta: its own STT, TTS and prompt line", L.stt_languages("ta") == ["ta"] and tts.sarvam_language("ta") == "ta-IN"
+          and L.reply_rule("ta") == "- Always reply in Tamil, whatever language the user speaks.")
     FakeLLM.calls.clear()
     with mock.patch.object(openai_client, "chat_tools", fake), redirect_stdout(io.StringIO()):
-        r = ra("thank you", conv(), language="bn")
-    check("bn turn: English ack template", r.reply_text == agent.ACK_REPLY["en"], r.reply_text)
+        r = ra("thank you", conv(), language="ta")
+    check("ta turn: English ack template", r.reply_text == agent.ACK_REPLY["en"], r.reply_text)
 
 with mock.patch.object(openai_client, "chat_tools", fake):
     print("\n== 3. auto = as before")

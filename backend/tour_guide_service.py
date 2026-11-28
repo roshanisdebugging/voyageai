@@ -1327,18 +1327,19 @@ RULES:
 """
 VOICE_LANG_RULE = {
     "hi": "Reply in natural Hinglish written in Roman script (Hindi words in English letters).",
-    "en": "Reply in simple English.",
+    "en": "Reply in simple English.", "bn": "Reply in natural, simple spoken Bengali written in Bangla script.",
 }
 VOICE_DECLINE = {
     "hi": "Main sirf aapki trip mein madad kar sakta hoon.",
-    "en": "I can only help with your trip.",
+    "en": "I can only help with your trip.", "bn": "আমি শুধু আপনার ট্রিপের ব্যাপারে সাহায্য করতে পারি।",
 }
 VOICE_NO_FACTS = {
     "hi": "Abhi pakki jaankari nahi mil rahi.",
-    "en": "I couldn't find reliable info right now.",
+    "en": "I couldn't find reliable info right now.", "bn": "এখন নির্ভরযোগ্য তথ্য পাওয়া যাচ্ছে না।",
 }
 # Shown as small text on screen with ungrounded answers; never spoken.
-VOICE_NOTE = {"hi": "Details badal sakti hain.", "en": "Details may vary."}
+VOICE_NOTE = {"hi": "Details badal sakti hain.", "en": "Details may vary.",
+              "bn": "Details may vary."}   # on screen: English for Bengali (written screens stay English)
 VOICE_GEMINI_TIMEOUT = 4.0
 VOICE_LLM_TIMEOUT = 4.0
 GROUNDING_COOLDOWN_SECONDS = 600  # after a quota error, don't spend ~0.5 s per question on a call that fails

@@ -44,25 +44,25 @@ MIN_DAY, MAX_DAY = 1, 30
 
 # Spoken confirmations, per page: "hi" = Roman-script Hinglish, "en" = English.
 CONFIRM: Dict[str, Dict[str, str]] = {
-    "home": {"hi": "Home khol diya.", "en": "Opened home."},
-    "my_trips": {"hi": "Aapki trips khol di.", "en": "Opened your trips."},
-    "trip": {"hi": "Aapki trip khol di.", "en": "Opened your trip."},
-    "itinerary": {"hi": "Aapka itinerary khol diya.", "en": "Opened your itinerary."},
-    "itinerary_day": {"hi": "Day {n} khol diya.", "en": "Opened day {n}."},
-    "map": {"hi": "Map khol diya.", "en": "Opened the map."},
-    "food": {"hi": "Khane ki jagah khol di.", "en": "Opened food places."},
-    "rides": {"hi": "Rides khol diya.", "en": "Opened rides."},
-    "expenses": {"hi": "Kharche khol diye.", "en": "Opened your expenses."},
-    "explore": {"hi": "Explore khol diya.", "en": "Opened explore."},
-    "guide": {"hi": "Tour guide khol diya.", "en": "Opened the tour guide."},
-    "saved_places": {"hi": "Saved places khol diye.", "en": "Opened your saved places."},
-    "more": {"hi": "Settings khol di.", "en": "Opened more options."},
-    "plan_trip": {"hi": "Nayi trip ka page khol diya.", "en": "Opened a new trip."},
+    "home": {"hi": "Home khol diya.", "en": "Opened home.", "bn": "হোম খুলে দিলাম।"},
+    "my_trips": {"hi": "Aapki trips khol di.", "en": "Opened your trips.", "bn": "আপনার ট্রিপগুলো খুলে দিলাম।"},
+    "trip": {"hi": "Aapki trip khol di.", "en": "Opened your trip.", "bn": "আপনার ট্রিপ খুলে দিলাম।"},
+    "itinerary": {"hi": "Aapka itinerary khol diya.", "en": "Opened your itinerary.", "bn": "আপনার ইটিনেরারি খুলে দিলাম।"},
+    "itinerary_day": {"hi": "Day {n} khol diya.", "en": "Opened day {n}.", "bn": "{n} নম্বর দিন খুলে দিলাম।"},
+    "map": {"hi": "Map khol diya.", "en": "Opened the map.", "bn": "ম্যাপ খুলে দিলাম।"},
+    "food": {"hi": "Khane ki jagah khol di.", "en": "Opened food places.", "bn": "খাবারের জায়গাগুলো খুলে দিলাম।"},
+    "rides": {"hi": "Rides khol diya.", "en": "Opened rides.", "bn": "রাইডস খুলে দিলাম।"},
+    "expenses": {"hi": "Kharche khol diye.", "en": "Opened your expenses.", "bn": "আপনার খরচের হিসাব খুলে দিলাম।"},
+    "explore": {"hi": "Explore khol diya.", "en": "Opened explore.", "bn": "এক্সপ্লোর খুলে দিলাম।"},
+    "guide": {"hi": "Tour guide khol diya.", "en": "Opened the tour guide.", "bn": "ট্যুর গাইড খুলে দিলাম।"},
+    "saved_places": {"hi": "Saved places khol diye.", "en": "Opened your saved places.", "bn": "আপনার সেভ করা জায়গাগুলো খুলে দিলাম।"},
+    "more": {"hi": "Settings khol di.", "en": "Opened more options.", "bn": "সেটিংস খুলে দিলাম।"},
+    "plan_trip": {"hi": "Nayi trip ka page khol diya.", "en": "Opened a new trip.", "bn": "নতুন ট্রিপের পেজ খুলে দিলাম।"},
 }
 
 NO_TRIP_REPLY = {"hi": "Abhi koi trip khuli nahi hai, aapki trips khol raha hoon.",
-                 "en": "No trip is open, opening your trips."}
-WHICH_PAGE_REPLY = {"hi": "Kaunsa page kholun?", "en": "Which page should I open?"}
+                 "en": "No trip is open, opening your trips.", "bn": "এখন কোনো ট্রিপ খোলা নেই, আপনার ট্রিপগুলো খুলছি।"}
+WHICH_PAGE_REPLY = {"hi": "Kaunsa page kholun?", "en": "Which page should I open?", "bn": "কোন পেজ খুলব?"}
 
 
 def resolve(page: Optional[str], day: Optional[int] = None, has_trip: bool = False) -> Tuple[Optional[str], Optional[str]]:
@@ -81,7 +81,8 @@ def resolve(page: Optional[str], day: Optional[int] = None, has_trip: bool = Fal
 
 
 def confirm_text(page: str, day: Optional[int], lang: str) -> str:
-    lang = lang if lang in ("hi", "en") else "hi"
+    from voice.languages import tkey
+    lang = tkey(lang)
     if page == "itinerary" and day is not None:
         return CONFIRM["itinerary_day"][lang].format(n=day)
     return CONFIRM[page][lang]

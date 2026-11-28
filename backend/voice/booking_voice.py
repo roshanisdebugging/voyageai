@@ -24,9 +24,9 @@ from voice.text_utils import canon, words as tu_words
 logger = logging.getLogger("voice")
 
 ANSWER_WINDOW_S = 10 * 60
-NO_TRIP = {"hi": "Pehle trip kholiye.", "en": "Please open a trip first."}
-UNCLEAR = {"hi": "Samajh nahi aaya.", "en": "I didn't get that."}
-RESUMED = {"hi": "Booking wahin se:", "en": "Continuing the booking:"}
+NO_TRIP = {"hi": "Pehle trip kholiye.", "en": "Please open a trip first.", "bn": "আগে একটা ট্রিপ খুলুন।"}
+UNCLEAR = {"hi": "Samajh nahi aaya.", "en": "I didn't get that.", "bn": "বুঝতে পারলাম না।"}
+RESUMED = {"hi": "Booking wahin se:", "en": "Continuing the booking:", "bn": "বুকিং আগের জায়গা থেকে:"}
 REFRESH = {"type": "refresh", "what": "booking"}
 
 
@@ -368,7 +368,7 @@ def _one(found: List[str]) -> Optional[str]:
     return found[0] if len(found) == 1 else None
 
 
-def parse_choice(qid: str, text: str) -> Any:
+def parse_choice(qid: str, text: str, lang: Optional[str] = None) -> Any:
     """The answer to a tap question, or None. Never guesses between two choices."""
     toks = tokens(text)
     sset = set(toks)
@@ -425,12 +425,12 @@ def parse_choice(qid: str, text: str) -> Any:
         if known:
             return known[0] if len(known) == 1 else None    # "IndiGo ya Air India": never pick one
         rest = [t for t in toks if t not in _AIRLINE_FILLER]
-        if any(other_script(t) for t in rest):
+        if any(other_script(t, lang) for t in rest):
             return None                           # not understood: never stored
         if not rest:
             return "__ask_airline__"            # "koi khaas airline" without a name
         heard = " ".join(w.capitalize() if w.isascii() else w for w in rest)
-        if BF.name_problem(heard, BF.AIRLINE_MAX):
+        if BF.name_problem(heard, BF.AIRLINE_MAX, lang):
             return None
         return AIRLINE_CHECK + heard              # not a known airline: "<heard> airline? Sahi hai?" first
     return None
@@ -474,9 +474,10 @@ _CLASS_NUM_STAR = {canon(k): v for k, v in _CLASS_NUM_STAR.items()}
 _FREE_STAR = _phrases("free star", "फ्री स्टार", "फ्री स्टार्स", "free stars")
 
 
-def other_script(text: str) -> bool:
-    """Letters outside Latin / Devanagari (e.g. Ol Chiki "ᱩᱢᱟᱱᱟᱛᱷ" from speech-to-text): not understood."""
-    return any(BF._is_letter(ch) and not BF._allowed_letter(ch) for ch in text or "")
+def other_script(text: str, lang: Optional[str] = None) -> bool:
+    """Letters outside Latin / Devanagari (e.g. Ol Chiki "ᱩᱢᱟᱱᱟᱛᱷ" from speech-to-text): not understood.
+    A Bengali voice booking (lang "bn") also reads Bengali letters (booking_flow._allowed_letter)."""
+    return any(BF._is_letter(ch) and not BF._allowed_letter(ch, lang) for ch in text or "")
 
 
 def parse_part(text: str) -> Optional[str]:
@@ -530,7 +531,7 @@ _FIX_ASK = _phrases("naam badlo", "naam badliye", "naam badal", "naam badalna", 
 _FIX_BACK = _set("peeche", "piche", "pichhe", "peechhe", "pichhe", "पीछे", "back")
 _DONT_KNOW = _set("pata", "maloom", "malum", "पता", "मालूम", "know")
 _WHO = _set("yatri", "traveller", "traveler", "यात्री")
-SAY_NAME = {"hi": "Sahi naam boliye.", "en": "Please say the correct name."}
+SAY_NAME = {"hi": "Sahi naam boliye.", "en": "Please say the correct name.", "bn": "সঠিক নামটা বলুন।"}
 
 
 def name_fix(text: str, mode: str) -> Optional[Dict[str, Any]]:
@@ -739,10 +740,10 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
             return None, None, False
         if is_decide(toks):
             return BF.ANY, None, False
-        if other_script(text):
+        if other_script(text, s.voice_lang):
             return "__name_unclear__", None, False
         name, age, unsure = name_and_age(text)
-        if name and not unsure and BF.clean_name(name):
+        if name and not unsure and BF.clean_name(name, lang=s.voice_lang):
             return name, age, False
         got = extract(text, "name")
         mname = got.get("name") if isinstance(got.get("name"), str) else None
@@ -773,7 +774,7 @@ def _value_for(s: BF.BookingState, qid: str, text: str, extract=model_extract) -
         return (d or "__bad_phone__"), None, True
     if qid == "services" and is_decide(toks):
         return None, None, False
-    return parse_choice(qid, text), None, False
+    return parse_choice(qid, text, s.voice_lang), None, False
 
 
 OPEN_SCREEN = {"type": "navigate", "to": "/trip/booking"}   # allowlisted in the app's uiActions.ts only (not pages.py)
@@ -786,14 +787,14 @@ def _result(text: str, qid: str, open_screen: bool = False, **kw):
     return AgentResult(text, ui_actions=actions, action="booking", step=re.sub(r"^t\d+_", "traveller_", qid), **kw)
 
 
-SCREEN_HINT = {"hi": "Aap screen par button bhi dabaa sakte hain.", "en": "You can also tap a button on the screen."}
-TYPE_HINT = {"hi": "Aap screen par type bhi kar sakte hain.", "en": "You can also type it on the screen."}
-TYPE_ONLY = {"hi": "Screen par type kar dijiye.", "en": "Please type it on the screen."}
+SCREEN_HINT = {"hi": "Aap screen par button bhi dabaa sakte hain.", "en": "You can also tap a button on the screen.", "bn": "স্ক্রিনের বোতামও চাপতে পারেন।"}
+TYPE_HINT = {"hi": "Aap screen par type bhi kar sakte hain.", "en": "You can also type it on the screen.", "bn": "স্ক্রিনে টাইপও করতে পারেন।"}
+TYPE_ONLY = {"hi": "Screen par type kar dijiye.", "en": "Please type it on the screen.", "bn": "স্ক্রিনে টাইপ করে দিন।"}
 NAME_UNCLEAR = {"hi": "Naam samajh nahi aaya. Dobara boliye, ya screen par type kar dijiye.",
-                "en": "I didn't get the name. Please say it again, or type it on the screen."}
-AGE_GUESS = {"hi": "Umar {age} hai? Sahi hai?", "en": "Is the age {age}? Is that right?"}
-AIRLINE_ASK = {"hi": "{name} airline? Sahi hai?", "en": "{name} airline? Is that right?"}
-DECIDE_OFFER = {"hi": "Kya main 'aap decide karo' maan loon?", "en": "Shall I take it as 'you decide'?"}
+                "en": "I didn't get the name. Please say it again, or type it on the screen.", "bn": "নামটা বুঝতে পারলাম না। আবার বলুন, অথবা স্ক্রিনে টাইপ করে দিন।"}
+AGE_GUESS = {"hi": "Umar {age} hai? Sahi hai?", "en": "Is the age {age}? Is that right?", "bn": "বয়স {age}? ঠিক আছে?"}
+AIRLINE_ASK = {"hi": "{name} airline? Sahi hai?", "en": "{name} airline? Is that right?", "bn": "{name} এয়ারলাইন? ঠিক আছে?"}
+DECIDE_OFFER = {"hi": "Kya main 'aap decide karo' maan loon?", "en": "Shall I take it as 'you decide'?", "bn": "তাহলে কি 'আপনিই ঠিক করুন' ধরে নেব?"}
 
 
 def _allows_decide(qid: str) -> bool:
@@ -900,7 +901,7 @@ def handle(transcript: str, lang: str, *, user_id: str, conversation_id: str, tr
         if said == "yes":
             checked_airline = guess
         elif said == "no":
-            again = parse_choice(qid, transcript)          # "nahi, IndiGo"
+            again = parse_choice(qid, transcript, s.voice_lang)          # "nahi, IndiGo"
             if not (isinstance(again, str) and (again in ("cheapest", BF.ANY) or BF.airline_name(again))):
                 _mark_asked(redis_conn, user_id, s, conversation_id)
                 return _result(BF.prompt_for(s, qid, lang, spoken=True), qid)
@@ -1028,3 +1029,78 @@ def safe_handle(transcript: str, lang: str, **kw):
     except Exception as err:
         logger.warning("[BOOKING FLOW] event=voice_crash err=%s", type(err).__name__)
         return None
+
+
+# ---------------- Bengali (beta, feat/bengali): the same kinds of words, added to the sets above.
+# Separate lists so the Hindi / English ones stay exactly as they were; tables built from the sets at import
+# (_DIGIT_WORDS, _ALL_TIME_WORDS, the airline phrases, _F_CLASS, _F_PEOPLE, _F_PEOPLE_WITH) are rebuilt here.
+# Not reviewed by a native speaker yet (docs/bengali_review.md).
+from voice import bn_words as _BN  # noqa: E402
+
+_BOOK |= _set("বুক", "বুকিং")
+_SERVICE_WORDS["flight"] |= _set("ফ্লাইট", "প্লেন", "বিমান", "উড়োজাহাজ", "ফ্লাইটে")
+_SERVICE_WORDS["train"] |= _set("ট্রেন", "ট্রেনে", "রেল", "রেলগাড়ি")
+_SERVICE_WORDS["hotel"] |= _set("হোটেল", "হোটেলে", "হোটেলের")
+_ALL_SERVICES |= _set("তিনটেই", "তিনটাই", "সবগুলো", "সবকটা")
+_NOT_OURS |= _set("ক্যাব", "ট্যাক্সি", "অটো", "উবার", "ওলা", "টেবিল", "রেস্টুরেন্ট")
+_CANCEL_PHRASES += _phrases("এখন না", "বাদ দিন", "বাদ দাও", "বুকিং বাতিল", "বন্ধ করুন", "বন্ধ করো")
+_CANCEL_WORDS |= _set("বাতিল", "ক্যানসেল", "থাক")
+_DECIDE_PHRASES += _phrases("আপনি ঠিক করুন", "আপনিই ঠিক করুন", "আপনি দেখুন", "আপনি দেখে নিন", "যা হোক",
+                            "যেটা ভালো", "আপনার পছন্দ")
+_DECIDE_WORDS |= _set("যেকোনো", "যেকোন")
+_YES_EXTRA |= _set("চলবে", "হ্যাঁ", "হ্যা", "হাঁ", "ঠিক", "ওকে", "অবশ্যই", "সঠিক", "আছে")
+_NO_WORDS |= _set("না", "নাহ", "নো", "ভুল", "নয়")
+NUMBER_WORDS.update({canon(w): i for i, w in enumerate(_BN.BN_NUMBERS)})
+NUMBER_WORDS.update({canon(w): n for w, n in _BN.BN_NUMBER_VARIANTS.items()})
+_AGE_UNITS |= _set("বছর", "বছরের", "বছরে")
+_AGE_LABELS |= _set("বয়স")
+_REPEAT.update({canon("ডাবল"): 2, canon("ট্রিপল"): 3})
+_PHONE_FILLER |= _set("আমার", "নম্বর", "নাম্বার", "ফোন", "মোবাইল", "হলো", "হল", "প্লাস", "এবং", "আর")
+_NAME_FILLER |= _set("আমার", "নাম", "হলো", "হল", "ওর", "ওনার", "তার", "এবং", "আর", "প্রথম", "দ্বিতীয়", "যাত্রী",
+                     "বাচ্চা", "ছেলে", "মেয়ে", "জি")
+_NAME_MARKERS |= _set("নাম")
+_YATRI_LIKE |= _set("যাত্রী")
+_LEAD_LINK |= _set("এর", "র")
+_NAME_EXTRA_FILLER |= _set("শুধু", "ভাই", "দাদা", "দিদি")
+_TIMES["morning"] |= _set("সকাল", "সকালে", "সকালের", "ভোর", "ভোরে")
+_TIMES["afternoon"] |= _set("দুপুর", "দুপুরে", "দুপুরের")
+_TIMES["evening"] |= _set("সন্ধ্যা", "সন্ধ্যে", "সন্ধ্যায়", "সন্ধ্যার", "বিকেল", "বিকেলে")
+_TIMES["night"] |= _set("রাত", "রাতে", "রাতের", "রাত্রে")
+_SLEEPER |= _set("স্লিপার")
+_AC |= _set("এসি", "টিয়ার", "ক্লাস")
+_CLASS_NUM.update({**{w: "1A" for w in _set("ফার্স্ট", "এক", "প্রথম")},
+                   **{w: "2A" for w in _set("সেকেন্ড", "দুই", "দ্বিতীয়")},
+                   **{w: "3A" for w in _set("থার্ড", "তিন", "তৃতীয়")}})
+_BUDGET |= _set("বাজেট", "সস্তা", "সস্তার")        # _CHEAPEST is the same set
+_STAR |= _set("স্টার", "তারা")
+_LUXURY |= _set("লাক্সারি", "বিলাসবহুল")
+_AIRLINE_FILLER |= _set("কোনো", "বিশেষ", "এয়ারলাইন", "থেকে", "চাই", "আমার", "এর", "শুধু", "প্লিজ", "ফ্লাইট")
+_CLASS_NUM_STAR.update({canon(k): v for k, v in (("তিন", 3), ("চার", 4), ("থ্রি", 3), ("ফোর", 4), ("পাঁচ", 5))})
+_PARTS["services"] |= _set("সার্ভিস")
+_PARTS["travellers"] |= _set("যাত্রী", "যাত্রীদের", "নাম", "বয়স", "লোক")
+_PARTS["phone"] |= _set("ফোন", "নম্বর", "নাম্বার", "মোবাইল")
+_F_AIRLINE |= _set("এয়ারলাইন")
+_F_TIME |= _set("সময়", "টাইম")
+_F_ROOMS |= _set("রুম", "ঘর")
+_F_TATKAL |= _set("তৎকাল", "তাৎকাল")
+_F_PHONE |= _set("ফোন", "মোবাইল")
+_F_NUMBER |= _set("নম্বর", "নাম্বার")
+_F_CLASS = _F_CLASS | _set("ক্লাস", "কোচ") | _SLEEPER
+_F_PEOPLE = _F_PEOPLE | _set("যাত্রী", "যাত্রীদের") | _YATRI_LIKE
+_F_PEOPLE_WITH = _F_PEOPLE_WITH | _NAME_MARKERS | _AGE_LABELS | _set("বদলান", "বদলাও", "পাল্টান", "ভুল", "চেঞ্জ")
+_DONT_KNOW |= _set("জানি")
+_FIX_NEG |= _set("না", "নয়", "ভুল")
+_FIX_NAME |= _set("নাম")
+_WHO |= _set("যাত্রী")
+_ALL_TIME_WORDS = set().union(*_TIMES.values())
+for _w, _d in list(NUMBER_WORDS.items()):
+    if _d < 10:
+        _DIGIT_WORDS.setdefault(_w, str(_d))
+# Airlines as written in Bangla script (booking_flow.AIRLINES has the Latin / Devanagari forms).
+BN_AIRLINES = {"IndiGo": ("ইন্ডিগো", "ইন্ডি গো"), "Air India": ("এয়ার ইন্ডিয়া", "এয়ারইন্ডিয়া"),
+               "Air India Express": ("এয়ার ইন্ডিয়া এক্সপ্রেস",), "SpiceJet": ("স্পাইসজেট", "স্পাইস জেট"),
+               "Akasa Air": ("আকাসা", "আকাসা এয়ার", "আকাশা এয়ার"), "Alliance Air": ("অ্যালায়েন্স এয়ার", "এলায়েন্স এয়ার"),
+               "Star Air": ("স্টার এয়ার",), "Fly91": ("ফ্লাই 91", "ফ্লাই নাইন্টি ওয়ান")}
+_BN_AIRLINE_PHRASES = {(tuple(tokens(alias)), name) for name, aliases in BN_AIRLINES.items() for alias in aliases}
+_AIRLINE_PHRASES = sorted(set(_AIRLINE_PHRASES) | _BN_AIRLINE_PHRASES, key=lambda x: -len(x[0]))
+_SAID_PHRASES = sorted(set(_SAID_PHRASES) | _BN_AIRLINE_PHRASES, key=lambda x: -len(x[0]))
