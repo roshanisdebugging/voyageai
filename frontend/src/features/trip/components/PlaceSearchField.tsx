@@ -65,23 +65,23 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
 
   return (
     <div className="space-y-2">
-      <label htmlFor={id} className="text-xs font-semibold text-slate-400 block">
-        {label} {optional && <span className="text-slate-500 font-normal">(optional)</span>}
+      <label htmlFor={value ? undefined : id} className="text-xs font-semibold text-(--itinerary-muted) block">
+        {label} {optional && <span className="text-(--itinerary-muted) font-normal">(optional)</span>}
       </label>
 
       {value ? (
-        <div className="p-3.5 rounded-2xl bg-teal-500/15 border border-teal-500/50 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <MapPin className="w-5 h-5 text-teal-400 shrink-0" />
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[14px] border border-(--itinerary-accent) bg-(--itinerary-accent-surface) p-3.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <MapPin className="w-5 h-5 text-(--itinerary-accent) shrink-0" />
             <div className="min-w-0">
-              <div className="font-extrabold text-sm text-white truncate">{value.name}</div>
-              <div className="text-[11px] text-slate-300 truncate">{placeSubtitle(value)}</div>
+              <div className="font-extrabold text-sm text-(--color-text-primary) truncate">{value.name}</div>
+              <div className="text-[11px] text-(--itinerary-muted) truncate">{placeSubtitle(value)}</div>
             </div>
           </div>
           <button
             type="button"
             onClick={() => onChange(null)}
-            className="shrink-0 px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 text-[11px] font-bold flex items-center gap-1 hover:text-white"
+            className="flex min-h-11 shrink-0 items-center gap-1 rounded-[14px] border border-(--itinerary-control-border) bg-(--color-surface) px-2.5 text-xs font-bold hover:border-(--itinerary-accent)"
           >
             <X className="w-3.5 h-3.5" /> Change
           </button>
@@ -89,7 +89,7 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
       ) : (
         <>
           <div className="relative">
-            <Search className="w-5 h-5 absolute left-4 top-3.5 text-slate-400" />
+            <Search className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-(--itinerary-muted)" />
             <input
               id={id}
               type="text"
@@ -97,16 +97,16 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
               onChange={e => setQuery(e.target.value)}
               placeholder={placeholder}
               autoComplete="off"
-              className="w-full bg-slate-900 border border-slate-800 rounded-2xl py-3 pl-12 pr-10 text-slate-100 text-sm placeholder:text-slate-500 focus:outline-none focus:border-teal-500"
+              className="min-h-12 w-full rounded-[14px] border border-(--itinerary-control-border) bg-(--color-surface) py-3 pl-11 pr-9 text-[15px] text-(--color-text-primary)"
             />
-            {isSearching && <Loader2 className="w-5 h-5 absolute right-4 top-3.5 text-teal-400 animate-spin" />}
+            {isSearching && <Loader2 className="pointer-events-none absolute right-4 top-1/2 size-5 -translate-y-1/2 text-(--itinerary-accent) animate-spin" />}
           </div>
 
           {query.trim().length >= 2 && !isSearching && (
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
               {error ? (
-                <div className="p-3 text-xs text-rose-300 bg-slate-900/60 border border-rose-900/50 rounded-2xl flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <div className="flex items-center gap-2 rounded-[14px] border border-(--itinerary-error) bg-(--itinerary-error-surface) p-3 text-xs text-(--itinerary-error)">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-(--itinerary-error)" />
                   <span>{error}</span>
                 </div>
               ) : (
@@ -132,18 +132,18 @@ export const PlaceSearchField: React.FC<Props> = ({ id, label, placeholder, valu
                         setPicking(null);
                       }
                     }}
-                    className="w-full p-3 rounded-2xl border text-left flex items-start gap-3 bg-slate-900/90 border-slate-800 text-slate-300 hover:border-teal-500/40 active:scale-[0.98] transition-all"
+                    className="flex w-full items-start gap-3 rounded-[14px] border border-(--itinerary-border) bg-(--color-surface-elevated) p-3 text-left transition-colors hover:border-(--itinerary-accent)"
                   >
-                    <MapPin className="w-5 h-5 shrink-0 mt-0.5 text-slate-500" />
+                    <MapPin className="w-5 h-5 shrink-0 mt-0.5 text-(--itinerary-muted)" />
                     <div className="min-w-0 flex-1">
-                      <div className="font-bold text-sm text-white">{result.name}</div>
-                      <div className="text-[11px] text-slate-400 truncate">{result.secondary}</div>
+                      <div className="font-bold text-sm text-(--color-text-primary)">{result.name}</div>
+                      <div className="text-[11px] text-(--itinerary-muted) truncate">{result.secondary}</div>
                     </div>
                   </button>
                 ))
               )}
               {!error && results.length > 0 && (
-                <div className="flex justify-end px-1"><GoogleMapsAttribution className="text-slate-400" /></div>
+                <div className="flex justify-end px-1"><GoogleMapsAttribution className="text-(--itinerary-muted)" /></div>
               )}
             </div>
           )}
