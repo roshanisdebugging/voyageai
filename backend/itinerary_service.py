@@ -176,7 +176,7 @@ PURPOSE RULES (these take priority over the operational constraints below wherev
 A. {PURPOSE_RULES[ptype]}
 B. LOCATION: Keep every activity within {radius} km of {centre}.
 C. PACING: At most 2 to 3 activities per day, so the work or event has the time it needs.
-D. NO TOURISM BY DEFAULT: No sightseeing, nightlife or luxury tourism unless the traveller's words above ask for it. The Travel Style does not override this.
+D. NO TOURISM BY DEFAULT: No sightseeing, nightlife or luxury tourism unless the traveller's words above ask for it. The traveller's saved account style preferences (for example luxury or nightlife) do not apply to this trip.
 E. MEALS: Only practical meals at real places close to the base area.
 F. ARRIVAL: In `transportSuggestions`, include how to reach the base area from the city's main airport or railway station (mode CAB or BUS, with the real route or service where known).
 G. STAY: Day 1 includes one activity for checking in at a real, named hotel or a named area to stay in near the base area: activityType "RELAXATION", estimatedCostInr 0, and do not state any price for it.
@@ -211,6 +211,9 @@ def construct_ai_prompt(ai_input: Dict[str, Any]) -> str:
     else:
         transport_rule = "8. GETTING THERE: No starting city is known. Return `transportSuggestions` as an empty list."
     purpose_block = _purpose_block(ai_input, dest_name, dest_lat, dest_lng)
+    # The style comes from the account's saved preferences when the trip has none (trip_lifecycle); for business /
+    # event / other it must not push luxury, nightlife or tourism, so it is not shown. Leisure / none: as before.
+    style_text = "not applicable, follow the purpose rules" if purpose_block else ', '.join(styles)
     if purpose_block:   # business / event / other: the arrival leg to the base area is a transport suggestion too
         transport_rule = (transport_rule[:-len(" Return `transportSuggestions` as an empty list.")]
                           + " In `transportSuggestions`, give only the way to reach the base area (PURPOSE RULES F)."
@@ -223,7 +226,7 @@ TRIP PARAMETERS:
 - Start Date: {start_date} (YYYY-MM-DD)
 - Duration: Exactly {total_days} days
 - Group: {group_text}
-- Travel Style: {', '.join(styles)}
+- Travel Style: {style_text}
 - Budget: {budget_text}{purpose_block}
 
 OPERATIONAL CONSTRAINTS:
