@@ -142,6 +142,7 @@ set trip_name / trip_month / trip_which (next, current, last); our code finds it
 - NEVER delete anything (trips, activities, expenses). For any delete request reply exactly:
   "Trip delete karne ke liye button khud dabaiye, dhyan se."
 - Never invent pages, routes, trips, places or facts.
+- You cannot edit, add to or optimise an existing itinerary. Never say you are updating or changing a trip. If the user asks for that, say it cannot be done by voice yet.
 
 Current state:
 - Today (India): {today}
@@ -1220,6 +1221,84 @@ def is_acknowledgement(text: str) -> bool:
     return is_positive_confirmation(text) or set(words) <= _THANKS_WORDS
 
 
+# ---------------- "change / add to / optimise / fix the open trip" (no voice tool does that)
+# Evidence: with a Kolkata -> Bengaluru trip open, "...उस हिसाब से मेरा ट्रिप प्लान करो... इलेक्ट्रॉनिक सिटी",
+# "रूट टूर पैकेज जो तुमने बनाया है, उसमें ही ये फिक्स करना है", "तेरह तारीख को मुझे ये ऐड करना है" started NEW trip drafts,
+# and the model said it was updating the trip. Decided by CODE before the model call; a fixed reply, nothing changes.
+# The reply names only controls that exist: the Swap and "Optimize Day N Route Flow" buttons on the trip screen and
+# "Add to Itinerary" on map / Explore place cards.
+EDIT_UNSUPPORTED_REPLY = {
+    "hi": "Voice se trip ke andar badlav abhi nahi ho paata. Trip screen par Swap ya Optimize Day button se badal "
+          "sakte hain, map se jagah Add to Itinerary kar sakte hain, ya main nayi trip bana sakta hoon.",
+    "en": "I can't change an existing trip by voice yet. You can edit it on the trip screen with Swap or Optimize Day, "
+          "add a place from the map with Add to Itinerary, or I can plan a new trip.",
+}
+_EDIT_WORDS = {canon(w) for w in (
+    "add", "added", "adding", "jod", "jodo", "jodna", "jodiye", "jod", "badal", "badlo", "badalna", "badaliye", "badlna",
+    "change", "changes", "update", "updated", "optimise", "optimize", "optimised", "optimized", "fix", "adjust", "set",
+    "shift", "replace", "hata", "hatao", "hatado", "remove", "include", "shamil", "hisaab", "hisab", "according",
+    "accordingly",
+    "ऐड", "एड", "जोड़", "जोड़ो", "जोड़ना", "जोड़िए", "बदल", "बदलो", "बदलना", "बदलिए", "चेंज", "अपडेट", "ऑप्टिमाइज़",
+    "ऑप्टिमाइज", "ऑप्टिमाइस", "फिक्स", "एडजस्ट", "सेट", "शिफ्ट", "रिप्लेस", "हटा", "हटाओ", "हटाना", "रिमूव", "शामिल",
+    "इंक्लूड", "हिसाब")}
+_TRIP_WORDS_EDIT = {canon(w) for w in (
+    "trip", "trips", "itinerary", "plan", "route", "package", "tour",
+    "ट्रिप", "इटिनरेरी", "प्लान", "रूट", "पैकेज", "टूर")}
+_TRIP_POINTER_WORDS = {canon(w) for w in (     # "this / that one" = the open trip
+    "isi", "isme", "ismein", "isko", "ise", "usme", "usmein", "usi", "ye", "yeh",
+    "इसी", "इसमें", "इसमे", "इसको", "इसे", "उसमें", "उसमे", "उसी", "ये", "यह")}
+_TRIP_POINTER_PHRASES = [tuple(tu_words(p)) for p in (
+    "jo banaya", "jo bana", "jo tumne", "jo aapne", "जो बनाया", "जो बना", "जो तुमने", "जो आपने")]
+_NEW_TRIP_PHRASES = [tuple(tu_words(p)) for p in (
+    "nayi trip", "nai trip", "naya trip", "new trip", "ek aur trip", "another trip", "नई ट्रिप", "नयी ट्रिप", "नया ट्रिप",
+    "एक और ट्रिप")]
+# Requests that existing voice tools handle (weather replan, budget, expense, swap, regenerate, unsave): never this branch.
+_OTHER_TOOL_WORDS = {canon(w) for w in (
+    "baarish", "barish", "rain", "mausam", "weather", "budget", "kharcha", "kharch", "expense", "rupaye", "rupees", "rs",
+    "hazaar", "hazar", "lakh", "swap", "instead", "dobara", "regenerate", "rebuild", "save", "saved",
+    "बारिश", "मौसम", "वेदर", "बजट", "खर्च", "खर्चा", "रुपये", "रुपए", "हज़ार", "लाख", "स्वैप", "दोबारा", "सेव")}
+_OTHER_TOOL_PHRASES = [tuple(tu_words(p)) for p in ("ki jagah", "की जगह", "phir se banao", "फिर से बनाओ")]
+# A day named ("day 2 optimize karo", "kal ka plan badlo", "aaj ka route chhota karo"): weather_replan / optimize_day
+# take a day, so these go to the model as before.
+_DAY_WORDS = {canon(w) for w in ("day", "din", "aaj", "kal", "parso", "today", "tomorrow", "दिन", "आज", "कल", "परसों", "डे")}
+# A bare "plan badlo" / "change the plan" with nothing else in it also goes to the model (weather_replan asks first).
+# Fillers, and a plain "this / that" (it may mean the activity on screen), are not content.
+_EDIT_FILLER = {canon(w) for w in (
+    "ka", "ki", "ke", "ko", "mein", "me", "se", "par", "pe", "mera", "meri", "mere", "apna", "apni", "apne", "karo", "kar",
+    "karna", "karni", "karke", "hai", "hain", "do", "de", "dijiye", "kijiye", "please", "plz", "thoda", "zara", "bhi",
+    "hi", "aur", "and", "the", "my", "a", "an", "to", "it", "this", "can", "you", "ye", "yeh", "ise", "isko",
+    "का", "की", "के", "को", "में", "से", "पर", "पे", "मेरा", "मेरी", "मेरे", "अपना", "अपनी", "करो", "कर", "करना", "करके",
+    "है", "हैं", "दो", "दे", "दीजिए", "कीजिए", "थोड़ा", "ज़रा", "भी", "ही", "और", "ये", "यह", "इसे", "इसको")}
+
+
+def _has_phrase(words: List[str], phrases) -> bool:
+    return any(tuple(words[i:i + len(p)]) == p for p in phrases for i in range(len(words) - len(p) + 1))
+
+
+def _names_open_trip(words: List[str], trip) -> bool:
+    """The sentence names the open trip's city ("बैंगलोर" for "Bengaluru Tour Package"): consonant-skeleton match on
+    the title's words, so Devanagari and spelling variants line up. Short names ("Goa") are not used (too loose)."""
+    from voice.draft import name_matches, _skeleton
+    title_words = [w for w in tu_words(getattr(trip, "title", "") or "")
+                   if len(_skeleton(w)) >= 3 and canon(w) not in _TRIP_WORDS_EDIT]
+    return any(name_matches(w, {"name": t}) for t in title_words for w in words if len(_skeleton(w)) >= 3)
+
+
+def is_trip_edit_request(text: str, trip) -> bool:
+    """A request to change, add to, optimise or fix the OPEN trip: an edit word plus a trip word, a pointer to the open
+    trip ("isi", "usmein", "jo banaya") or its city. A new trip request or an existing tool's request is not one."""
+    words = tu_words(text)
+    ws = set(words)
+    if not words or not (ws & _EDIT_WORDS):
+        return False
+    if _has_phrase(words, _NEW_TRIP_PHRASES) or ws & _OTHER_TOOL_WORDS or _has_phrase(words, _OTHER_TOOL_PHRASES):
+        return False
+    if ws & _DAY_WORDS or ws <= (_EDIT_WORDS | _TRIP_WORDS_EDIT | _EDIT_FILLER):
+        return False
+    return bool(ws & _TRIP_WORDS_EDIT or ws & _TRIP_POINTER_WORDS or _has_phrase(words, _TRIP_POINTER_PHRASES)
+                or _names_open_trip(words, trip))
+
+
 def _model_asked(redis_conn, user_id: str, conversation_id: str) -> bool:
     """The model's last reply in this conversation asked something ("Kitna budget hai?"): its answer goes to the model."""
     history = load_memory(redis_conn, user_id, conversation_id)
@@ -1329,6 +1408,11 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     elif pending_conf is None and draft_state is None and is_acknowledgement(transcript)             and not _booking_open(redis_conn, user_id, trip) and not _model_asked(redis_conn, user_id, conversation_id):
         # BR-1006: "हाँ, बिलकुल." / "dhanyavaad" with nothing open to answer: a fixed reply, no model call.
         result = AgentResult(ACK_REPLY[lang], action="ack")
+    elif (trip is not None and trip.id and draft_state is None and pending_conf is None
+          and is_trip_edit_request(transcript, trip)):
+        # "isi trip mein X add karo" with a trip open: no voice tool edits an itinerary. A fixed reply, no model call,
+        # no draft, no navigation (a new trip request is not this branch).
+        result = AgentResult(EDIT_UNSUPPORTED_REPLY[lang], action="edit_unsupported")
     else:
         from voice import context as trip_context
         if draft_state is not None and skip_kind is None:
@@ -1382,7 +1466,7 @@ def run_agent(transcript: str, stt_language: Optional[str], *, user_id: str, con
     if result.pending_actions:
         save_pending(redis_conn, user_id, conversation_id, result.pending_actions)
     # booking answers (names, phone) stay out of the memory; so do acks and the trip confirm (memory just cleared)
-    if result.action not in ("error", "booking", "ack", "trip_confirm"):
+    if result.action not in ("error", "booking", "ack", "trip_confirm", "edit_unsupported"):
         save_turn(redis_conn, user_id, conversation_id, transcript, result.reply_text)
     logger.info("[VOICE AGENT] action=%s%s%s llm_ms=%s tool_ms=%s%s%s%s", result.action,
                 f" step={result.step}" if result.step else "",
